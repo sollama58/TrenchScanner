@@ -72,11 +72,13 @@ const RING_CSS = `
 .badge.more i { display: none; }
 .badge.gone { display: none; }
 .fx { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
-.fx.pulse { animation: fx-pulse 1.6s ease-in-out infinite; }
+.fx.pulse { box-shadow: inset 0 0 0 1px var(--a), inset 0 0 6px -2px var(--a); }
+.fx.pulse::after { content: ""; position: absolute; inset: 0; border-radius: inherit; opacity: 0;
+  box-shadow: inset 0 0 0 2px var(--a), inset 0 0 30px -4px var(--a); animation: fx-pulse 1.6s ease-in-out infinite; }
 .fx.glow { box-shadow: inset 0 0 0 2px var(--a), inset 0 0 36px -6px var(--a); }
-.fx.shimmer::before { content: ""; position: absolute; inset: 0;
+.fx.shimmer::before { content: ""; position: absolute; top: 0; left: 0; height: 100%; width: 250%;
   background: linear-gradient(110deg, transparent 35%, color-mix(in srgb, var(--b) 38%, transparent) 50%, transparent 65%);
-  background-size: 250% 100%; animation: fx-shimmer 2.4s linear infinite; }
+  animation: fx-shimmer 2.4s linear infinite; }
 .fx.sparkle::before, .fx.sparkle::after { content: ""; position: absolute; inset: 0; animation: fx-twinkle 1.8s ease-in-out infinite; }
 .fx.sparkle::before { background:
   radial-gradient(circle at 12% 28%, var(--b) 0 1.5px, transparent 2.5px),
@@ -86,12 +88,15 @@ const RING_CSS = `
   radial-gradient(circle at 28% 70%, var(--a) 0 2px, transparent 3px),
   radial-gradient(circle at 64% 18%, var(--b) 0 1.5px, transparent 2.5px),
   radial-gradient(circle at 92% 74%, var(--a) 0 1.5px, transparent 2.5px); }
-.fx.flash { animation: fx-flash 2.6s ease-out infinite; }
-@keyframes fx-pulse { 0%, 100% { box-shadow: inset 0 0 0 1px var(--a), inset 0 0 6px -2px var(--a); }
-  50% { box-shadow: inset 0 0 0 2px var(--a), inset 0 0 30px -4px var(--a); } }
-@keyframes fx-shimmer { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+.fx.flash::before { content: ""; position: absolute; inset: 0; opacity: 0;
+  background: color-mix(in srgb, var(--a) 28%, transparent); animation: fx-flash 2.6s ease-out infinite; }
+/* Every effect animates opacity or transform only, which the compositor runs: animating a shadow,
+   a background or its position restyled and repainted every ring every frame (2026-10-28: a board
+   of 31 shimmering rings took about half a core with nothing else moving). */
+@keyframes fx-pulse { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+@keyframes fx-shimmer { from { transform: translateX(-90%); } to { transform: translateX(60%); } }
 @keyframes fx-twinkle { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
-@keyframes fx-flash { 0% { background: color-mix(in srgb, var(--a) 28%, transparent); } 18%, 100% { background: transparent; } }
+@keyframes fx-flash { 0% { opacity: 1; } 18%, 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .fx { animation: none !important; } .fx::before, .fx::after { animation: none !important; } }
 `;
 

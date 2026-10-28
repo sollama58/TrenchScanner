@@ -317,3 +317,12 @@ its pill placed in the part the column cuts off, which left only the dot in view
 
 Measured on a synthetic busy Pulse board (90 rows, 40 price ticks every 50 ms, a new coin every
 700 ms) in headless Chromium: see the PR for the numbers.
+
+0.9.5 (2026-10-28):
+
+- **The ring effects run on the compositor.** Pulse, shimmer and flash animated a box shadow, a
+  background position and a background colour, which repainted every ring every frame, even on a
+  still page (31 rings: pulse about 23% of a core, shimmer 48%, flash 11%). Each now animates the
+  opacity or transform of a layer drawn once, and looks the same; all of them, and the plain halo,
+  cost about 0.3% on a still page. They still loop; reduced motion
+  still stops them, and calm motion still stops the halo's sweep.
