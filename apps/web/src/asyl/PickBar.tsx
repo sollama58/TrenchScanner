@@ -7,6 +7,7 @@ import { SWITCH_LABEL, WALLET_SWITCHES, type AsylEdgeKind, type WalletSwitch } f
  * ask 2026-10-25): take them off, keep only them, hold them in place, find the links among them,
  * and switch their own kinds of link, all together. With coins in the pick, the coin actions run
  * on every picked coin at once (user ask 2026-10-26): Show holders, live or not, and Show deployers.
+ * With two or more wallets, Transfers between lists every transfer among them (user ask 2026-10-28).
  */
 
 /** How much of the pick something holds for: all of it, some of it, or none. */
@@ -37,6 +38,7 @@ export function PickBar({
   onShowHolders,
   onShowDeployers,
   onCommonFunder,
+  onTransfers,
 }: {
   wallets: number;
   tokens: number;
@@ -56,6 +58,8 @@ export function PickBar({
   onShowDeployers?: () => void;
   /** The nearest wallet that paid for two or more of the picked wallets. */
   onCommonFunder?: () => void;
+  /** Every transfer between the picked wallets (user ask 2026-10-28). */
+  onTransfers?: () => void;
 }) {
   // Show holders reads the current lists live from the chain (Pro), as the reader last left it.
   const [live, setLive] = useState(false);
@@ -114,6 +118,16 @@ export function PickBar({
             title="The nearest wallet that paid for two or more of the picked wallets, up their stored funding, free of credits"
           >
             Common funder
+          </button>
+        )}
+        {onTransfers && (
+          <button
+            className="asyl-btn ghost"
+            onClick={onTransfers}
+            disabled={wallets < 2}
+            title="Every SOL and coin transfer between the picked wallets, one row a transaction; Pro Mode reads their whole history from the chain"
+          >
+            Transfers between
           </button>
         )}
         <button

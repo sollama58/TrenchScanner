@@ -136,6 +136,25 @@ describe.skipIf(!dbAvailable)("asyl routes", () => {
     expect(admin.json()).toMatchObject({ pro: true, chain: { enabled: true, used: 0, cap: 3000 } });
   });
 
+  it("lists the stored transfers between picked wallets for anyone, and keeps the chain read for Pro Mode", async () => {
+    const res = await as(PLAIN, "POST", "/asyl/between", { wallets: [A, B, C] });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      wallets: [A, B, C],
+      chain: null,
+      transfers: [
+        { signature: "asyl-sig-1", from: A, to: B, mint: MINT1, pct: 1.2, source: "stored" },
+        // A paid C its first SOL (the fixture's WalletFunder row).
+        { signature: null, from: A, to: C, mint: null, kind: "funding", source: "stored" },
+      ],
+      coins: [{ mint: MINT1, symbol: "ONE" }],
+    });
+    expect((await as(PLAIN, "POST", "/asyl/between", { wallets: [A, A] })).statusCode).toBe(400);
+    expect((await as(PLAIN, "POST", "/asyl/chain/between", { wallets: [A, B] })).json()).toMatchObject({
+      code: "not_pro",
+    });
+  });
+
   it("maps a wallet's funder, siblings, funded wallets, transfers, coins and co-traders", async () => {
     const res = await as(PLAIN, "GET", `/asyl/wallet/${A}`);
     expect(res.statusCode).toBe(200);

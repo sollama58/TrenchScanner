@@ -9,7 +9,7 @@ import {
   linkStyle,
   type AnalystScene,
 } from "./analyst";
-import type { AsylGraph, AsylNode } from "./graph";
+import { edgeKey, type AsylGraph, type AsylNode } from "./graph";
 
 /**
  * Analyst Mode on screen: the flowchart analyst.ts lays out, drawn in map units so it zooms as one
@@ -80,6 +80,8 @@ export function AnalystLinks({
         return (
           <g
             key={`${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`}
+            data-edge={edgeKey(e)}
+            className="asyl-a-link"
             opacity={dim ? 0.15 : 1}
             onPointerEnter={(ev) => onHover(ev, [r.text, e.label].filter(Boolean))}
             onPointerLeave={onLeave}
