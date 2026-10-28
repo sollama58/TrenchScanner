@@ -9,8 +9,10 @@ import {
   rankSideWallets,
   POSSIBLE_SIDE_HOLD_MS,
   runKolSideWalletsJob,
+  KOL_SIDE_READ_WARN_MS,
   type SideWallet,
 } from "./kolSideWalletsJob.js";
+import { PartialJobFailure } from "../scheduler.js";
 
 describe("rankSideWallets", () => {
   it("needs the window's coins in common and half the KOL's coins, then ranks by % shared, coins in common and timing", () => {
@@ -229,6 +231,20 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
     const again = await runKolSideWalletsJob({ now: () => now + 60_000 });
     expect(again.written).toBe(0);
     expect(await prisma.kolSideWallets.findUnique({ where: { wallet: kol } })).toEqual(row);
+    expect(again).toMatchObject({
+      kolsReadMs: expect.any(Number),
+      pairsReadMs: expect.any(Number),
+      sidesReadMs: expect.any(Number),
+    });
+
+    // Near the reads' statement bound the run still writes, and is kept with a warning.
+    const slow = await runKolSideWalletsJob({ now: () => now + 120_000, warnAtMs: 0 }).catch(
+      (e: unknown) => e,
+    );
+    expect(slow).toBeInstanceOf(PartialJobFailure);
+    expect((slow as PartialJobFailure).message).toMatch(/slowest read took \d+s of the 600s bound/);
+    expect((slow as PartialJobFailure).meta).toMatchObject({ kols: again.kols, written: 0 });
+    expect(KOL_SIDE_READ_WARN_MS).toBe(420_000);
   });
 
   it("folds a Known Side into its KOL's row: no entry of its own, each coin counted once", async () => {

@@ -14,6 +14,12 @@
       "import": "./dist/chartMarks.js",
       "default": "./dist/chartMarks.js"
     },
+    "./screenCuts": {
+      "trenchscanner-web": "./src/screenCuts.ts",
+      "types": "./dist/screenCuts.d.ts",
+      "import": "./dist/screenCuts.js",
+      "default": "./dist/screenCuts.js"
+    },
     "./prisma": "./generated/prisma/index.js"
   },
   "scripts": {

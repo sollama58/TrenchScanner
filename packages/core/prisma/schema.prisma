@@ -329,6 +329,29 @@ model WebPushSubscription {
   @@index([userId])
 }
 
+/// One alert a Web Push notification carried to a subscription, written after the push service
+/// took it (webPush/dispatch.ts): the funnel's last stage for push, as TelegramAlertSent is for
+/// Telegram (/stats/export dataset push-sent; audit 2026-10-27 GF-10). A summary notification of
+/// several alerts writes a row for each, marked batched. No relation to the subscription or the
+/// token, so a dropped subscription or a swept token keeps its sends. Swept after
+/// WEB_PUSH_ALERT_SENT_RETENTION_DAYS by the cleanup job.
+model WebPushAlertSent {
+  id             String   @id @default(cuid())
+  /// WebPushSubscription.id at the send. Never exported.
+  subscriptionId String
+  /// Token.id.
+  tokenId        String
+  /// The model call the notification carried (its earliest from the account's models), else null.
+  curatedAlertId String?
+  /// The filter match it carried (its earliest), else null.
+  matchId        String?
+  /// Sent inside a summary notification ("N new alerts") rather than one of its own.
+  batched        Boolean  @default(false)
+  sentAt         DateTime @default(now())
+
+  @@index([sentAt])
+}
+
 /// One alert sent to a chat about a token, written as a claim just before the send (dedupeKey).
 /// The dispatcher sends one alert per token per chat
 /// within REALERT_AFTER_MS: a model calling the coin after another model (or the chat's filter)

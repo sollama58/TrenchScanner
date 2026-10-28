@@ -20,6 +20,7 @@ import {
   MAX_COMMIT_WAIT_MS,
   oldestOpenTransaction,
   REALERT_AFTER_MS,
+  type SentAlert,
 } from "../telegram/dispatch.js";
 import type { AlertCard } from "../telegram/format.js";
 
@@ -183,6 +184,9 @@ export function describeCard(card: AlertCard): { title: string; body: string } {
   };
 }
 
+/** The summary notification's tag. */
+const BATCH_TAG = "ts-batch";
+
 /** A pass's notifications for one subscription: one per alert, or one summary past MAX_NOTIFICATIONS. */
 export function pushPayloads(cards: AlertCard[], url: string): PushPayload[] {
   if (cards.length > MAX_NOTIFICATIONS) {
@@ -190,7 +194,7 @@ export function pushPayloads(cards: AlertCard[], url: string): PushPayload[] {
       {
         title: `${cards.length} new alerts`,
         body: cards.map((c) => describeCard(c).title).join(" · "),
-        tag: "ts-batch",
+        tag: BATCH_TAG,
         url,
       },
     ];
@@ -204,6 +208,14 @@ export function pushPayloads(cards: AlertCard[], url: string): PushPayload[] {
       url,
     };
   });
+}
+
+/**
+ * The alerts each of pushPayloads' notifications carries, in the same order: one card's sends
+ * each, or every card's in the one summary past MAX_NOTIFICATIONS.
+ */
+export function payloadSends(pending: readonly { sends: SentAlert[] }[]): SentAlert[][] {
+  return pending.length > MAX_NOTIFICATIONS ? [pending.flatMap((p) => p.sends)] : pending.map((p) => p.sends);
 }
 
 export interface WebPushDeps {
@@ -390,7 +402,12 @@ async function dispatchPass(
     return p;
   };
 
-  const jobs: { sub: SubRow; payloads: PushPayload[]; sentTokens: Record<string, number> }[] = [];
+  const jobs: {
+    sub: SubRow;
+    payloads: PushPayload[];
+    sends: SentAlert[][];
+    sentTokens: Record<string, number>;
+  }[] = [];
   for (const sub of active) {
     const allowed = await accessOf(sub.user.walletAddress);
     if (allowed === "error") continue;
@@ -432,6 +449,7 @@ async function dispatchPass(
         pending.map((p) => p.card),
         url,
       ),
+      sends: payloadSends(pending),
       sentTokens,
     });
   }
@@ -444,7 +462,7 @@ async function dispatchPass(
       const job = queue.shift();
       if (!job) return;
       if (now() - startedAt > PASS_BUDGET_MS) return;
-      await deliver(job.sub, job.payloads, job.sentTokens, horizon, send, summary);
+      await deliver(job.sub, job.payloads, job.sends, job.sentTokens, horizon, send, summary);
     }
   };
   await Promise.all(Array.from({ length: Math.min(MAX_IN_FLIGHT, queue.length) }, worker));
@@ -464,6 +482,7 @@ function recentTokens(stored: Prisma.JsonValue, now: number): Record<string, num
 async function deliver(
   sub: SubRow,
   payloads: PushPayload[],
+  sends: SentAlert[][],
   sentTokens: Record<string, number>,
   horizon: Date,
   send: PushSender,
@@ -478,21 +497,27 @@ async function deliver(
   const target = { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } };
   let lastError: string | null = null;
   let delivered = false;
-  for (const payload of payloads) {
+  const sent: Prisma.WebPushAlertSentCreateManyInput[] = [];
+  for (const [i, payload] of payloads.entries()) {
     const result = await send(target, payload);
     if (result.ok) {
       delivered = true;
       summary.sent += 1;
+      const batched = payload.tag === BATCH_TAG;
+      for (const s of sends[i] ?? [])
+        sent.push({ subscriptionId: sub.id, ...s, batched, sentAt: new Date() });
       continue;
     }
     summary.failed += 1;
     lastError = result.error;
     if (result.gone || sub.failures + 1 >= MAX_FAILURES) {
       summary.removed += 1;
+      await recordSent(sent);
       await prisma.webPushSubscription.deleteMany({ where: { id: sub.id } });
       return;
     }
   }
+  await recordSent(sent);
   // The cursor moves either way: a push service that failed now won't be sent a stale alert later.
   await prisma.webPushSubscription.updateMany({
     where: { id: sub.id },
@@ -502,6 +527,14 @@ async function deliver(
       ...(delivered ? { lastSentAt: new Date(), failures: 0, lastError: null } : {}),
       ...(lastError && !delivered ? { lastError, failures: { increment: 1 } } : {}),
     },
+  });
+}
+
+/** The sends the push services took (WebPushAlertSent). A record only: a failed write never fails the pass. */
+async function recordSent(rows: Prisma.WebPushAlertSentCreateManyInput[]): Promise<void> {
+  if (rows.length === 0) return;
+  await prisma.webPushAlertSent.createMany({ data: rows }).catch((err: unknown) => {
+    logger.warn("web push sends not recorded", { error: String(err), rows: rows.length });
   });
 }
 

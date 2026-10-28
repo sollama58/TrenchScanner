@@ -92,6 +92,7 @@ import {
   scheduleInterval,
   scheduleDailyAt,
   JobFailure,
+  PartialJobFailure,
   SHUTDOWN_INTERRUPTED_ERROR,
   runningJobsNow,
   type JobRunMeta,
@@ -1112,10 +1113,17 @@ async function main() {
             logger.warn("KOL Known Sides not sorted", { error: String(err) });
             return null;
           });
-          const meta = await runKolSideWalletsJob();
-          return knownSides
-            ? { ...meta, knownSides: knownSides.join(","), knownSideCount: knownSides.length }
-            : meta;
+          const withKnownSides = (meta: JobRunMeta): JobRunMeta =>
+            knownSides
+              ? { ...meta, knownSides: knownSides.join(","), knownSideCount: knownSides.length }
+              : meta;
+          // A run near its reads' bound is kept with a warning (PartialJobFailure), Known Sides and all.
+          const meta = await runKolSideWalletsJob().catch((err: unknown) => {
+            if (err instanceof PartialJobFailure)
+              throw new PartialJobFailure(err.message, withKnownSides(err.meta));
+            throw err;
+          });
+          return withKnownSides(meta);
         }),
       ),
       60,
