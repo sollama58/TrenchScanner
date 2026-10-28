@@ -41,6 +41,10 @@ GRANDFATHERED=(
   20261016030000_launchpads
   20261016090000_feed_both_only
   20261016090000_transfers_count
+  # Merged into main a few minutes apart on 2026-10-28 (full audit fix threads T10 and T6); each
+  # creates its own new table and neither reads the other's.
+  20261028000000_asyl_caps
+  20261028000000_web_push_alert_sent
 )
 
 names=$(find "$MIGRATIONS" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)
