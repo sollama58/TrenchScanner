@@ -3958,6 +3958,11 @@ model AsylMap {
   shareSlug String?   @unique
   sharedDoc Json?
   sharedAt  DateTime?
+  /// Bytes of `doc` and of `sharedDoc` as JSON: what holds an account to its byte cap (maps.ts).
+  docBytes    Int       @default(0)
+  sharedBytes Int       @default(0)
+  /// When an admin took its link down; it can't be shared again while set.
+  takenDownAt DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
@@ -3990,6 +3995,20 @@ model AsylCreditUse {
   updatedAt DateTime @updatedAt
 
   @@id([userId, day])
+  @@index([day])
+}
+
+/// Calls Asyl made on another vendor's metered plan, per UTC day (apps/api/src/asyl/credits.ts
+/// takeQuota): Solana Tracker's top-traders reads, under "top-traders:site" for everyone together
+/// and "top-traders:<userId>" for each reader, so the plan the daily KOL roster needs is never spent
+/// by Asyl. `day` is the UTC date as "YYYY-MM-DD". Rows older than a week are deleted by the API.
+model AsylQuotaUse {
+  key       String
+  day       String
+  used      Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@id([key, day])
   @@index([day])
 }
 

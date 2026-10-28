@@ -131,4 +131,17 @@ describe("parseTokenTraders", () => {
       `https://data.solanatracker.io/v2/pnl/tokens/${A}/traders?sort=pnl&direction=desc&limit=100`,
     );
   });
+
+  it("spaces its calls under the plan's 3 a second, and doesn't retry a capped call", async () => {
+    const at: number[] = [];
+    const fetchMock = vi.fn(async () => {
+      at.push(Date.now());
+      return new Response("busy", { status: 503 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new SolanaTrackerClient("key", undefined, 60);
+    await Promise.allSettled([client.tokenTraders(A, null), client.tokenTraders(A, null)]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(at[1]! - at[0]!).toBeGreaterThanOrEqual(55);
+  });
 });

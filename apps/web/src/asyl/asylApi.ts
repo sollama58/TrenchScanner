@@ -16,6 +16,8 @@ export interface Allowance {
 export interface AsylMe {
   wallet: string;
   pro: boolean;
+  /** An admin, who can take a shared map's link down. */
+  admin?: boolean;
   chain: Allowance | null;
   /**
    * The reader's Burn Credits (null when they couldn't be read): what the paid chain tools take.
@@ -449,6 +451,8 @@ export const asylApi = {
   unshare: (id: string) => del<{ unshared: boolean }>(`/asyl/maps/${enc(id)}/share`),
   shared: (slug: string) =>
     api<{ title: string; sharedAt: string | null; doc: MapDoc }>(`/asyl/shared/${enc(slug)}`),
+  /** Admin only: the link stops answering, and its owner can't share the map again. */
+  takeDown: (slug: string) => post<{ takenDown: boolean }>(`/asyl/admin/shared/${enc(slug)}/takedown`),
 };
 
 /** A KOL's X picture path on the API, as an absolute URL. */
