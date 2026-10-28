@@ -322,6 +322,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
         calibratedPct: true,
         createdAt: true,
         anchorMcapUsd: true,
+        liveMcapUsd: true,
         peakMcapUsd: true,
       },
     }),
@@ -343,7 +344,9 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
       confidence: c.confidence,
       calibratedPct: c.calibratedPct,
       at: c.createdAt.toISOString(),
-      mcapUsd: c.anchorMcapUsd,
+      // Pump.fun's cap as the call went out, when it answered, as the web's card shows it: the
+      // anchor runs 45-60 s behind the market (audit 2026-10-27, EX-7). Grades still use the anchor.
+      mcapUsd: c.liveMcapUsd ?? c.anchorMcapUsd,
       peakMcapUsd: c.peakMcapUsd,
     });
     callsByToken.set(c.tokenId, list);
@@ -559,6 +562,8 @@ export async function recentOverlay(
   userId: string,
   calls: FeedCalls,
   now = Date.now(),
+  /** Settings' "only alerts both caught": only coins with both a match and a followed call (EX-6). */
+  bothOnly = false,
 ): Promise<OverlayToken[]> {
   const since = new Date(now - FEED_WINDOW_MS);
   const [matches, alerts] = await Promise.all([
@@ -583,8 +588,12 @@ export async function recentOverlay(
   ]);
   const latest = new Map<string, number>();
   const note = (mint: string, at: Date) => latest.set(mint, Math.max(latest.get(mint) ?? 0, at.getTime()));
-  for (const m of matches) note(m.token.mintAddress, m.matchedAt);
-  for (const a of alerts) note(a.token.mintAddress, a.createdAt);
+  const called = new Set(alerts.map((a) => a.token.mintAddress));
+  const matched = new Set(matches.map((m) => m.token.mintAddress));
+  for (const m of matches)
+    if (!bothOnly || called.has(m.token.mintAddress)) note(m.token.mintAddress, m.matchedAt);
+  for (const a of alerts)
+    if (!bothOnly || matched.has(a.token.mintAddress)) note(a.token.mintAddress, a.createdAt);
   const mints = [...latest]
     .sort((a, b) => b[1] - a[1])
     .slice(0, FEED_MAX)

@@ -16,7 +16,10 @@ export const BUDDY_CLOSED_MS = 24 * 3_600_000;
  * (routes/proTrades.ts's "buddy" look), not the TRADES panel's newest ten (user ask 2026-10-27).
  */
 export const BUDDY_COINS = 60;
-/** Wallets of the reader's own besides the account's (Axiom's, Terminal's...), at most. */
+/**
+ * Wallets of the reader's own besides the account's (Axiom's, Terminal's...), at most: linked on
+ * Settings by signing with each (buddyWallets.ts), the only ones Trade Buddy follows.
+ */
 export const BUDDY_EXTRA_WALLETS = 3;
 
 export interface BuddyCoin {
@@ -78,6 +81,11 @@ export interface BuddyAnswer {
   coins: BuddyCoin[];
   /** The wallets followed: the account's first, then the reader's others. */
   wallets: string[];
+  /**
+   * Wallets the panel asked for that aren't linked to the account, so aren't followed (Card 11):
+   * the reader links each on Settings by signing with it.
+   */
+  notLinked?: string[];
   /** Null when no wallet could be read. */
   summary: BuddySummary | null;
   solUsd: number | null;
