@@ -241,7 +241,12 @@ describe.skipIf(!dbAvailable)("GET /admin/models/performance", () => {
         data: { mintAddress: `${TAG}-${key}`, firstSeenAt: new Date(at.getTime() - 45_000) },
       });
       const co = await prisma.candidateOutcome.create({
-        data: row(token.id, kind, at, won, { nsRead: 1, nsDepthFull: 1, pathRet1mPct: 5 }),
+        data: row(token.id, kind, at, won, {
+          nsRead: 1,
+          nsDepthFull: 1,
+          pathRet1mPct: 5,
+          curveCoveredSec: key === "a" ? 40 : null,
+        }),
       });
       await prisma.curatedAlert.create({
         data: {
@@ -279,6 +284,8 @@ describe.skipIf(!dbAvailable)("GET /admin/models/performance", () => {
     expect(r.current.timing.medianSec).toBe(45);
     expect(r.current.coverage.readPct).toBe(100);
     expect(r.current.coverage.fullPct).toBe(100);
+    // The curve tape's own flag, not the scan's one-minute return (which both rows carry).
+    expect(r.current.coverage.tapePct).toBe(50);
     expect(r.paths.map((p) => p.path).sort()).toEqual(["cycle", "fast"]);
     expect(r.models.find((m) => m.id === SEAT)!.fastSharePct).toBe(50);
     expect(r.series.current.reduce((s, b) => s + b.alerts, 0)).toBe(2);

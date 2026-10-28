@@ -530,7 +530,9 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
         {new Date(r.gradedThrough).toLocaleTimeString()} are still inside their grading window, so the newest
         buckets read thin. Rates count graded calls only; the base is the event moments that pass today's
         wallet screen.
-        {r.truncated && " The read hit its row cap, so the window is cut short."}
+        {r.truncated && " The read hit its row cap, so the window is cut short."} Curve tape: the coin's
+        bonding curve was being followed when it was decided. Only Pump.fun curves under 15 minutes old are,
+        so older, graduated and other launchpads' coins read as off the tape by design.
       </p>
     </div>
   );
