@@ -69,7 +69,7 @@ import { beginWait, markNavigation } from "./loadTracker";
 import { unbindAppearance, useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal, openTokenModal } from "./tokenModal";
-import { clearTradeLink, setTradeFill, tokenLinkFromUrl, tradeLinkFromUrl } from "./tradeLink";
+import { clearTradeLink, onOpenToken, setTradeFill, tokenLinkFromUrl, tradeLinkFromUrl } from "./tradeLink";
 import { useExtensionReconnect } from "./extensionReconnect";
 import { onTradingSessionRefresh, setProState, proStateOf, tradeSettingsSync } from "./proTrade";
 import { setTrackedAccount } from "./trackedWallets";
@@ -492,6 +492,18 @@ export function App() {
       () => setTradeFill(null),
     );
   }, [signedIn]);
+  // A click on an alert's notification while this tab is open (public/sw.js, or the page's own
+  // fallback notification): the coin opens here, with no reload.
+  useEffect(
+    () =>
+      onOpenToken((mint) => {
+        void api<Card>(`/tokens/${mint}/card`).then(
+          (card) => openTokenModal(card, Date.now()),
+          () => undefined,
+        );
+      }),
+    [],
+  );
   // Every render: setProState ignores a state equal to the one it has.
   useEffect(() => setProState(pro));
   // A 404 from build, send, or status means Pro or the public trading flag changed. Re-read
@@ -573,28 +585,31 @@ export function App() {
             </span>
           </a>
           {guest && (
-            <nav className="tabs" role="tablist" aria-label="Sections">
-              {shownTabs.map(({ id, label, Icon }) => {
-                // Live, Models and the Lighthouse work read-only without a wallet; the rest are
-                // saved to one.
-                const locked = id !== "live" && id !== "model" && id !== "lighthouse";
-                return (
-                  <button
-                    key={id}
-                    id={`tab-${id}`}
-                    role="tab"
-                    aria-selected={tab === id}
-                    aria-controls={tab === id ? TAB_PANEL_ID : undefined}
-                    aria-disabled={locked || undefined}
-                    className={`${tab === id ? "on" : ""}${locked ? " locked" : ""}`}
-                    title={locked ? `Connect a wallet to use ${label}` : undefined}
-                    onClick={() => goTo(id)}
-                  >
-                    {locked ? <LockIcon size={13} /> : <Icon size={15} />}
-                    <span>{label}</span>
-                  </button>
-                );
-              })}
+            <nav className="tabs" aria-label="Sections">
+              {/* As for a session below: the tablist holds only tabs, Intel sits beside it (audit 10-27 WB-19). */}
+              <div className="tablist" role="tablist">
+                {shownTabs.map(({ id, label, Icon }) => {
+                  // Live, Models and the Lighthouse work read-only without a wallet; the rest are
+                  // saved to one.
+                  const locked = id !== "live" && id !== "model" && id !== "lighthouse";
+                  return (
+                    <button
+                      key={id}
+                      id={`tab-${id}`}
+                      role="tab"
+                      aria-selected={tab === id}
+                      aria-controls={tab === id ? TAB_PANEL_ID : undefined}
+                      aria-disabled={locked || undefined}
+                      className={`${tab === id ? "on" : ""}${locked ? " locked" : ""}`}
+                      title={locked ? `Connect a wallet to use ${label}` : undefined}
+                      onClick={() => goTo(id)}
+                    >
+                      {locked ? <LockIcon size={13} /> : <Icon size={15} />}
+                      <span>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
               <IntelTab />
             </nav>
           )}

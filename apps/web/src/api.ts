@@ -744,6 +744,10 @@ export interface FeedReturns {
     at: string;
     /** The card's Peak: the highest the token went above its alert price, in percent. */
     peakPct: number;
+    /** The call's return under the exit plan, in percent; null before it has one (absent from older API builds). */
+    returnPct?: number | null;
+    /** returnPct is the still-held share at the latest reading, not the final return. */
+    open?: boolean;
     /** What alerted it (absent from older API builds; null when the filter has been deleted). */
     source?: { kind: "filter" | "model"; name: string } | null;
   }[];
@@ -2112,11 +2116,31 @@ export interface TelegramChat {
   enabled: boolean;
   /** The parts of the card this chat switched off (TELEGRAM_ALERT_PARTS keys); [] is the whole card. */
   hidden: TelegramAlertPart[];
+  /** "full" is the whole card; "compact" a few lines (the chat's /settings layout). */
+  layout?: "full" | "compact";
+  /** The trade and chart links each alert carries, in TELEGRAM_ALERT_LINKS order. */
+  links?: TelegramAlertLink[];
+  /** The chat's /alerts list leaves out alerts under this market cap, in USD; 0 lists them all. */
+  alertsMinMcapUsd?: number;
   lastSentAt: string | null;
   /** What Telegram last answered when a send failed; null while all is well. */
   lastError: string | null;
   createdAt: string;
 }
+
+/** The links a Telegram alert can carry (core telegram/format.ts ALERT_LINKS), in its order. */
+export const TELEGRAM_ALERT_LINKS = [
+  { key: "terminal", label: "Terminal" },
+  { key: "axiom", label: "Axiom" },
+  { key: "gmgn", label: "GMGN" },
+  { key: "dexscreener", label: "DexScreener" },
+  { key: "birdeye", label: "Birdeye" },
+  { key: "solscan", label: "Solscan" },
+] as const;
+export type TelegramAlertLink = (typeof TELEGRAM_ALERT_LINKS)[number]["key"];
+
+/** The highest /alerts market-cap floor a chat takes (core telegram/settings.ts MAX_MCAP_FLOOR). */
+export const TELEGRAM_MAX_MCAP_FLOOR = 100_000_000;
 
 /** The parts of a Telegram alert a chat can switch off, in the order the card shows them. */
 export const TELEGRAM_ALERT_PARTS = [

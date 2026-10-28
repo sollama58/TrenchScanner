@@ -112,8 +112,8 @@ function Gauge({ base }: { base: string }) {
     w.recentRatePct === null
       ? `Only ${w.recentGraded} graded launch moments in the last ${w.recentHours} hours, too few to read yet.`
       : w.trailingRatePct === null
-        ? `${pct(w.recentRatePct, 1)} of launch moments doubled within 15 minutes over the last ${w.recentHours} hours. Not enough history yet for the ${w.trailingDays}-day average.`
-        : `${pct(w.recentRatePct, 1)} of launch moments doubled within 15 minutes over the last ${w.recentHours} hours, against ${pct(w.trailingRatePct, 1)} over the last ${w.trailingDays} days.`;
+        ? `${pct(w.recentRatePct, 1)} of launch moments and hourly re-reads in the band doubled within 15 minutes over the last ${w.recentHours} hours. Not enough history yet for the ${w.trailingDays}-day average.`
+        : `${pct(w.recentRatePct, 1)} of launch moments and hourly re-reads in the band doubled within 15 minutes over the last ${w.recentHours} hours, against ${pct(w.trailingRatePct, 1)} over the last ${w.trailingDays} days.`;
   return (
     <div className={`lh-weather ${w.condition}`}>
       <div className="lh-weather-dial">

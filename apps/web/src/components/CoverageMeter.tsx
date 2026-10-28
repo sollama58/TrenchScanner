@@ -1,5 +1,6 @@
 import type { FeedMixRecord, Leaderboard, MixCoverage } from "../api";
 import { pct, signedPct } from "../format";
+import { intervalText, wilsonOfRate } from "../rates";
 import { CheckIcon, TargetIcon } from "./Icons";
 
 /** Runners below which the meter's share reads as early rather than as a verdict. */
@@ -166,6 +167,8 @@ function MixRates({ board }: { board: Leaderboard }) {
       {rates.map((r) => {
         const profit = r.id === "profit";
         const text = profit ? signedPct(r.value, 1) : pct(r.value, 1);
+        // A pooled rate on its own sample reads surer than it is: its 90% range (audit 10-27 WB-25).
+        const range = profit ? "" : intervalText(wilsonOfRate(r.value, mix.graded));
         const left = profit ? Math.min(r.fill, 50) : 0;
         const width = profit ? Math.abs(r.fill - 50) : r.fill;
         return (
@@ -187,7 +190,8 @@ function MixRates({ board }: { board: Leaderboard }) {
               aria-valuemin={profit ? -PROFIT_SPAN_PCT : 0}
               aria-valuemax={profit ? PROFIT_SPAN_PCT : 100}
               aria-valuenow={r.value ?? 0}
-              aria-valuetext={r.value === null ? "nothing graded yet" : text}
+              aria-valuetext={r.value === null ? "nothing graded yet" : range ? `${text}, ${range}` : text}
+              title={range || undefined}
             >
               {text}
             </span>
@@ -198,8 +202,8 @@ function MixRates({ board }: { board: Leaderboard }) {
       <p className="cov-note faint small">
         {mix.models.length === 1 ? "This model's" : `These ${mix.models.length} models'`} alerts as one feed:
         each coin counts once, at the first alert any of them sent on it ({mix.graded.toLocaleString()} graded
-        {early && mix.graded > 0 ? ", still early" : ""}). Profit is the average return per alert under the
-        exit plan.
+        {early && mix.graded > 0 ? ", still early" : ""}). Hover a rate for its 90% range. Profit is the
+        average return per alert under the exit plan.
       </p>
     </div>
   );

@@ -370,6 +370,50 @@ describe.skipIf(!dbAvailable)("buildLearningCurve", () => {
     }
   });
 
+  it("draws a seat's line from its current lane only, and the feed from every call", async () => {
+    // After a takeover the week line blended the retired recipe's calls with the new one's (WB-34).
+    const model = `lc-lane-${Date.now()}`;
+    const token = await prisma.token.create({ data: { mintAddress: `${model}-mint`, symbol: "LCL" } });
+    const until = new Date();
+    const since = new Date(until.getTime() - 7 * 86_400_000);
+    const bornAt = new Date(until.getTime() - 3 * 86_400_000);
+    const lane = await prisma.curatorLane.create({
+      data: { slot: model, name: "New recipe", description: "test", recipe: {}, generation: 0, bornAt },
+    });
+    const call = (daysAgo: number, modelName: string) => ({
+      source: "test",
+      confidence: 70,
+      anchorPriceUsd: 0.0001,
+      anchorMcapUsd: 50_000,
+      tokenId: token.id,
+      model,
+      modelName,
+      createdAt: new Date(until.getTime() - daysAgo * 86_400_000),
+      hit2xIn1h: true,
+      hit4xIn1h: false,
+      disqualified: false,
+    });
+    try {
+      await prisma.curatedAlert.createMany({
+        // Two from the retired recipe before the takeover, one late under its old name, two of the new lane's.
+        data: [
+          call(5, "Old recipe"),
+          call(4, "Old recipe"),
+          call(2, "Old recipe"),
+          call(2, "New recipe"),
+          call(1, "New recipe"),
+        ],
+      });
+      const curve = await buildLearningCurve(since, until, { hitRate2xPct: 75, hitRate4xPct: 50 }, 7);
+      const mine = curve.models.find((m) => m.model === model)!;
+      expect(mine.days.reduce((n, d) => n + d.rates.graded, 0)).toBe(2);
+    } finally {
+      await prisma.curatedAlert.deleteMany({ where: { model } });
+      await prisma.curatorLane.delete({ where: { id: lane.id } });
+      await prisma.token.delete({ where: { id: token.id } });
+    }
+  });
+
   it("groups calls by the reader's calendar day, and counts an open call at its latest reading", async () => {
     const model = `lc-zone-${Date.now()}`;
     const token = await prisma.token.create({ data: { mintAddress: `${model}-mint`, symbol: "LCZ" } });
