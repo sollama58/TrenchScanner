@@ -9,8 +9,15 @@ import {
   type Env,
   type FeedCalls,
 } from "@trenchscanner/core";
+import { ADMIN_SESSION_MAX_AGE_MS } from "../auth/session.js";
 import { clientIp, ipRateLimitKey } from "../clientIp.js";
-import { contestState, resolveFeedModels, SAVED_FEED_SELECT, toSavedFeed } from "../contest.js";
+import {
+  contestState,
+  feedBothOnlyApplies,
+  resolveFeedModels,
+  SAVED_FEED_SELECT,
+  toSavedFeed,
+} from "../contest.js";
 import {
   extensionKeyAccess,
   extensionKeyDeniedMessage,
@@ -37,8 +44,9 @@ import {
   type OverlayBubbleMap,
 } from "../extensionBubble.js";
 import { BUDDY_EXTRA_WALLETS, buddyAnswer, buddyCoins, type BuddyAnswer } from "../extensionBuddy.js";
+import { linkedBuddyWallets } from "../buddyWallets.js";
 import { allowedSiteCall, SITE_CALL_MAX_BODY } from "../extensionSite.js";
-import { freeLookupReason } from "../lookupGate.js";
+import { freeLookupReason, mintsOnFeed } from "../lookupGate.js";
 import { overlaySettingsSchema, parseOverlaySettings } from "../overlaySettings.js";
 import { cachedProStatus } from "../proMode.js";
 import { HOLDER_WAIT_MS, HolderWaits, MAX_HOLDER_WAITS } from "../holderWaits.js";
@@ -140,7 +148,7 @@ const authCache = new Map<string, CachedAuth>();
 /** Each reader's last Trade Buddy answer, and the read running behind it (buddyFor). */
 const buddyAnswers = new Map<
   string,
-  { at: number; body: BuddyAnswer | null; reading: Promise<BuddyAnswer> | null }
+  { wallets: string; at: number; body: BuddyAnswer | null; reading: Promise<BuddyAnswer> | null }
 >();
 const authFailures = new Map<string, number[]>();
 const lastUsedWritten = new Map<string, number>();
@@ -159,6 +167,7 @@ export function forgetExtensionKeysOf(userId: string): void {
 
 export function resetExtensionAuthState(): void {
   authCache.clear();
+  buddyAnswers.clear();
   authFailures.clear();
   feedCache.clear();
   bubbleCache.clear();
@@ -266,6 +275,17 @@ export async function registerExtensionRoutes(
     }
   }
 
+  /**
+   * The board coins whose numbers a key reads free: the ones the scanner tracks on its own, so a
+   * coin stored only through someone's paid lookup or a followed wallet's buy stays a lookup
+   * (audit 2026-10-27, EX-5; the P17 rule of 2026-10-14). Admins see every stored coin.
+   */
+  async function onFeedOnly(mints: string[], admin: boolean): Promise<string[]> {
+    if (admin || mints.length === 0) return mints;
+    const tracked = await mintsOnFeed(mints);
+    return mints.filter((m) => tracked.has(m));
+  }
+
   const admins = adminWalletSet(opts.env);
   // A key's own bucket only once it has been proven (in authCache): rotating made-up keys would
   // otherwise get a fresh bucket per request and flush real keys' buckets (audit CE-2).
@@ -278,16 +298,33 @@ export async function registerExtensionRoutes(
       : ipRateLimitKey(request);
   };
 
-  /** The reader's followed models, as their feed reads them. */
-  async function feedCallsOf(userId: string): Promise<FeedCalls> {
+  /**
+   * The reader's followed models as their feed reads them, and their feed's switches: with model
+   * alerts off the feed carries no calls, and "only alerts both caught" keeps only coins with both
+   * (audit 2026-10-27, EX-6: the panel listed calls the web feed and Telegram left out).
+   */
+  async function feedOf(
+    userId: string,
+  ): Promise<{ calls: FeedCalls; feedCalls: FeedCalls; bothOnly: boolean }> {
     const user = await prisma.user.findUnique({ where: { id: userId }, select: SAVED_FEED_SELECT });
     const state = await contestState(opts.env);
     const saved = user ? toSavedFeed(user) : null;
-    return resolveFeedCalls(
+    const calls = resolveFeedCalls(
       state,
       saved ? resolveFeedModels(state, saved).models : [...state.defaultModels],
       false,
     );
+    const modelAlerts = saved?.showModelAlerts ?? true;
+    return {
+      calls,
+      feedCalls: modelAlerts ? calls : { models: [], tier: null },
+      bothOnly: saved !== null && feedBothOnlyApplies(saved),
+    };
+  }
+
+  /** The reader's followed models, for a coin card's calls. */
+  async function feedCallsOf(userId: string): Promise<FeedCalls> {
+    return (await feedOf(userId)).calls;
   }
 
   app.addHook("preHandler", async (request, reply) => {
@@ -320,6 +357,7 @@ export async function registerExtensionRoutes(
       select: {
         id: true,
         secretHash: true,
+        createdAt: true,
         revokedAt: true,
         user: { select: { id: true, walletAddress: true } },
       },
@@ -335,6 +373,15 @@ export async function registerExtensionRoutes(
     if (!extensionKeyAccess(access)) {
       authCache.delete(hash);
       return reply.code(403).send({ error: extensionKeyDeniedMessage(access.reason) });
+    }
+    // An admin's key lasts as long as an admin's sign-in (user decision 2026-10-27, Card 16): it
+    // opens every coin and replays the site as an admin, which a stolen key kept doing for good
+    // (audit 2026-10-27, AP-6). Other keys stay until revoked.
+    if (access.reason === "admin" && now - row.createdAt.getTime() > ADMIN_SESSION_MAX_AGE_MS) {
+      authCache.delete(hash);
+      return reply.code(403).send({
+        error: "An admin's extension key lasts 7 days. Connect this browser again from Settings.",
+      });
     }
     const client = {
       keyId: row.id,
@@ -447,8 +494,8 @@ export async function registerExtensionRoutes(
       const now = Date.now();
       const hit = feedCache.get(userId);
       if (hit && now - hit.at < FEED_CACHE_MS) return { tokens: hit.tokens };
-      const calls = await feedCallsOf(userId);
-      const tokens = (await recentOverlay(userId, calls, now)).map((t) =>
+      const { feedCalls, bothOnly } = await feedOf(userId);
+      const tokens = (await recentOverlay(userId, feedCalls, now, bothOnly)).map((t) =>
         aiReviews ? t : { ...t, ai: null },
       );
       if (!feedCache.has(userId) && feedCache.size >= FEED_CACHE_MAX) {
@@ -562,10 +609,18 @@ export async function registerExtensionRoutes(
     async (request, reply) => {
       const { mint } = request.params as { mint: string };
       if (!isMintAddress(mint)) return reply.code(400).send({ error: "not a valid mint" });
-      const { userId, aiReviews } = request.extensionClient!;
+      const { userId, walletAddress, aiReviews } = request.extensionClient!;
+      // The coins the site's token view opens free for this reader, as /bubble asks: one the
+      // scanner tracks, one they traded, or their open lookup (audit 2026-10-27, EX-5). Anything
+      // else is what the Utilities tab sells, and answers as a coin with no card.
+      const allowed =
+        aiReviews ||
+        (await freeLookupReason(walletAddress, "token", mint)) !== null ||
+        (await openLookup(walletAddress, "token", mint)) !== null;
+      reply.header("Cache-Control", "no-store");
+      if (!allowed) return { token: null };
       const { tokens } = await lookupOverlay(userId, [mint], await feedCallsOf(userId));
       const token = tokens[0] ?? null;
-      reply.header("Cache-Control", "no-store");
       return { token: token && !aiReviews ? { ...token, ai: null } : token };
     },
   );
@@ -585,7 +640,8 @@ export async function registerExtensionRoutes(
         return reply.code(400).send({ error: "invalid mints" });
       const mints = [...new Set(raw)].filter((m): m is string => typeof m === "string" && isMintAddress(m));
       reply.header("Cache-Control", "no-store");
-      return { verdicts: mints.length ? await safetyOverlay(mints) : {} };
+      const shown = await onFeedOnly(mints, request.extensionClient!.aiReviews);
+      return { verdicts: shown.length ? await safetyOverlay(shown) : {} };
     },
   );
 
@@ -603,7 +659,8 @@ export async function registerExtensionRoutes(
         return reply.code(400).send({ error: "invalid mints" });
       const mints = [...new Set(raw)].filter((m): m is string => typeof m === "string" && isMintAddress(m));
       reply.header("Cache-Control", "no-store");
-      return { tokens: mints.length ? await statsOverlay(mints) : {} };
+      const shown = await onFeedOnly(mints, request.extensionClient!.aiReviews);
+      return { tokens: shown.length ? await statsOverlay(shown) : {} };
     },
   );
 
@@ -628,7 +685,8 @@ export async function registerExtensionRoutes(
       );
       if (!held) return { tokens: {}, pushed: false };
       const { changed, pushed } = held;
-      return { tokens: changed.length ? await statsOverlay(changed) : {}, pushed };
+      const shown = await onFeedOnly(changed, request.extensionClient!.aiReviews);
+      return { tokens: shown.length ? await statsOverlay(shown) : {}, pushed };
     },
   );
 
@@ -738,15 +796,22 @@ export async function registerExtensionRoutes(
     aiReviews: boolean,
     extra: readonly string[] = [],
   ): Promise<BuddyAnswer> {
-    const key = `${userId}:${walletAddress}:${aiReviews}:${extra.join(",")}`;
+    // One answer per reader, whatever wallets it covers: a set asked for drops the last one's, so
+    // a key can't keep an answer (and a read behind it) for every set it names (AP-1).
+    const key = userId;
+    const wallets = `${walletAddress}:${aiReviews}:${extra.join(",")}`;
     const now = Date.now();
     let entry = buddyAnswers.get(key);
-    if (entry && !entry.reading && now - entry.at >= BUDDY_KEEP_MS) {
+    if (entry && !entry.reading && (now - entry.at >= BUDDY_KEEP_MS || entry.wallets !== wallets)) {
       buddyAnswers.delete(key);
       entry = undefined;
     }
+    if (entry && entry.wallets !== wallets) {
+      // A read for the old set is still running: this one waits for its own.
+      return readBuddy(userId, walletAddress, aiReviews, extra);
+    }
     if (!entry) {
-      entry = { at: 0, body: null, reading: null };
+      entry = { wallets, at: 0, body: null, reading: null };
       buddyAnswers.set(key, entry);
       if (buddyAnswers.size > 5_000) buddyAnswers.delete(buddyAnswers.keys().next().value!);
     }
@@ -778,13 +843,20 @@ export async function registerExtensionRoutes(
     async (request, reply) => {
       const { userId, walletAddress, aiReviews } = request.extensionClient!;
       // The reader's other wallets (Axiom's, Terminal's...), so trades made there are followed too
-      // (user ask 2026-10-27). Public addresses only; a few at most, as each is followed on chain.
+      // (user ask 2026-10-27): only those linked to the account on Settings, by a signature from
+      // each (user decision 2026-10-27, Card 11). Before, any key could name any wallet, and the
+      // server followed strangers' wallets on our Helius key (AP-1). The panel's own list, when it
+      // sends one, picks among the linked ones; without one every linked wallet is followed.
       const raw = (request.query as { wallets?: unknown }).wallets;
-      const listed = typeof raw === "string" && raw.length > 0 ? raw.split(",") : [];
-      if (listed.length > BUDDY_EXTRA_WALLETS || listed.some((w) => !isMintAddress(w)))
+      const listed = typeof raw === "string" && raw.length > 0 ? raw.split(",") : null;
+      if (listed && (listed.length > BUDDY_EXTRA_WALLETS || listed.some((w) => !isMintAddress(w))))
         return reply.code(400).send({ error: "invalid wallets" });
-      const extra = [...new Set(listed)].filter((w) => w !== walletAddress).sort();
-      return buddyFor(userId, walletAddress, aiReviews, extra) satisfies Promise<BuddyAnswer>;
+      const linked = await linkedBuddyWallets(userId);
+      const asked = listed ? [...new Set(listed)].filter((w) => w !== walletAddress) : linked;
+      const extra = asked.filter((w) => linked.includes(w)).sort();
+      const notLinked = asked.filter((w) => !linked.includes(w));
+      const answer = await buddyFor(userId, walletAddress, aiReviews, extra);
+      return (notLinked.length ? { ...answer, notLinked } : answer) satisfies BuddyAnswer;
     },
   );
 }

@@ -69,6 +69,7 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
 import { registerModelAlertKeyRoutes } from "./routes/modelAlertKeys.js";
 import { registerExtensionKeyRoutes } from "./routes/extensionKeys.js";
+import { registerBuddyWalletRoutes } from "./routes/buddyWallets.js";
 import { registerExtensionRoutes } from "./routes/extension.js";
 import { registerModelAlertSocket } from "./routes/modelAlertSocket.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
@@ -832,6 +833,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerModelAlertSocket, { hub: modelAlertHub, env });
   // The browser extension overlay: Settings mints and revokes its keys, /ext/v1 is what it reads.
   await app.register(registerExtensionKeyRoutes, { prefix: "/settings", env });
+  // Trade Buddy's other wallets, linked by a signature (Card 11): the only ones /ext/v1/buddy follows.
+  await app.register(registerBuddyWalletRoutes, { prefix: "/settings", env });
   // A wallet's own trades, followed on the Helius stream (proTrades.ts): the TRADES panel's and
   // the extension's Trade Buddy, one follower for both.
   const proTrades = createProTrades({ env, dexScreener, viewStamps });

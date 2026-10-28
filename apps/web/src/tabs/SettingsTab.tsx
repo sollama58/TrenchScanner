@@ -10,6 +10,7 @@ import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { TwoFactorPanel } from "../components/TwoFactorPanel";
 import { ModelAlertKeysPanel } from "../components/ModelAlertKeys";
+import { BuddyWalletsPanel } from "../components/BuddyWallets";
 import { ExtensionKeysPanel } from "../components/ExtensionKeys";
 import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
 import { openCustomize, type CustomizeSection } from "../customize";
@@ -83,6 +84,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
       <TwoFactorPanel />
       <ModelAlertKeysPanel />
       <ExtensionKeysPanel />
+      <BuddyWalletsPanel />
     </div>
   );
 }
