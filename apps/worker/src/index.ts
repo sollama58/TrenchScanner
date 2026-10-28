@@ -84,7 +84,7 @@ import { aiReviewEnabled } from "./ai/reviewer.js";
 import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
-import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
+import { runPipelineWatch, TRAINING_DEADLINE_MINUTES } from "./jobs/pipelineWatchJob.js";
 import { canaryFailureMeta, runTradeCanary } from "./jobs/tradeCanaryJob.js";
 import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
@@ -192,8 +192,11 @@ const solUsdHistory = new SolUsdHistory();
 /** A day plus slack: a daily job whose last run is older than this missed its slot. */
 const DAILY_CATCH_UP_AFTER_HOURS = 26;
 /**
- * The nightly sweeps' deadline (cleanup, outcome-tracking): a run takes 3-16 minutes, 30 at the
- * worst seen, so one still going at two hours is hung, and the restart's catch-up re-runs it.
+ * The nightly sweeps' deadline (cleanup, outcome-tracking). On 2026-10-27 cleanup took about 8
+ * minutes and outcome-tracking 40 (2,427 s, 2,298 of them its live-price reads for ~51k mints,
+ * up from 36 on 10-23: full audit 2026-10-27, DB-13), so one still going at two hours is hung, and
+ * the restart's catch-up re-runs it. outcome-tracking's runtime trends up with the mints it
+ * prices: past about 90 minutes this deadline is the next thing to move.
  */
 const DAILY_SWEEP_DEADLINE_MINUTES = 120;
 /** The KOL roster read's: a few calls and an avatar pass. */
@@ -1236,8 +1239,9 @@ async function main() {
         // run cut at 150 would be redone and cut again). One that hangs (a dead connection, a
         // training thread that never answers) would otherwise stop training for good and block
         // "Retrain now". /health/worker calls a run hung well before this, once its exams stop
-        // moving (TRAINING_DEADLINE_MS in apps/api/src/routes/health.ts).
-        deadlineMinutes: 240,
+        // moving (TRAINING_DEADLINE_MS in apps/api/src/routes/health.ts), and pipeline-watch tells
+        // the admins once runs take three quarters of it.
+        deadlineMinutes: TRAINING_DEADLINE_MINUTES,
         // The admin panel's "Retrain now" (POST /admin/curator/retrain) leaves a request row.
         runEarly: { everyMs: 60_000, due: retrainRequested },
         // "Stop and retrain": the same row, left while a run is going (each run marks the requests

@@ -3,8 +3,15 @@ import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
 import {
+  burnIsHigh,
+  burnNotice,
+  checkHeliusBurn,
   checkHeliusPlan,
   HELIUS_BUDGET_CHECK_MS,
+  HELIUS_BURN_DAILY_CREDITS,
+  HELIUS_BURN_RATIO,
+  readBurnState,
+  type HeliusBurnState,
   heliusCycle,
   planNotices,
   projectPlan,
@@ -12,6 +19,7 @@ import {
 } from "./heliusBudget.js";
 
 const DAY = 86_400_000;
+const HOUR = 3_600_000;
 
 describe("the Helius plan's cycle and projection", () => {
   it("finds the cycle from its start day, a short month's last day standing in", () => {
@@ -124,5 +132,124 @@ describe.skipIf(!dbAvailable)("checkHeliusPlan against ApiUsage", () => {
     const second = await checkHeliusPlan(env, first.state, later);
     expect(second.state).toMatchObject({ cycleCredits: 980, notified: "75,runout,90,97" });
     expect(second.notices[0]).toContain("97% of the plan used");
+  });
+});
+
+describe("the Helius spend alarm with no plan size (audit 2026-10-27, DA-2)", () => {
+  const NOW = Date.UTC(2026, 9, 27, 12);
+  const burn = (over: Partial<HeliusBurnState>): HeliusBurnState => ({
+    last24h: 1_200_000,
+    baselineDaily: 1_200_000,
+    baselineDays: 7,
+    through: new Date(NOW).toISOString(),
+    checkedAt: new Date(NOW).toISOString(),
+    notifiedAt: null,
+    ...over,
+  });
+
+  it("is high at 1.5x the usual day or past the fixed line, and not on a flat week", () => {
+    expect(burnIsHigh(burn({}))).toBe(false);
+    expect(burnIsHigh(burn({ last24h: 1_790_000 }))).toBe(false);
+    expect(burnIsHigh(burn({ last24h: 1_800_000 }))).toBe(true);
+    // Too few days for a usual day: only the fixed line.
+    expect(burnIsHigh(burn({ last24h: 1_900_000, baselineDaily: null }))).toBe(false);
+    expect(burnIsHigh(burn({ last24h: HELIUS_BURN_DAILY_CREDITS, baselineDaily: null }))).toBe(true);
+    expect(burnIsHigh(burn({ last24h: 500, baselineDaily: 0 }))).toBe(false);
+    expect(HELIUS_BURN_RATIO).toBe(1.5);
+  });
+
+  it("tells the admins once a day while spend stays high, and re-arms once it is back down", () => {
+    const high = burn({ last24h: 1_900_000 });
+    const first = burnNotice(high, NOW, false);
+    expect(first.notice).toContain("1.9M credits in the last 24 h, 1.6× the usual day");
+    expect(first.notice).toContain("Median day over the 7 days before: 1.2M");
+    expect(first.notice).toContain("At this rate: 57.8M a month");
+    expect(first.notice).toContain("HELIUS_MONTHLY_CREDITS is unset");
+    expect(first.notifiedAt).toBe(new Date(NOW).toISOString());
+    // An hour on: nothing new.
+    expect(burnNotice({ ...high, notifiedAt: first.notifiedAt }, NOW + HOUR, false)).toEqual({
+      notice: null,
+      notifiedAt: first.notifiedAt,
+    });
+    // A day on, still high: once more.
+    expect(burnNotice({ ...high, notifiedAt: first.notifiedAt }, NOW + DAY, true).notice).not.toContain(
+      "HELIUS_MONTHLY_CREDITS",
+    );
+    // Back down: quiet, and armed again.
+    expect(burnNotice(burn({ notifiedAt: first.notifiedAt }), NOW + HOUR, false)).toEqual({
+      notice: null,
+      notifiedAt: null,
+    });
+  });
+});
+
+describe.skipIf(!dbAvailable)("checkHeliusBurn against ApiUsage", () => {
+  const PROCESS = "test-helius-burn";
+  // Clear of checkHeliusPlan's window above.
+  const NOW = Date.UTC(2026, 6, 20, 12, 3);
+  const row = (bucket: number, credits: number) => ({
+    bucket: new Date(bucket),
+    process: PROCESS,
+    provider: "helius",
+    endpoint: "getBalance",
+    feature: "unit",
+    credits,
+  });
+  const clear = () =>
+    prisma.apiUsage.deleteMany({
+      where: { provider: "helius", bucket: { gte: new Date(NOW - 20 * DAY), lt: new Date(NOW + 2 * DAY) } },
+    });
+  beforeEach(clear);
+  afterAll(clear);
+
+  /** One bucket a day for `days` days before the last 24 h, then the last day's. */
+  const seed = async (daily: number, lastDay: number, days = 7) => {
+    const through = NOW - 3 * 60_000;
+    const rows = [row(through - HOUR, lastDay)];
+    for (let k = 1; k <= days; k += 1) rows.push(row(through - k * DAY - HOUR, daily));
+    // The oldest counted day must be wholly held: a bucket at its very start.
+    rows.push(row(through - (days + 1) * DAY, 0));
+    await prisma.apiUsage.createMany({ data: rows });
+  };
+
+  it("tells the admins about a day at 1.9M after a week at 1.2M", async () => {
+    await seed(1_200_000, 1_900_000);
+    const out = await checkHeliusBurn(null, NOW, false);
+    expect(out.state).toMatchObject({ last24h: 1_900_000, baselineDaily: 1_200_000, baselineDays: 7 });
+    expect(out.notices).toHaveLength(1);
+    // Within the hour: unchanged.
+    expect(await checkHeliusBurn(out.state, NOW + 60_000, false)).toEqual({ state: out.state, notices: [] });
+  });
+
+  it("says nothing on a flat week, and judges only the fixed line on a young table", async () => {
+    await seed(1_200_000, 1_250_000);
+    const flat = await checkHeliusBurn(null, NOW, false);
+    expect(flat.notices).toEqual([]);
+    expect(flat.state.baselineDaily).toBe(1_200_000);
+
+    await clear();
+    await seed(100_000, 1_000_000, 2);
+    const young = await checkHeliusBurn(null, NOW, false);
+    expect(young.state).toMatchObject({ baselineDaily: null, baselineDays: 2 });
+    expect(young.notices).toEqual([]);
+  });
+
+  it("reads back what the heartbeat stored", () => {
+    expect(readBurnState(null)).toBeNull();
+    expect(readBurnState({ last24h: 5 })).toBeNull();
+    expect(
+      readBurnState({
+        last24h: 5,
+        checkedAt: "2026-10-27T00:00:00.000Z",
+        through: "2026-10-27T00:00:00.000Z",
+      }),
+    ).toEqual({
+      last24h: 5,
+      baselineDaily: null,
+      baselineDays: 0,
+      through: "2026-10-27T00:00:00.000Z",
+      checkedAt: "2026-10-27T00:00:00.000Z",
+      notifiedAt: null,
+    });
   });
 });

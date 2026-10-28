@@ -316,6 +316,7 @@ export async function registerHealthRoutes(
     const watchMeta = heartbeats.find((h) => h.job === "pipeline-watch")?.meta as
       Record<string, unknown> | null | undefined;
     const heliusPlan = heliusPlanOf(watchMeta?.heliusPlan);
+    const watch = watchAlarmsOf(watchMeta);
     const scanMeta = heartbeats.find((h) => h.job === "scan")?.meta as Record<string, unknown> | null;
     const screenPass = scanMeta?.lastScreenPassAt;
     // When each stage of the alert path last produced something (the header pill's tooltip).
@@ -325,7 +326,7 @@ export async function registerHealthRoutes(
       lastTokenSageAt: lastRead._max.checkedAt,
       lastDecisionAt: latest(lastDecision._max.anchorAt, lastSecondLook._max.anchorAt),
     };
-    return { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan };
+    return { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan, watch };
   };
   const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
 
@@ -333,7 +334,7 @@ export async function registerHealthRoutes(
   // a monitor that only reads status codes can alert on it. Without it the route always answers
   // 200 and the dashboard reads the flags from the body, as it always has.
   app.get<{ Querystring: { strict?: string } }>("/worker", async (request, reply) => {
-    const { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan } =
+    const { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan, watch } =
       await heartbeatCache.get(readHeartbeats);
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
@@ -351,6 +352,14 @@ export async function registerHealthRoutes(
       // The Helius plan against its billing cycle, as pipeline-watch last read it (HELIUS_MONTHLY_CREDITS;
       // null with that unset): credits so far, the last day's, and when that rate runs the plan out.
       heliusPlan,
+      // The run-out warnings pipeline-watch keeps (full audit 2026-10-27, T3), figures only: Helius
+      // credits in the last 24 h against the usual day, with no plan size needed; training's last
+      // completed run against its deadline; the scan cycle's median time to its decisions; and
+      // alerts Telegram dropped unsent in the episode in progress.
+      heliusBurn: watch.heliusBurn,
+      training: watch.training,
+      scanLatency: watch.scanLatency,
+      telegramAgedOut: watch.telegramAgedOut,
       // Today's AI spend against the daily cap (AI_DAILY_BUDGET_USD): totals only here - the
       // per-source split is on the admin panel.
       aiBudget: {
@@ -387,6 +396,70 @@ function heliusPlanOf(meta: unknown) {
     projectedRunOutAt: str("projectedRunOutAt"),
     checkedAt: str("checkedAt"),
   };
+}
+
+/** The run-out warnings' figures from pipeline-watch's heartbeat (apps/worker/src/jobs/pipelineWatchJob.ts). */
+export function watchAlarmsOf(meta: Record<string, unknown> | null | undefined) {
+  const obj = (k: string) => {
+    const v = meta?.[k];
+    return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  };
+  const num = (m: Record<string, unknown> | null, k: string) =>
+    m && typeof m[k] === "number" && Number.isFinite(m[k]) ? (m[k] as number) : null;
+  const str = (m: Record<string, unknown> | null, k: string) =>
+    m && typeof m[k] === "string" ? (m[k] as string) : null;
+
+  const burn = obj("heliusBurn");
+  const last24h = num(burn, "last24h");
+  const baselineDaily = num(burn, "baselineDaily");
+  const heliusBurn =
+    last24h === null
+      ? null
+      : {
+          last24h,
+          baselineDaily,
+          baselineDays: num(burn, "baselineDays"),
+          ratio: baselineDaily ? Math.round((last24h / baselineDaily) * 100) / 100 : null,
+          checkedAt: str(burn, "checkedAt"),
+        };
+
+  const t = obj("training");
+  const lastCompletedMs = num(t, "lastCompletedMs");
+  const training = t
+    ? {
+        deadlineMs: TRAINING_DEADLINE_MS,
+        lastCompletedAt: str(t, "lastCompletedAt"),
+        lastCompletedMs,
+        deadlineUsedPct:
+          lastCompletedMs === null ? null : Math.round((lastCompletedMs / TRAINING_DEADLINE_MS) * 100),
+      }
+    : null;
+
+  const scan = obj("scanLatency");
+  // Comma-separated milliseconds: heartbeat meta holds no arrays.
+  const samples = (str(scan, "samples") ?? "")
+    .split(",")
+    .filter(Boolean)
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+  const sorted = [...samples].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const scanLatency =
+    sorted.length === 0
+      ? null
+      : {
+          cycles: sorted.length,
+          decidedMsP50: Math.round(
+            sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2,
+          ),
+        };
+
+  const aged = obj("telegramAgedOut");
+  const telegramAgedOut = aged
+    ? { count: num(aged, "count") ?? 0, since: str(aged, "since"), lastAt: str(aged, "lastAt") }
+    : null;
+
+  return { heliusBurn, training, scanLatency, telegramAgedOut };
 }
 
 /** The shared Helius stand-down row's times (apiUsage.ts writes them as ms epochs), or null. */
@@ -492,6 +565,11 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   for (const key of ["skipped", "heldStages", "resumedSkippedStages"] as const) {
     if (typeof m[key] === "string") out[key] = m[key];
   }
+  // champion-refresh: how many seat live-share alarms are up (runGuard.ts liveShareAlarms; MT-11).
+  // Their text names seats and shares and stays on the admin panel; the count says one is up.
+  if (typeof m.shareAlarms === "string") {
+    out.shareAlarms = m.shareAlarms.split("; ").filter(Boolean).length;
+  }
   const stages = stageTimings(meta, "stagesMs");
   if (stages) out.stagesMs = stages;
   // The scan's paid RPC calls per method ({ method: count }) - what the Helius plan bills on.
@@ -527,6 +605,13 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "curveCandles",
     "candleBackfill",
     "candleChainFill",
+    // Ready coins held back from a decision, by what held them: the cycle's and since boot
+    // (decisionHolds.ts; audit 2026-10-27, DS-9 - written since 10-14 but never shown).
+    "decisionHolds",
+    "decisionHoldsSinceBoot",
+    // champion-refresh: the seats' record on the fast path's own moments (moments, graded, won2x
+    // over windowHours; the per-seat line stays on the admin panel) - MT-11.
+    "fastPath",
   ] as const) {
     const calls = stageTimings(meta, key);
     if (calls) out[key] = calls;
