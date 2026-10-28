@@ -36,6 +36,8 @@ import {
   WEEKEND_FLAG_FROM,
   FRESH_QUOTE_GAP_SINCE,
   RUGCHECK_UNINDEXED_FILL,
+  NS_LOGO_REUSE_FALSE_ZEROS,
+  NS_X_READ_FALSE_ZEROS,
   PATH_TAPE_REFILL_SINCE,
   PATH_RETURNS_ACROSS_GAPS_SINCE,
   PRICE_PATH_FEATURES,
@@ -43,6 +45,7 @@ import {
   SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE,
   LAUNCH_FACT_FEATURES,
   MARKET_LEARNER_FEATURE_NAMES,
+  MARKET_LATENCY_INPUTS,
   MARKET_TOKENSAGE_INPUTS,
   isTokenSageInput,
   WALLET_SCORE_FEATURES,
@@ -1160,6 +1163,45 @@ describe("maskKnownBadInputs", () => {
     expect(maskKnownBadInputs(RUGCHECK_UNINDEXED_FILL.from, row).holderGrowthPct).toBeNull();
   });
 
+  it("reads TokenSage's false-zero logo reuse and X read flag as missing in their eras (MT-5)", () => {
+    const row = { nsLogoReuse24h: 0, nsXRead: 0, nsRead: 1, mcapUsd: 50_000 };
+    const logoOnly = new Date("2026-10-21T12:00:00Z");
+    expect(maskKnownBadInputs(logoOnly, row)).toEqual({ ...row, nsLogoReuse24h: null });
+    const both = new Date("2026-10-23T06:00:00Z");
+    expect(maskKnownBadInputs(both, row)).toEqual({ ...row, nsLogoReuse24h: null, nsXRead: null });
+    // A real reading in the era stays, and outside the eras a 0 is a reading again.
+    const read = { ...row, nsLogoReuse24h: 2, nsXRead: 1 };
+    expect(maskKnownBadInputs(both, read)).toBe(read);
+    expect(maskKnownBadInputs(new Date(NS_LOGO_REUSE_FALSE_ZEROS.from.getTime() - 1), row)).toBe(row);
+    expect(maskKnownBadInputs(NS_LOGO_REUSE_FALSE_ZEROS.until, row)).toBe(row);
+    expect(maskKnownBadInputs(new Date(NS_X_READ_FALSE_ZEROS.from.getTime() - 1), row).nsXRead).toBe(0);
+    expect(maskKnownBadInputs(NS_X_READ_FALSE_ZEROS.from, row).nsXRead).toBeNull();
+  });
+
+  it("keeps TokenSage's read-latency inputs off the market seats, and on the narrative ones (MT-7)", () => {
+    for (const name of ["nsXEngagementAgeMin", "nsNowAgeMin"] as const) {
+      expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain(name);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+    }
+  });
+
+  it("lets the learners read the 5-minute trade flow again now that Helius fills it (MT-17)", () => {
+    const flow = [
+      "uniqueBuyers5m",
+      "buysPerBuyer5m",
+      "avgBuySol5m",
+      "topBuyerShare5m",
+      "newBuyerShare5m",
+      "netFlow5mToMcap",
+      "tradesPerMin5m",
+    ] as const;
+    for (const name of flow) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+    }
+  });
+
   it("reads emptyTop10WalletPct as missing before unpriced holdings made it unknown (#678)", () => {
     const row = { emptyTop10WalletPct: 70, mcapUsd: 50_000 };
     const before = new Date(EMPTY_WALLETS_UNPRICED_NULL_SINCE.getTime() - 1);
@@ -1354,13 +1396,14 @@ describe("maskTokenSageXReuseLoss", () => {
 
 describe("the market seats' TokenSage inputs", () => {
   it("keeps the fee group, logo score, X counts and story heat, and leaves the other ns* inputs to the Narrative seats", () => {
+    // Less the two read-latency inputs (MARKET_LATENCY_INPUTS, MT-7).
     for (const name of MARKET_TOKENSAGE_INPUTS) {
       expect(isTokenSageInput(name)).toBe(true);
-      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+      if (!MARKET_LATENCY_INPUTS.has(name)) expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
     for (const name of [...NARRATIVE_FEATURES_V7, ...NARRATIVE_FEATURES_V8]) {
       expect(isTokenSageInput(name)).toBe(true);
-      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+      if (!MARKET_LATENCY_INPUTS.has(name)) expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
       expect(LEARNER_FEATURE_NAMES).toContain(name);
     }
     expect(isTokenSageInput("nsCatAnimal")).toBe(true);
@@ -1369,9 +1412,9 @@ describe("the market seats' TokenSage inputs", () => {
     expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
     expect(LEARNER_FEATURE_NAMES).toContain("nsCatAnimal");
     expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
-    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => isTokenSageInput(n))).toEqual([
-      ...MARKET_TOKENSAGE_INPUTS,
-    ]);
+    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => isTokenSageInput(n))).toEqual(
+      MARKET_TOKENSAGE_INPUTS.filter((n) => !MARKET_LATENCY_INPUTS.has(n)),
+    );
     for (const name of LEARNER_FEATURE_NAMES.filter((n) => !isTokenSageInput(n))) {
       expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
