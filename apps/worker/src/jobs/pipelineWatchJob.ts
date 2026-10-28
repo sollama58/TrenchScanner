@@ -9,6 +9,7 @@ import {
   JOB_LOCKED_JOBS,
   lockLostDuringRun,
   runningSinceFrom,
+  TELEGRAM_MAX_FAILURES,
   TelegramApi,
   type Env,
   type HeartbeatJob,
@@ -589,6 +590,26 @@ export function findAgedOutProblems(
 }
 
 /**
+ * Linked chats the dispatcher switched off after a day of failed sends with nothing getting
+ * through (TELEGRAM_MAX_FAILURES, dispatch.ts). Their owner hears nothing more and nothing else
+ * said so, so one notice while any are off; it clears once each is switched back on (which resets
+ * its failures) or unlinked. Read from the table, not the dispatcher's per-pass `disabled`, which
+ * a once-a-minute watcher would mostly miss.
+ */
+export function findDisabledChatProblems(disabledChats: number): Problem[] {
+  if (disabledChats <= 0) return [];
+  return [
+    {
+      key: "telegram-disabled",
+      text:
+        `Telegram alerts: ${disabledChats} linked chat${disabledChats === 1 ? "" : "s"} switched off after a day ` +
+        "of failed sends - the owner gets nothing until it is switched back on",
+      side: true,
+    },
+  ];
+}
+
+/**
  * The scan cycle's time from its start to the contenders' decisions (audit 2026-10-27, DS-11): the
  * cycle went from about 6 s to a 28 s median between 2026-10-14 and 2026-10-27 with nothing saying
  * so, since every flow kept producing. The median of the last SCAN_LATENCY_SAMPLES completed cycles
@@ -843,6 +864,13 @@ async function readAgedOutSinceBoot(): Promise<number | null> {
   const row = await prisma.systemHeartbeat.findUnique({ where: { job: "telegram-dispatch" } });
   const n = (row?.meta as Record<string, unknown> | null)?.agedOutSinceBoot;
   return typeof n === "number" && Number.isFinite(n) ? n : null;
+}
+
+/** Linked chats the dispatcher switched off for failing (see findDisabledChatProblems). */
+function countDisabledChats(): Promise<number> {
+  return prisma.telegramChat.count({
+    where: { enabled: false, revokedAt: null, failures: { gte: TELEGRAM_MAX_FAILURES } },
+  });
 }
 
 async function oldestChatCursor(): Promise<Date | null> {
@@ -1163,20 +1191,32 @@ async function watchOnce(
   // Still out for a short while past the stand-down's end: it lifts at a fixed time and is only set
   // again by the next billed call refused, so a run in that gap read "flowing again" every cycle.
   const creditsOut = heliusCreditsOut(now - CREDITS_OUT_CLEAR_GRACE_MS);
-  const [flows, jobs, sideJobs, trainerJobs, cursor, dbBytes, canary, trades, scanCycle, agedOutSinceBoot] =
-    await Promise.all([
-      countFlows(now),
-      readJobs(WATCHED_JOBS),
-      readJobs(SIDE_JOBS),
-      readTrainerJobs(now),
-      oldestChatCursor(),
-      databaseBytes(),
-      // A canary switched off leaves its last row behind; it is not judged then.
-      env.TRADE_CANARY_ENABLED ? readCanary() : Promise.resolve(null),
-      countTradeOutcomes(now),
-      readScanCycle(),
-      readAgedOutSinceBoot(),
-    ]);
+  const [
+    flows,
+    jobs,
+    sideJobs,
+    trainerJobs,
+    cursor,
+    dbBytes,
+    canary,
+    trades,
+    scanCycle,
+    agedOutSinceBoot,
+    disabledChats,
+  ] = await Promise.all([
+    countFlows(now),
+    readJobs(WATCHED_JOBS),
+    readJobs(SIDE_JOBS),
+    readTrainerJobs(now),
+    oldestChatCursor(),
+    databaseBytes(),
+    // A canary switched off leaves its last row behind; it is not judged then.
+    env.TRADE_CANARY_ENABLED ? readCanary() : Promise.resolve(null),
+    countTradeOutcomes(now),
+    readScanCycle(),
+    readAgedOutSinceBoot(),
+    countDisabledChats(),
+  ]);
   const agedOut = findAgedOutProblems(before.agedOut, agedOutSinceBoot, now);
   const scanLatency = findScanLatencyProblems(before.scanLatency, scanCycle, before.keys.has("scan-latency"));
   const trainingJob = trainerJobs.find((j) => j.job === "curator-training");
@@ -1208,6 +1248,7 @@ async function watchOnce(
     ...findCanaryProblems(canary, now, env.TRADE_CANARY_INTERVAL_MINUTES),
     ...findTradeOutcomeProblems(trades),
     ...agedOut.problems,
+    ...findDisabledChatProblems(disabledChats),
     ...scanLatency.problems,
     ...training.problems,
   ];
