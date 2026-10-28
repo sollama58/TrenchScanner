@@ -95,7 +95,8 @@ const envSchema = z.object({
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   // The worker's DexScreener token lookups a minute, shared by every job in the process (scan,
   // fast match, candidate watch, live prices, the empty-wallet check's pricing). DexScreener allows
-  // 300 a minute; the default leaves the API's live refreshes room. See DexScreenerClient.
+  // 300 a minute per IP: this 180, the API's live refreshes (90) and the trainer's (30, render.yaml)
+  // share it. See DexScreenerClient.
   DEXSCREENER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(180),
   // A CoinGecko paid-plan key. Market data falls back to GeckoTerminal whenever DexScreener answers
   // lookups blank (datasources/geckoterminal.ts); with this key it uses CoinGecko's on-chain API
@@ -923,6 +924,21 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // A seat calls on the fast path only while its entry-row lift lower bound clears 1
+  // (curation/entryProof.ts, user decision 2026-10-27). On (the default) holds back the fast-path
+  // calls of seats with no proven edge there; the cycle still decides the coin. Off restores every
+  // seat's fast-path calls, the rollback if the cycle's later anchors cost more than they save.
+  CURATOR_ENTRY_PROOF: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // No seat calls a coin 60+ minutes old or 30+ minutes past its first band entry
+  // (curation/curator.ts isPastCalling, user decision 2026-10-27). On (the default); off restores
+  // those calls. The moments bank either way.
+  CURATOR_SKIP_PAST_CALLING: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // A Meteora DBC or Raydium LaunchLab curve keeps its created time, and a trading one is the
   // pair ahead of a deeper side pool. Off (the default): those venues are not a clock, which is
   // what shipped on 2026-10-21. On changes the price and the pair age of those coins, so which
@@ -1078,6 +1094,12 @@ const envSchema = z.object({
   AI_REVIEW_MODEL: z.string().default("claude-opus-5-5"),
   AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  // A shadow review's timeout (worker ai/reviewer.ts). It runs detached after the alert, so nothing
+  // waits on it, and a timeout bills the full estimate and stores nothing (audit 2026-10-27 AJ-13):
+  // it gets longer than the in-cycle gate review's AI_REVIEW_TIMEOUT_MS. A shutdown drains it in
+  // full (worker index.ts), so render.yaml's maxShutdownDelaySeconds on the worker and trainer
+  // covers it plus 10s - raise them together.
+  AI_REVIEW_SHADOW_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   // The 2x odds a "buy" needs, 0-1 (user ask 2026-10-25: as selective as it can be). Written into
   // the prompt as the trader's bar, and enforced on the answer: a "buy" with probability2x under
   // it is recorded as "no_buy" (curation/aiReview.ts applyBuyBar). The reviewed pool doubles about

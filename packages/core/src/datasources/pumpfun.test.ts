@@ -517,3 +517,34 @@ describe("launch metadata", () => {
     }
   });
 });
+
+describe("PumpFunClient request headers", () => {
+  const gates = {
+    frontend: { acquire: async () => {}, throttled: () => {} },
+    swap: { acquire: async () => {}, throttled: () => {} },
+  };
+
+  it("sends Pump.fun's own Origin and a named User-Agent on both hosts (audit 2026-10-27, DA-1)", async () => {
+    const sent: { url: string; headers: Headers }[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      sent.push({ url, headers: new Headers(init?.headers) });
+      return Promise.resolve(new Response(JSON.stringify(url.includes("/candles") ? [] : { mint: "M" })));
+    });
+    try {
+      const client = new PumpFunClient({ gates });
+      await client.coinDetails("M");
+      await client.launchTime("M");
+      await client.minuteCandles("M");
+      await client.discoverNewMints();
+      expect(sent.length).toBeGreaterThanOrEqual(4);
+      for (const { url, headers } of sent) {
+        expect(url).toMatch(/^https:\/\/(frontend-api-v3|swap-api)\.pump\.fun\//);
+        expect(headers.get("origin")).toBe("https://pump.fun");
+        expect(headers.get("user-agent")).toMatch(/^TrenchScanner\//);
+      }
+      expect(sent.some((s) => s.url.startsWith("https://swap-api.pump.fun/"))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

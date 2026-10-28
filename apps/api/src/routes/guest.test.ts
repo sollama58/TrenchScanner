@@ -314,7 +314,14 @@ describe.skipIf(!dbAvailable)("guest showcase", () => {
     await prisma.curatedAlert.createMany({
       data: [
         { ...base, ...won, tokenId: await token("a"), createdAt: hoursAgo(3), peak24hReturnPct: 400 },
-        { ...base, ...won, tokenId: await token("b"), createdAt: hoursAgo(5), peak24hReturnPct: 900 },
+        {
+          ...base,
+          ...won,
+          tokenId: await token("b"),
+          createdAt: hoursAgo(5),
+          peak24hReturnPct: 900,
+          simReturnPct: 85,
+        },
         // Stopped out after a bigger run: not a win to show off.
         {
           ...base,
@@ -348,6 +355,9 @@ describe.skipIf(!dbAvailable)("guest showcase", () => {
     const best = await loadGuestBest([shown]);
     expect(best?.token.mintAddress).toBe(`${tag}-b`);
     expect(best?.peakReturnPct).toBe(900);
+    // Beside the Peak, what the exit plan returned (audit 10-27 GF-7).
+    expect(best?.planReturnPct).toBe(85);
+    expect(best?.planOpen).toBe(false);
   });
 
   it("steps down past a call now trading under its alert price", async () => {

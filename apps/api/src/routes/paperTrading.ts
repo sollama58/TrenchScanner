@@ -4,6 +4,8 @@ import { z } from "zod";
 import {
   DEFAULT_PAPER_BANKROLL_SOL,
   DEFAULT_PAPER_CONFIG,
+  withAiJudgeDefault,
+  aiJudgeHasRecord,
   describeExitPlan,
   effectiveExitPlan,
   enabledContestants,
@@ -135,7 +137,11 @@ export async function registerPaperTradingRoutes(
       maxRunning: MAX_RUNNING_PAPER_STRATEGIES,
       maxStrategies: MAX_PAPER_STRATEGIES,
       defaults: {
-        config: DEFAULT_PAPER_CONFIG,
+        // The AI judge filter follows the judge's record (withAiJudgeDefault): off until it has one.
+        config: withAiJudgeDefault(
+          DEFAULT_PAPER_CONFIG,
+          await aiJudgeHasRecord(env.AI_REVIEW_MIN_GRADED_BUYS),
+        ),
         bankrollSol: DEFAULT_PAPER_BANKROLL_SOL,
         exitPlan: EXIT_PLAN,
         exitPlanSummary: describeExitPlan(EXIT_PLAN),
@@ -212,7 +218,9 @@ export async function registerPaperTradingRoutes(
     const parsed = createSchema.safeParse(request.body ?? {});
     if (!parsed.success) return badRequest(reply, parsed.error);
     const { userId } = request.user!;
-    let config = parsed.data.config ?? DEFAULT_PAPER_CONFIG;
+    let config =
+      parsed.data.config ??
+      withAiJudgeDefault(DEFAULT_PAPER_CONFIG, await aiJudgeHasRecord(env.AI_REVIEW_MIN_GRADED_BUYS));
     if (parsed.data.copyFrom) {
       const source = await prisma.paperStrategy.findFirst({ where: { id: parsed.data.copyFrom, userId } });
       if (!source) return reply.code(404).send({ error: "no paper strategy to copy" });

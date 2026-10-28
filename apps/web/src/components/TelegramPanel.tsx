@@ -5,15 +5,18 @@ import {
   patch,
   post,
   put,
+  TELEGRAM_ALERT_LINKS,
   TELEGRAM_ALERT_PARTS,
+  TELEGRAM_MAX_MCAP_FLOOR,
   type Leaderboard,
+  type TelegramAlertLink,
   type TelegramAlertPart,
   type TelegramChat,
   type TelegramLinkCode,
   type TelegramModels,
   type TelegramState,
 } from "../api";
-import { ago } from "../format";
+import { ago, usd } from "../format";
 import { Switch } from "./AlertDeliveryPanels";
 import { ModelPicker } from "./ModelPicker";
 import { CheckIcon, CopyIcon, ExternalIcon, SendIcon, TrashIcon, UsersIcon } from "./Icons";
@@ -165,7 +168,12 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
 
   const change = (
     chat: TelegramChat,
-    body: Partial<Pick<TelegramChat, "filterMatches" | "modelCalls" | "enabled" | "hidden">>,
+    body: Partial<
+      Pick<
+        TelegramChat,
+        "filterMatches" | "modelCalls" | "enabled" | "hidden" | "layout" | "alertsMinMcapUsd"
+      >
+    >,
   ) => run(chat.id, () => patch(`/telegram/chats/${encodeURIComponent(chat.id)}`, body));
 
   const models: TelegramModels = tg?.models ?? { sameAsFeed: true, models: [] };
@@ -188,6 +196,16 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
       const now = (await api<TelegramState>("/telegram")).chats.find((c) => c.id === chat.id) ?? chat;
       const hidden = now.hidden.includes(part) ? now.hidden.filter((p) => p !== part) : [...now.hidden, part];
       await patch(`/telegram/chats/${encodeURIComponent(chat.id)}`, { hidden });
+    });
+
+  // The same for the links (the chat's /settings changes them too).
+  const toggleLink = (chat: TelegramChat, link: TelegramAlertLink) =>
+    run(chat.id, async () => {
+      const now = (await api<TelegramState>("/telegram")).chats.find((c) => c.id === chat.id) ?? chat;
+      const links = now.links ?? [];
+      await patch(`/telegram/chats/${encodeURIComponent(chat.id)}`, {
+        links: links.includes(link) ? links.filter((l) => l !== link) : [...links, link],
+      });
     });
 
   const unlink = (chat: TelegramChat) => {
@@ -447,6 +465,50 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
                           </button>
                         );
                       })}
+                    </div>
+                    {/* Until now these were set only in the chat (/settings, /mincap; audit 10-27 WB-30). */}
+                    <div className="tg-chat-parts">
+                      <span className="faint small">Layout</span>
+                      {(["full", "compact"] as const).map((layout) => {
+                        const on = (c.layout ?? "full") === layout;
+                        return (
+                          <button
+                            key={layout}
+                            type="button"
+                            className={`chip pick${on ? " on" : ""}`}
+                            aria-pressed={on}
+                            disabled={busy !== null}
+                            onClick={() => {
+                              if (!on) void change(c, { layout });
+                            }}
+                          >
+                            {layout === "full" ? "Full card" : "Compact"}
+                          </button>
+                        );
+                      })}
+                      <span className="faint small">Links</span>
+                      {TELEGRAM_ALERT_LINKS.map((l) => {
+                        const on = (c.links ?? []).includes(l.key);
+                        return (
+                          <button
+                            key={l.key}
+                            type="button"
+                            className={`chip${on ? " on" : ""}`}
+                            aria-pressed={on}
+                            disabled={busy !== null}
+                            onClick={() => void toggleLink(c, l.key)}
+                          >
+                            {l.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="tg-chat-parts">
+                      <MinMcapField
+                        value={c.alertsMinMcapUsd ?? 0}
+                        disabled={busy !== null}
+                        onSave={(alertsMinMcapUsd) => void change(c, { alertsMinMcapUsd })}
+                      />
                       <span className="tg-chat-buttons">
                         <button
                           className="button ghost small-btn"
@@ -482,6 +544,53 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * The chat's /alerts floor (its /mincap): saved on Enter or when the field loses focus, in USD.
+ * The panel's own copy of the number, so typing isn't reset by the next load.
+ */
+function MinMcapField({
+  value,
+  disabled,
+  onSave,
+}: {
+  value: number;
+  disabled: boolean;
+  onSave: (usd: number) => void;
+}) {
+  const [text, setText] = useState(value > 0 ? String(value) : "");
+  useEffect(() => setText(value > 0 ? String(value) : ""), [value]);
+  const save = () => {
+    const n = text.trim() === "" ? 0 : Math.round(Number(text));
+    if (!Number.isFinite(n) || n < 0 || n > TELEGRAM_MAX_MCAP_FLOOR) {
+      setText(value > 0 ? String(value) : "");
+      return;
+    }
+    if (n !== value) onSave(n);
+  };
+  return (
+    <label className="faint small tg-mincap">
+      /alerts hides coins under
+      <input
+        type="number"
+        inputMode="numeric"
+        min={0}
+        max={TELEGRAM_MAX_MCAP_FLOOR}
+        step={1000}
+        placeholder="any cap"
+        value={text}
+        disabled={disabled}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") save();
+        }}
+        aria-label="Market cap floor for the chat's /alerts list, in USD"
+      />
+      {value > 0 ? `(now ${usd(value)})` : "(none set)"}
+    </label>
   );
 }
 

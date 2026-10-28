@@ -1627,6 +1627,18 @@ export function tokenSageSocials(analysis: unknown): CoinSocials {
 }
 
 /**
+ * The description TokenSage's own read of the coin's metadata found (the `raw` block's), trimmed
+ * and capped; undefined when it found none. An empty one is left undefined too: `raw` may be our
+ * own hints rather than the launch JSON, so "" can't be told from "not asked".
+ */
+export function tokenSageDescription(analysis: unknown): string | undefined {
+  const description = asRecord(asRecord(analysis)?.raw)?.description;
+  if (typeof description !== "string") return undefined;
+  const text = description.trim();
+  return text ? text.slice(0, 2_000) : undefined;
+}
+
+/**
  * Who a coin's creator fee goes to, in four groups: a charity, its holders or other wallets
  * (holder rewards, cashback, another wallet or account, or a split among them), a GitHub account,
  * or the dev. Null when TokenSage can't tell. The Lighthouse's Fee recipients section groups by

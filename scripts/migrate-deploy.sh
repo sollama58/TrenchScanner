@@ -11,6 +11,11 @@
 #     an ALTER queued behind a long read gives up instead of stalling every reader of that table
 #     behind it. Prisma runs a migration file as one transaction, so the failed file left nothing
 #     behind; it is marked rolled back (otherwise every later deploy stops on P3009) and retried.
+#     The nightly pg_dump (trenchscanner-db-backup, 02:30 UTC) holds a share lock on every table
+#     for its whole run, 8 minutes at 2.4 GB on 2026-10-27 and growing with the database, which
+#     would outlast the retries below; while one is running, a lock timeout waits for it instead of
+#     counting against them (MIGRATE_DUMP_WAIT_SECONDS, 30 minutes by default; full audit
+#     2026-10-27, DB-14).
 #  3. A deadlock (40P01) with another session, retried the same way.
 #  4. A migration that failed on an earlier deploy (P3009): marked rolled back and run again, once
 #     per run (every migration since check-migrations.sh's RERUN_SAFE_FROM re-applies safely).
@@ -25,6 +30,9 @@ SCHEMA=packages/core/prisma/schema.prisma
 # Lock-timeout retries, and the pause before each (seconds, times the attempt number).
 LOCK_RETRIES=${MIGRATE_LOCK_RETRIES:-8}
 LOCK_PAUSE=${MIGRATE_LOCK_PAUSE_SECONDS:-15}
+# How long, in all, lock timeouts wait out a running pg_dump before counting as retries again.
+DUMP_WAIT=${MIGRATE_DUMP_WAIT_SECONDS:-1800}
+DUMP_PAUSE=${MIGRATE_DUMP_PAUSE_SECONDS:-30}
 # How long to keep waiting on another service's migration run.
 PEER_WAIT=${MIGRATE_PEER_WAIT_SECONDS:-900}
 PEER_PAUSE=${MIGRATE_PEER_PAUSE_SECONDS:-5}
@@ -40,7 +48,22 @@ if [[ -n "${DATABASE_URL:-}" && "$DATABASE_URL" != *"options="* ]]; then
   export DATABASE_URL="${DATABASE_URL}${sep}options=-c%20statement_timeout%3D${STATEMENT_TIMEOUT_MS}"
 fi
 
+# Whether a pg_dump is reading this database right now (pg_dump names its connection "pg_dump").
+# Through node and the pg package npm ci installed, since a Render Node image has no psql. Any
+# failure to tell reads as "no dump", which leaves the retries exactly as they were.
+dump_running() {
+  node -e '
+    const { Client } = require("pg");
+    const c = new Client({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10000 });
+    c.connect()
+      .then(() => c.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND state = $2", ["pg_dump", "active"]))
+      .then((r) => { c.end(); process.exit(r.rows[0].n > 0 ? 0 : 1); })
+      .catch(() => process.exit(1));
+  ' 2>/dev/null
+}
+
 lock_failures=0
+dump_waited=0
 failed_resolved=0
 start=$SECONDS
 while true; do
@@ -76,6 +99,13 @@ while true; do
   # Both leave nothing behind but the failed row, and go again after a pause.
   if grep -qE '55P03|40P01' <<<"$out"; then
     name=$(sed -n 's/^Migration name: *//p' <<<"$out" | head -n1)
+    if [[ -n "$name" ]] && ((dump_waited < DUMP_WAIT)) && dump_running; then
+      prisma migrate resolve --rolled-back "$name" --schema "$SCHEMA" || exit $rc
+      dump_waited=$((dump_waited + DUMP_PAUSE))
+      echo "migrate-deploy: $name waits on the nightly pg_dump; retrying in ${DUMP_PAUSE}s (${dump_waited}/${DUMP_WAIT}s)" >&2
+      sleep "$DUMP_PAUSE"
+      continue
+    fi
     lock_failures=$((lock_failures + 1))
     if [[ -z "$name" ]] || ((lock_failures > LOCK_RETRIES)); then
       echo "migrate-deploy: lock timeout on ${name:-an unnamed migration} after $((lock_failures - 1)) retries - giving up" >&2

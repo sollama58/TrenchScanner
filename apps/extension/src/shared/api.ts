@@ -61,8 +61,16 @@ export const api = {
   bubble: (key: string, mint: string) =>
     call<{ map: OverlayBubbleMap | null }>(key, "GET", `/bubble/${encodeURIComponent(mint)}`),
   /** One read of the site's bubble map, replayed by the API as the key's owner (map/siteMap.ts). */
-  site: (key: string, read: { method: string; path: string; body: string | null }) =>
-    call<{ status: number; body: string }>(key, "POST", "/site", read, AbortSignal.timeout(SITE_TIMEOUT_MS)),
+  site: (key: string, read: { method: string; path: string; body: string | null }, signal?: AbortSignal) =>
+    call<{ status: number; body: string }>(
+      key,
+      "POST",
+      "/site",
+      read,
+      signal
+        ? AbortSignal.any([AbortSignal.timeout(SITE_TIMEOUT_MS), signal])
+        : AbortSignal.timeout(SITE_TIMEOUT_MS),
+    ),
   /** The safety verdicts of up to 100 coins on a board. */
   safety: (key: string, mints: string[]) =>
     call<{ verdicts: Record<string, OverlaySafety> }>(key, "POST", "/safety", { mints }),

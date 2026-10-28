@@ -185,6 +185,23 @@ describe("overlay engine", () => {
     e.stop();
   });
 
+  it("prunes old lookup answers past 5,000 coins, keeping the ones still on a row (audit EX-9)", () => {
+    board(`<div id="r" data-index="0"><a href="/sol/token/${A}">A</a></div>`);
+    const { e } = engine();
+    e.start();
+    e.scan();
+    const t0 = 1_000_000;
+    e.receive([A], { tokens: { [A]: token({ mint: A, modelCalls: [call] }) }, problem: null }, t0);
+    const old = Array.from({ length: 5_000 }, (_, i) => `old${i}`);
+    e.receive(old, { tokens: {}, problem: null }, t0);
+    expect(e.answerCount).toBe(5_001);
+    // Five minutes on, one more coin scrolls past: everything older than 150 s and off the board goes.
+    e.receive([B], { tokens: {}, problem: null }, t0 + 300_000);
+    expect(e.answerCount).toBe(2);
+    expect(overlayIn(document.getElementById("r")!)).not.toBeNull();
+    e.stop();
+  });
+
   it("leaves untracked and unalerted rows alone", () => {
     board(`<div id="r" data-index="0"><a href="/sol/token/${A}">A</a></div>`);
     const { e } = engine();

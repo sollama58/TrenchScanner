@@ -217,6 +217,39 @@ const STATIC_PROGRAMS = new Set<string>([
 /** A trade request that can't be built as asked (bad size, no route): the trader's to fix. */
 export class TradeRejected extends Error {}
 
+/**
+ * Token-2022 extensions that let the issuer take a holder's coins or stop them being sold, with
+ * the line the Trade panel shows for each. The rest (metadata, groups) can't hurt a holder.
+ */
+const HOLDER_RISK_EXTENSIONS: Record<string, string> = {
+  permanentDelegate: "It has a permanent delegate: its issuer can move or burn your tokens.",
+  transferHook: "It runs a transfer hook: its issuer's program can block your sale.",
+  pausableConfig: "Its issuer can pause every transfer, your sale included.",
+  nonTransferable: "It can't be transferred at all, so it can't be sold.",
+};
+
+/**
+ * Why a buy of this mint could leave the buyer stuck, one line each; empty when nothing found
+ * (user decision 2026-10-27, audit TR-4: warn and ask to confirm, don't refuse). The bot refuses
+ * these mints outright (engine.ts mintRisk), and also a live mint authority and a transfer fee,
+ * which don't trap a holder and so aren't warned about here.
+ */
+export function buyMintWarnings(mint: {
+  freezeAuthority?: string | null;
+  extensions?: readonly string[];
+}): string[] {
+  const out: string[] = [];
+  if (mint.freezeAuthority)
+    out.push(
+      "Its issuer can still freeze your tokens (freeze authority isn't revoked), so you may never be able to sell.",
+    );
+  for (const e of new Set(mint.extensions ?? [])) {
+    const line = HOLDER_RISK_EXTENSIONS[e];
+    if (line) out.push(line);
+  }
+  return out;
+}
+
 /** Builds, guards and returns a Pro trade for the trader's wallet to sign. */
 export async function buildManualTrade(
   deps: { rpc: ManualTradeRpc; jupiter: ManualTradeJupiter; random?: () => number },

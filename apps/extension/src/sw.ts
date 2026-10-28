@@ -294,6 +294,8 @@ async function checkAlerts(tokens: readonly OverlayToken[], newlyRead: readonly 
  * is only marked.
  */
 const RUNS_MAX = 300;
+/** The leaderboard's win window: 2x within 15 minutes of the alert (before a -50% stop). */
+const GRADE_WINDOW_MS = 15 * 60_000;
 
 async function checkRuns(tokens: readonly OverlayToken[], prefs: TooltipPrefs): Promise<void> {
   const { runsNotified } = (await chrome.storage.local.get("runsNotified")) as {
@@ -307,7 +309,8 @@ async function checkRuns(tokens: readonly OverlayToken[], prefs: TooltipPrefs): 
   const marks = { ...(runsNotified ?? {}) };
   const levels = RUN_LEVELS.filter((l) => prefs.runs.levels[l]);
   for (const token of tokens) {
-    const at = firstAlert(token)?.mcapUsd ?? null;
+    const alert = firstAlert(token);
+    const at = alert?.mcapUsd ?? null;
     const now = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
     if (at === null || at <= 0 || now === null) continue;
     const peaks = [...token.modelCalls, ...token.filterMatches].map((a) => a.peakMcapUsd ?? 0);
@@ -323,13 +326,17 @@ async function checkRuns(tokens: readonly OverlayToken[], prefs: TooltipPrefs): 
     } else if (reached <= mark.level && (!dropped || mark.dropped)) continue;
     const coin = token.symbol ?? `${token.mint.slice(0, 4)}…${token.mint.slice(-4)}`;
     if (reached > (mark?.level ?? 0)) {
+      // Worded as a peak, not a win (audit EX-8, user decision 2026-10-27): the leaderboard counts a
+      // win only for 2x within 15 minutes of the alert and before a -50% stop, and a quarter of the
+      // calls that peak 2x later are graded misses.
+      const late = alert !== undefined && Date.now() - Date.parse(alert.at) > GRADE_WINDOW_MS;
       chrome.notifications.create(`alert:${token.mint}:run${reached}`, {
         type: "basic",
         iconUrl: "icons/icon-128.png",
-        title: `${coin} hit ${reached}x since its alert`,
+        title: `${coin} peaked ${reached}x after its alert`,
         message: `Alerted at ${usdShort(at)}, ${now >= at * reached ? "now" : "peaked past"} ${usdShort(
           Math.max(now, at * reached),
-        )}.`,
+        )}.${late ? " Over 15 minutes after the alert, so not a leaderboard win." : ""}`,
       });
     }
     if (dropped && !mark?.dropped) {
@@ -561,20 +568,41 @@ const NO_SITE = (status: number, error: string) => ({ status, body: JSON.stringi
 async function site(
   request: Extract<PanelRequest, { type: "site" }>,
 ): Promise<{ status: number; body: string }> {
-  const { key, refused } = await stored();
-  if (!key || refused) return NO_SITE(401, "disconnected");
-  const { method, path, body } = request;
-  if (typeof method !== "string" || typeof path !== "string" || !path.startsWith("/"))
-    return NO_SITE(400, "bad_call");
-  if (body !== null && typeof body !== "string") return NO_SITE(400, "bad_call");
+  // Registered before anything is awaited, so a cancel sent right after the read still finds it.
+  const id = typeof request.id === "string" && request.id.length <= 64 ? request.id : null;
+  const abort = new AbortController();
+  if (id) siteCalls.set(id, abort);
   try {
-    return await api.site(key, { method, path, body });
+    const { key, refused } = await stored();
+    if (!key || refused) return NO_SITE(401, "disconnected");
+    const { method, path, body } = request;
+    if (typeof method !== "string" || typeof path !== "string" || !path.startsWith("/"))
+      return NO_SITE(400, "bad_call");
+    if (body !== null && typeof body !== "string") return NO_SITE(400, "bad_call");
+    if (abort.signal.aborted) return NO_SITE(499, "cancelled");
+    return await api.site(key, { method, path, body }, abort.signal);
   } catch (e) {
+    if (abort.signal.aborted) return NO_SITE(499, "cancelled");
     if (!(e instanceof ApiError)) return NO_SITE(503, "offline");
     // A refused key is the panel's problem too; a refused call is only this map's.
     if (e.status === 401) noteFailure(e);
     return NO_SITE(e.status, e.message);
+  } finally {
+    if (id && siteCalls.get(id) === abort) siteCalls.delete(id);
   }
+}
+
+/**
+ * The map reads in flight, by the id the map gave each (siteMap.ts), so a map that gives a read up
+ * stops it at the API too: the API ends a held wait when its request closes (audit EX-10).
+ */
+const siteCalls = new Map<string, AbortController>();
+
+/** Cancels the map read with this id, if it is still in flight. */
+function cancelSite(id: unknown): { ok: boolean } {
+  const abort = typeof id === "string" ? siteCalls.get(id) : undefined;
+  abort?.abort();
+  return { ok: abort !== undefined };
 }
 
 /** A coin's latest bubble map. Only a valid mint is asked for, so nothing else reaches the URL. */
@@ -672,6 +700,8 @@ async function handle(request: PanelRequest): Promise<unknown> {
       return feed();
     case "site":
       return site(request);
+    case "siteCancel":
+      return cancelSite(request.id);
     case "buddy":
       return buddy(request.cached === true);
     case "coin":
@@ -829,6 +859,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (inPageFrame(sender)) {
     if (__STORE__) return false;
     const request = message as PanelRequest;
+    if (request.type === "siteCancel") {
+      sendResponse(cancelSite(request.id));
+      return false;
+    }
     if (request.type !== "site") return false;
     tooltipPrefs()
       .then((prefs) => (prefs.mapTab.enabled ? site(request) : NO_SITE(403, "map_tab_off")))

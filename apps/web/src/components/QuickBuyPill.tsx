@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   disclaimerAccepted,
+  MintRiskDeclined,
   quickBuyShown,
   runTrade,
   tradeCooldownLeft,
@@ -106,7 +107,7 @@ export function QuickBuyPill({
       );
       setState({ kind: "done" });
     } catch (err) {
-      if (err instanceof TwoFactorCancelled) setState({ kind: "idle" });
+      if (err instanceof TwoFactorCancelled || err instanceof MintRiskDeclined) setState({ kind: "idle" });
       else setState({ kind: "failed", message: err instanceof Error ? err.message : String(err) });
     }
   };

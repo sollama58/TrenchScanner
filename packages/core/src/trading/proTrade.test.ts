@@ -23,6 +23,7 @@ import {
 import { HELIUS_SENDER_TIP_ACCOUNTS, isSenderTipAccount, pickSenderTipAccount, senderUrl } from "./sender.js";
 import {
   buildManualTrade,
+  buyMintWarnings,
   checkJupiterFloor,
   estimateManualFees,
   estimateSwapCosts,
@@ -272,6 +273,38 @@ describe("buildManualTrade refusals", () => {
     await expect(buildManualTrade({ rpc, jupiter }, { ...req, slippageBps: 5_001 })).rejects.toThrow(
       /slippage/,
     );
+  });
+});
+
+describe("buyMintWarnings", () => {
+  const pumpLike = { freezeAuthority: null, extensions: ["metadataPointer", "tokenMetadata"] };
+  it("says nothing for a Pump.fun-style mint, or for what can't trap a holder", () => {
+    expect(buyMintWarnings(pumpLike)).toEqual([]);
+    expect(buyMintWarnings({ freezeAuthority: null, extensions: [] })).toEqual([]);
+    // The bot refuses these too, but a holder can still sell: not warned about.
+    expect(buyMintWarnings({ ...pumpLike, extensions: ["transferFeeConfig", "mintCloseAuthority"] })).toEqual(
+      [],
+    );
+  });
+  it("names a live freeze authority and each extension that lets the issuer take or lock the coins", () => {
+    expect(buyMintWarnings({ ...pumpLike, freezeAuthority: "x" })).toEqual([
+      expect.stringMatching(/freeze your tokens/),
+    ]);
+    const risks = buyMintWarnings({
+      freezeAuthority: "x",
+      extensions: [
+        "permanentDelegate",
+        "transferHook",
+        "pausableConfig",
+        "nonTransferable",
+        "permanentDelegate",
+      ],
+    });
+    expect(risks).toHaveLength(5);
+    expect(risks[1]).toMatch(/permanent delegate/);
+    expect(risks[2]).toMatch(/transfer hook/);
+    expect(risks[3]).toMatch(/pause/);
+    expect(risks[4]).toMatch(/can't be sold/);
   });
 });
 

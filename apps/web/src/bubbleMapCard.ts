@@ -170,6 +170,17 @@ function lighten(hex: string, t: number): string {
  * the clusters listed under it, and the map itself filling the right, drawn from the same layout
  * as the dialog.
  */
+/**
+ * The side wallets a shareable image may tie to a KOL: Known Sides and wallets the KOL funded, on
+ * chain. A "possible" side rests on trade timing alone, and the image leaves the map with the KOL's
+ * name on it, so those stay on the map in the app (audit 10-27 SW-9, decided 10-27).
+ */
+export function shareableSides(sides: readonly SideGroup[]): SideGroup[] {
+  return sides
+    .map((g) => ({ ...g, wallets: g.wallets.filter((w) => w.known || w.funded) }))
+    .filter((g) => g.wallets.length > 0);
+}
+
 export async function renderBubbleCard(
   graph: BubbleGraph,
   token: Token,
@@ -258,8 +269,9 @@ export async function renderBubbleCard(
     ctx.fillText(`the top ${graph.top10Pct !== null ? 10 : holders} holders`, PAD + bigW + 16, 296);
   }
 
-  // Each KOL's possible side wallets on the map, listed like a funder's cluster (user ask 2026-10-14).
-  const sideRows = (opts.sides ?? [])
+  // Each KOL's side wallets on the map, listed like a funder's cluster (user ask 2026-10-14): only
+  // the ties with evidence behind them (shareableSides).
+  const sideRows = shareableSides(opts.sides ?? [])
     .map((g) => ({ g, members: sideMembers(graph, g) }))
     .filter((s) => s.members.length >= 2);
   // With the exchange ties on: which exchanges funded which holders, in their colours.

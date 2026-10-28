@@ -20,6 +20,7 @@ import postcss from "postcss";
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
+import { storePolicyGaps } from "./storePolicy.mjs";
 
 const store = process.argv.includes("--store");
 /** The store build's summary (STORE.md), without the rings the dev manifest names. */
@@ -104,6 +105,12 @@ if (manifest.version !== pkg.version) {
 }
 if (manifest.description.length > 132) throw new Error("the store allows a 132-character description");
 if (store) {
+  const gaps = storePolicyGaps(
+    manifest,
+    await readFile(join(root, "STORE.md"), "utf8"),
+    await readFile(join(root, "..", "web", "public", "extension-privacy.html"), "utf8"),
+  );
+  if (gaps.length) throw new Error(`the store listing doesn't cover this build: ${gaps.join("; ")}`);
   // Nothing runs on a website: no content script and no page a website can frame.
   delete manifest.content_scripts;
   delete manifest.web_accessible_resources;

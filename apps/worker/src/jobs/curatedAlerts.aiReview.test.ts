@@ -13,6 +13,7 @@ import {
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import type { AiReviewResult } from "../ai/reviewer.js";
 import { resetAiBlendCache } from "../ai/blend.js";
+import { ensureActivePlaybook, resetActivePlaybookCache } from "../ai/playbookStore.js";
 
 const reviewPick = vi.fn<() => Promise<AiReviewResult | null>>();
 /** Whether the reviewer has earned gate mode - true unless a test says otherwise. */
@@ -40,7 +41,8 @@ function fixture(mintAddress: string): ScoredToken {
     sells24h: 300,
     holderGrowthPct: 15,
     top10HolderPct: 20,
-    ageMinutes: 90,
+    // Young enough for a seat to call (isPastCalling).
+    ageMinutes: 20,
     graduated: true,
     narrativeTags: [],
     rugScreen: { passed: true, reasons: [] },
@@ -265,10 +267,21 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
 
   it("gate mode with a usable learned blend holds back what the blend scores below its cutoff", async () => {
     // The blend trusts the reviewer's odds alone here: 2x odds of 0.2 fall below a 0.5 cutoff even
-    // though the reviewer said "buy"; odds of 0.8 clear it even on a "no_buy".
+    // though the reviewer said "buy"; odds of 0.8 clear it even on a "no_buy". It was fitted on
+    // the active playbook's reviews, the only blend that may gate (worker ai/blend.ts).
+    resetActivePlaybookCache();
+    const playbook = await ensureActivePlaybook();
     const blend = await prisma.aiBlendModel.create({
       data: {
-        params: { kind: "ai-blend-v1", intercept: 0, wCurator: 0, wAi: 1, cutoff: 0.5, usable: true },
+        params: {
+          kind: "ai-blend-v1",
+          intercept: 0,
+          wCurator: 0,
+          wAi: 1,
+          cutoff: 0.5,
+          usable: true,
+          playbookId: playbook.id,
+        },
         metrics: { rows: 200, reason: "test" },
       },
     });
@@ -290,6 +303,40 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
       reviewPick.mockResolvedValue(withOdds("no_buy", 0.8));
       const sent = await run(gate, "blend-sent");
       expect(sent.emitted).toBe(1);
+    } finally {
+      gateQualified.mockResolvedValue(true);
+      await prisma.aiBlendModel.delete({ where: { id: blend.id } });
+      resetAiBlendCache();
+    }
+  });
+
+  it("gate mode ignores a usable blend fitted on another playbook's reviews", async () => {
+    const blend = await prisma.aiBlendModel.create({
+      data: {
+        params: {
+          kind: "ai-blend-v1",
+          intercept: 0,
+          wCurator: 0,
+          wAi: 1,
+          cutoff: 0.5,
+          usable: true,
+          playbookId: "an-older-playbook",
+        },
+        metrics: { rows: 200, reason: "test" },
+      },
+    });
+    resetActivePlaybookCache();
+    resetAiBlendCache();
+    gateQualified.mockResolvedValue(false);
+    try {
+      reviewPick.mockResolvedValue({
+        ...verdict("buy"),
+        verdict: { ...verdict("buy").verdict!, probability2x: 0.2 },
+        curatorProbability: 0.4,
+      });
+      // The current playbook has no record and no blend of its own: shadow, nothing held back.
+      const { emitted } = await run(gate, "blend-other-playbook");
+      expect(emitted).toBe(1);
     } finally {
       gateQualified.mockResolvedValue(true);
       await prisma.aiBlendModel.delete({ where: { id: blend.id } });

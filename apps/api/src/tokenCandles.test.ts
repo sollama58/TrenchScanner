@@ -159,6 +159,8 @@ describe("readTokenCandles", () => {
     expect(out.bars).toHaveLength(50);
     expect(out.bars.every((b) => b.coarse && b.w === 300)).toBe(true);
     expect(reads.length).toBeGreaterThan(1);
+    // Each widening reads only what it adds: every read ends where the one before began.
+    for (let i = 1; i < reads.length; i++) expect(reads[i]![1]).toBe(reads[i - 1]![0]);
   });
 
   it("pages back with `before` until nothing older is stored", async () => {

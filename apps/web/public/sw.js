@@ -29,26 +29,44 @@ self.addEventListener("push", (event) => {
   );
 });
 
+// A Solana mint, as the page's ?token= link reads it (tradeLink.ts).
+const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+/**
+ * Where a click on this notification should land: the alert's coin (`?token=<mint>`, which the page
+ * opens in its token view) or the dashboard. A push names its coin in its tag (`ts-alert-<mint>`,
+ * dispatch.ts pushPayloads); the page's own notifications carry the link in `data.url`. Only ever
+ * this site: a url is ours, but never trusted to leave the origin.
+ */
+function clickTarget(notification) {
+  let url;
+  try {
+    url = new URL((notification.data && notification.data.url) || "/", self.location.origin);
+  } catch {
+    url = new URL("/", self.location.origin);
+  }
+  if (url.origin !== self.location.origin) url = new URL("/", self.location.origin);
+  const tagged = /^ts-alert-(.+)$/.exec(notification.tag || "");
+  if (!url.searchParams.has("token") && tagged && MINT_RE.test(tagged[1]))
+    url.searchParams.set("token", tagged[1]);
+  const mint = url.searchParams.get("token");
+  return { href: url.href, mint: mint && MINT_RE.test(mint) ? mint : null };
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const wanted = event.notification.data && event.notification.data.url;
+  const target = clickTarget(event.notification);
   event.waitUntil(
     (async () => {
       const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const open = windows.find((w) => new URL(w.url).origin === self.location.origin);
       if (open) {
+        // An open tab keeps its state: it opens the coin itself (App.tsx listens), no reload.
+        if (target.mint) open.postMessage({ type: "ts-open-token", mint: target.mint });
         await open.focus();
         return;
       }
-      // Only ever this site: a push's url is ours, but never trust it to leave the origin.
-      let target = "/";
-      try {
-        const url = new URL(wanted || "/", self.location.origin);
-        if (url.origin === self.location.origin) target = url.href;
-      } catch {
-        // Keep "/".
-      }
-      await self.clients.openWindow(target);
+      await self.clients.openWindow(target.href);
     })(),
   );
 });

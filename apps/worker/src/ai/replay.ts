@@ -456,15 +456,16 @@ export async function pollReplayRuns(env: Env, signal?: AbortSignal): Promise<Sc
         if (row) buffer.push(row);
         if (buffer.length >= 500) {
           if (signal?.aborted) return scored;
-          await prisma.aiReplayVerdict.createMany({ data: buffer });
+          await prisma.aiReplayVerdict.createMany({ data: buffer, skipDuplicates: true });
           buffer = [];
         }
       }
       // The lock can be lost while the last results stream in, and the process that took it may
-      // already have cleared this run's verdicts: a write now would sit beside its own as
-      // duplicates (no unique key on a verdict), so every write checks first.
+      // already have cleared this run's verdicts, so every write checks first. A write that still
+      // lands in the gap meets the unique key (run, playbook, alert) and skips the rows the other
+      // process wrote, rather than sitting beside them as duplicates summarizeRun would count.
       if (signal?.aborted) return scored;
-      if (buffer.length > 0) await prisma.aiReplayVerdict.createMany({ data: buffer });
+      if (buffer.length > 0) await prisma.aiReplayVerdict.createMany({ data: buffer, skipDuplicates: true });
 
       if (signal?.aborted) return scored;
       const summaries = await summarizeRun(run.id, run.playbookIds, env);

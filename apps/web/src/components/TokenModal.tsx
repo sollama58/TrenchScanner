@@ -1871,6 +1871,7 @@ function SafetyCard({
                 <li key={c.label} className={c.status} title={c.rule}>
                   <span
                     className="tm-safety-mark"
+                    role="img"
                     aria-label={c.status === "ok" ? "Clears" : c.status === "fail" ? "Fails" : "Not read"}
                   >
                     {c.status === "ok" ? (

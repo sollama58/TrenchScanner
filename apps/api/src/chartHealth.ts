@@ -113,7 +113,13 @@ export interface ChartHealthSnapshot {
     verified: number;
     mismatches: number;
   };
-  rpc: { heliusFailures: number; backupReads: number; backupFailures: number };
+  rpc: {
+    heliusFailures: number;
+    /** heliusFailures by the chart read that failed (full audit 2026-10-27, DA-7). */
+    heliusFailuresByMethod: Record<string, number>;
+    backupReads: number;
+    backupFailures: number;
+  };
   pumpFunGate: { requests: number; throttled: number; heldBack: number };
   solPrice: { failures: number; missing: number };
   clientErrors: { total: number; byWhere: Record<string, number> };
@@ -222,9 +228,13 @@ export class ChartHealth {
     this.add(`stream.mismatches.${kind}`);
   }
 
-  /** Curve and pool reads Helius gave no answer for (`n` accounts), and how the backup route did. */
-  recordHeliusReadFailures(n: number): void {
+  /**
+   * Curve and pool reads Helius gave no answer for (`n` accounts), by the chart read (`method`), so
+   * a steady failure can be traced to the read behind it; and how the backup route did.
+   */
+  recordHeliusReadFailures(n: number, method?: string): void {
     this.add("rpc.heliusFailures", n);
+    if (method) this.add(`rpc.heliusFailedBy.${label(this.counts, "rpc.heliusFailedBy.", method)}`, n);
   }
 
   recordBackupRead(failed: number, read: number): void {
@@ -352,6 +362,7 @@ export class ChartHealth {
       },
       rpc: {
         heliusFailures: get("rpc.heliusFailures"),
+        heliusFailuresByMethod: byPrefix("rpc.heliusFailedBy."),
         backupReads: get("rpc.backupReads"),
         backupFailures: get("rpc.backupFailures"),
       },

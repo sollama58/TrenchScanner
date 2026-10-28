@@ -21,7 +21,9 @@
  * 0.01 SOL priority fee on every buy and every sale (baseline changed from 0.002 and 0.003 on
  * 2026-10-27, user ask). It is a flat amount per trade, so it covers
  * every trade already recorded as well as new ones: each platform carries the saving both without
- * it (savedSol) and with it (savedWithNetworkSol), and the page's toggle picks one.
+ * it (savedSol) and with it (savedWithNetworkSol), and the page's toggle picks one. The "with it"
+ * saving subtracts what our own trades paid the network (priority fee, Sender tip and base fee,
+ * networkFeeLamports), so both sides of the comparison count gas (audit TR-7, 2026-10-27).
  */
 
 export interface PlatformFeeRate {
@@ -165,7 +167,7 @@ export function feeSummaryOf(t: FeeTotals, platforms = OTHER_PLATFORMS): FeeSumm
         feeSol: toSol(fee),
         savedSol: toSol(fee - t.platformFeeLamports),
         feeWithNetworkSol: toSol(fee + otherNetwork),
-        savedWithNetworkSol: toSol(fee + otherNetwork - t.platformFeeLamports),
+        savedWithNetworkSol: toSol(fee + otherNetwork - t.platformFeeLamports - t.networkFeeLamports),
       };
     }),
   };

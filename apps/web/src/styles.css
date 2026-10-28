@@ -271,7 +271,8 @@ button.link {
   background: none;
   border: none;
   padding: 0;
-  color: var(--series-1);
+  /* --link, not the chart blue: --series-1 sits under 4.5:1 on the light theme (audit 10-27 WB-19). */
+  color: var(--link);
 }
 input {
   font: inherit;
@@ -11252,6 +11253,19 @@ button.link.exit-plan-link {
 .tg-chat-parts .chip:disabled {
   cursor: default;
   opacity: 0.7;
+}
+/* A one-of choice (the layout): the other option isn't struck through like a part left out. */
+.tg-chat-parts .chip.pick {
+  text-decoration: none;
+}
+.tg-mincap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tg-mincap input {
+  width: 9em;
+  padding: 3px 7px;
 }
 .tg-chat-buttons {
   display: inline-flex;
