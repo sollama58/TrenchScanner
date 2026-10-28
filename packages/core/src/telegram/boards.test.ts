@@ -37,6 +37,7 @@ const stats: BoardStats = {
   alerts: 23,
   graded: 18,
   won: 11,
+  lateWins: 0,
   lost: 7,
   pending: 5,
   settled: 15,
@@ -122,6 +123,13 @@ describe("the trenchboard", () => {
     expect(formatActiveAlerts([alert()], links, NOW + 5 * 60_000)).toContain("<i>Updated 23:05 UTC</i>");
   });
 
+  it("says how many wins had already doubled when a late alert landed, and only then", () => {
+    expect(formatTrenchboard(stats)).not.toContain("sent late");
+    expect(formatTrenchboard({ ...stats, lateWins: 2 })).toContain(
+      "⏰ 2 of the wins had already doubled when the alert landed here (sent late)",
+    );
+  });
+
   it("names a week as 7d, and says where the record starts", () => {
     const html = formatTrenchboard({ ...stats, hours: 168, recordedSince: new Date("2026-10-10T21:30:00Z") });
     expect(html).toContain("last 7d");
@@ -134,6 +142,7 @@ describe("the trenchboard", () => {
       alerts: 0,
       graded: 0,
       won: 0,
+      lateWins: 0,
       lost: 0,
       pending: 0,
       settled: 0,
