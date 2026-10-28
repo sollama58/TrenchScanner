@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import * as core from "@trenchscanner/core";
+import * as core from "@trenchscanner/core/screenCuts";
 import * as card from "./AlertCard";
 
 /**
- * The alert card re-declares the safety screen's cuts (it can't import core's dist in the browser
- * build) to turn a tile red exactly when its reading fails the screen. These tie each copy to core,
- * so a cut moved in rugScreen.ts alone fails here instead of the tiles quietly drawing the old line
- * (audit 2026-10-14 L6, 2026-10-27 SW-7).
+ * The alert card re-declares the safety screen's cuts to turn a tile red exactly when its reading
+ * fails the screen. These tie each copy to core's (screenCuts.ts, taken from source under the
+ * "trenchscanner-web" condition as chartMarks is), so a cut moved in core alone fails here instead
+ * of the tiles quietly drawing the old line (audit 2026-10-14 L6, 2026-10-27 SW-7).
  */
 describe("the alert card's safety-screen cuts", () => {
-  it("match core's rugScreen.ts", () => {
+  it("match core's screenCuts.ts", () => {
     const names = [
       "SAFETY_MAX_FRESH_WALLET_PCT",
       "SAFETY_REJECT_EMPTY_WALLET_PCT",
