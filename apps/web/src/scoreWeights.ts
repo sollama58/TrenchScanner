@@ -9,7 +9,7 @@ import { api, type ScoreWeightsInfo } from "./api";
 const REFRESH_MS = 30 * 60_000;
 /** What the score started from, shown until the first read lands (scoring/scorer.ts). */
 const FALLBACK: ScoreWeightsInfo = {
-  weights: { momentum: 0.45, freshness: 0.3, holderQuality: 0.1, narrative: 0.15 },
+  weights: { momentum: 0.5, freshness: 0.45, holderQuality: 0.05, narrative: 0 },
   adoptedAt: null,
   scale: { p10: 40, p90: 76, sample: 0 },
   history: [],

@@ -447,9 +447,9 @@ function heuristicGate(scored: ScoredToken, rankCutoff: number | undefined, env:
 /**
  * The Rules seat on a points table learned from the best model: the token's points against the
  * cutoff the table's exam earned. A table always ships with a cutoff (one that can't set one
- * never takes the seat); a missing one sends nothing rather than everything.
+ * never takes the seat); a missing one sends nothing rather than everything. Exported for tests.
  */
-function rulesTableDecision(
+export function rulesTableDecision(
   set: DerivedRuleSet,
   features: Record<string, number | null | undefined>,
   cutoff: number | undefined,

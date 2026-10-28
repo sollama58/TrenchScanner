@@ -1,5 +1,6 @@
 import { isWalletAddress, type SolanaTrackerClient, type TokenTrader } from "@trenchscanner/core";
 import { SharedCacheMap } from "../sharedCache.js";
+import { giveBackQuota, takeQuota } from "./credits.js";
 import { linkHolders, type GraphBuilder } from "./graph.js";
 
 /**
@@ -8,12 +9,30 @@ import { linkHolders, type GraphBuilder } from "./graph.js";
  * it, ranked by profit on it, realised plus what it still holds. Free to the reader. Any coin, not
  * only those TrenchScanner called, at no Helius cost: a page or two of Solana Tracker's free plan,
  * and each coin's answer is shared for TOP_TRADERS_TTL_MS so the plan's monthly calls stretch.
+ *
+ * The plan is the one the worker's daily KOL roster read needs (about 930 of its 10,000 calls a
+ * month), so Asyl's reads are capped (full audit 2026-10-27, AP-2): TOP_TRADERS_SITE_DAILY calls a
+ * day for everyone together, and TOP_TRADERS_USER_DAILY new coins a day for each reader. A coin
+ * already read is free to everyone, caps or not.
  */
 
 export const TOP_TRADERS = 100;
 /** Pages asked at most, in case Solana Tracker hands back fewer than asked per page. */
 const TOP_TRADERS_PAGES = 3;
 export const TOP_TRADERS_TTL_MS = 3 * 3_600_000;
+/** Solana Tracker calls a day for every reader together: about 4,650 a month, half the plan. */
+export const TOP_TRADERS_SITE_DAILY = 150;
+/** Coins not already read that one reader may have read a day (user decision 2026-10-27: about 5, free accounts included). */
+export const TOP_TRADERS_USER_DAILY = 5;
+export const TOP_TRADERS_SITE_KEY = "top-traders:site";
+export const topTradersUserKey = (userId: string) => `top-traders:${userId}`;
+
+/** A read refused by a cap: the reader's own ("user"), or everyone's together ("site"). */
+export class TopTradersCapError extends Error {
+  constructor(readonly scope: "user" | "site") {
+    super(`top traders ${scope} cap reached`);
+  }
+}
 
 export interface TopTraders {
   traders: TokenTrader[];
@@ -23,23 +42,40 @@ export interface TopTraders {
 
 const kept = new SharedCacheMap<TopTraders>(TOP_TRADERS_TTL_MS, 300);
 
-/** The coin's top TOP_TRADERS wallets by profit on it, most first; shared for a few hours. */
+/**
+ * The coin's top TOP_TRADERS wallets by profit on it, most first; shared for a few hours. A coin
+ * not held takes one of `userId`'s new coins for the day and its worst case of the site's calls
+ * before it asks, and hands back what it didn't use; past either cap it throws TopTradersCapError.
+ */
 export function loadTopTraders(
   client: Pick<SolanaTrackerClient, "tokenTraders">,
   mint: string,
+  userId: string,
 ): Promise<TopTraders> {
   return kept.for(mint).get(async () => {
-    const traders: TokenTrader[] = [];
-    let total: number | null = null;
-    let cursor: string | null = null;
-    for (let page = 0; page < TOP_TRADERS_PAGES && traders.length < TOP_TRADERS; page++) {
-      const r = await client.tokenTraders(mint, cursor, TOP_TRADERS);
-      total ??= r.total;
-      traders.push(...r.traders.filter((t) => isWalletAddress(t.wallet)));
-      if (!r.nextCursor || r.traders.length === 0) break;
-      cursor = r.nextCursor;
+    const userKey = topTradersUserKey(userId);
+    if (!(await takeQuota(userKey, 1, TOP_TRADERS_USER_DAILY))) throw new TopTradersCapError("user");
+    if (!(await takeQuota(TOP_TRADERS_SITE_KEY, TOP_TRADERS_PAGES, TOP_TRADERS_SITE_DAILY))) {
+      await giveBackQuota(userKey, 1).catch(() => undefined);
+      throw new TopTradersCapError("site");
     }
-    return { traders: traders.slice(0, TOP_TRADERS), total };
+    let asked = 0;
+    try {
+      const traders: TokenTrader[] = [];
+      let total: number | null = null;
+      let cursor: string | null = null;
+      for (let page = 0; page < TOP_TRADERS_PAGES && traders.length < TOP_TRADERS; page++) {
+        asked += 1;
+        const r = await client.tokenTraders(mint, cursor, TOP_TRADERS);
+        total ??= r.total;
+        traders.push(...r.traders.filter((t) => isWalletAddress(t.wallet)));
+        if (!r.nextCursor || r.traders.length === 0) break;
+        cursor = r.nextCursor;
+      }
+      return { traders: traders.slice(0, TOP_TRADERS), total };
+    } finally {
+      await giveBackQuota(TOP_TRADERS_SITE_KEY, TOP_TRADERS_PAGES - asked).catch(() => undefined);
+    }
   });
 }
 

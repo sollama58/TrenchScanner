@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_SCORE_ANCHOR,
+  DEFAULT_SCORE_WEIGHTS,
   LATE_COPY_PENALTY,
   NARRATIVE_NEUTRAL,
   NARRATIVE_RED_FLAG_CAP,
@@ -7,6 +9,7 @@ import {
   scoreNarrative,
   scoreToken,
   scoreTokenLegacy,
+  throughKnots,
 } from "./scorer.js";
 import type { NarrativeRead } from "../curation/narrativeFeatures.js";
 import type { EnrichedToken } from "../types.js";
@@ -23,20 +26,29 @@ function baseToken(overrides: Partial<EnrichedToken> = {}): EnrichedToken {
 }
 
 describe("scoreToken", () => {
-  it("scores a fresh launch with a hot 5-minute window highly", () => {
+  const quote = (priceChangePct: number | undefined, holderCount: number | undefined) => ({
+    priceUsd: 0.001,
+    marketCapUsd: 20_000,
+    fetchedAt: new Date(),
+    ...(priceChangePct !== undefined ? { stats5m: { priceChangePct } } : {}),
+    ...(holderCount !== undefined ? { holderCount } : {}),
+  });
+
+  it("scores a fresh launch with a hot live read highly", () => {
     const score = scoreToken(
       baseToken({
         ageMinutes: 2,
+        minutesSinceFirstInBand: 0,
         graduated: false,
-        priceChange5mPct: 60,
         volume5mUsd: 25_000,
-        buys5m: 300,
-        sells5m: 100,
         top10HolderPct: 25,
-        emptyTop10WalletPct: 10,
+        freshQuote: quote(250, 80),
         tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersHolding: 20 },
       }),
     );
+    expect(score.momentum).toBe(100);
+    expect(score.age).toBe(100);
+    expect(score.holderHealth).toBe(100);
     expect(score.total).toBeGreaterThan(85);
   });
 
@@ -44,36 +56,79 @@ describe("scoreToken", () => {
     const score = scoreToken(
       baseToken({
         ageMinutes: 3000,
+        minutesSinceFirstInBand: 600,
         graduated: true,
         priceChange5mPct: -8,
         volume5mUsd: 200,
-        buys5m: 10,
-        sells5m: 30,
-        emptyTop10WalletPct: 60,
+        freshQuote: quote(-8, 900),
       }),
     );
+    expect(score.momentum).toBe(0);
+    expect(score.age).toBe(0);
     expect(score.total).toBeLessThan(25);
   });
 
-  it("ranks younger above older, all else equal", () => {
-    const young = scoreToken(baseToken({ ageMinutes: 3 }));
-    const old = scoreToken(baseToken({ ageMinutes: 120 }));
+  it("ranks younger and newer to the band above older, all else equal", () => {
+    const young = scoreToken(baseToken({ ageMinutes: 3, minutesSinceFirstInBand: 1 }));
+    const old = scoreToken(baseToken({ ageMinutes: 120, minutesSinceFirstInBand: 1 }));
+    const lingering = scoreToken(baseToken({ ageMinutes: 3, minutesSinceFirstInBand: 30 }));
     expect(young.total).toBeGreaterThan(old.total);
+    expect(young.total).toBeGreaterThan(lingering.total);
     expect(young.age).toBe(100);
+    // Age 120 reads 0 and 1 minute in band reads 100: 5/8 and 3/8 of the part.
+    expect(old.age).toBeCloseTo(37.5, 6);
+    expect(scoreToken(baseToken()).age).toBe(30);
   });
 
-  it("zeroes holder quality for a pre-bond launch with a thin top 10", () => {
+  it("reads the holder count as a hump: too few and too many both score low", () => {
+    const m = (holderCount: number) =>
+      scoreToken(baseToken({ freshQuote: quote(undefined, holderCount) })).momentum;
+    expect(m(20)).toBe(0);
+    expect(m(35)).toBeCloseTo(50, 6);
+    expect(m(80)).toBe(100);
+    expect(m(175)).toBeCloseTo(50, 6);
+    expect(m(400)).toBe(0);
+  });
+
+  it("prefers Jupiter's move to DexScreener's, falling back when there is no quote", () => {
+    expect(scoreToken(baseToken({ priceChange5mPct: 200, freshQuote: quote(25, undefined) })).momentum).toBe(
+      0,
+    );
+    expect(scoreToken(baseToken({ priceChange5mPct: 200 })).momentum).toBe(100);
+    expect(scoreToken(baseToken({ priceChange5mPct: 112.5 })).momentum).toBeCloseTo(50, 6);
+  });
+
+  it("zeroes holder quality for a pre-bond launch with a thin top 10, else reads the first buyers", () => {
     expect(scoreToken(baseToken({ graduated: false, top10HolderPct: 12 })).holderHealth).toBe(0);
     expect(scoreToken(baseToken({ graduated: true, top10HolderPct: 12 })).holderHealth).toBe(50);
     expect(scoreToken(baseToken({ graduated: false, top10HolderPct: 25 })).holderHealth).toBe(50);
+    const held = (n: number) =>
+      scoreToken(baseToken({ tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersHolding: n } })).holderHealth;
+    expect(held(0)).toBe(0);
+    expect(held(10)).toBe(100);
   });
 
   it("lets unknown momentum pieces abstain instead of counting as zero", () => {
     expect(scoreToken(baseToken()).momentum).toBe(50);
-    // Only the price move known: it alone sets the part.
-    expect(scoreToken(baseToken({ priceChange5mPct: 40 })).momentum).toBe(100);
-    // 5m buys missing, falls back to the hour's.
-    expect(scoreToken(baseToken({ buys1h: 75, sells1h: 25 })).momentum).toBe(100);
+    // Only the volume known: it alone sets the part (0.9x market cap and up reads 100).
+    expect(scoreToken(baseToken({ volume5mUsd: 18_000 })).momentum).toBe(100);
+    // Volume at 100 and the move at 0: weighted 0.3 to 0.4.
+    expect(scoreToken(baseToken({ volume5mUsd: 18_000, priceChange5mPct: 0 })).momentum).toBeCloseTo(
+      (100 * 0.3) / 0.7,
+      6,
+    );
+  });
+
+  it("puts the starting weights' total through the starting rescale", () => {
+    const s = scoreToken(baseToken());
+    expect(s.total).toBeCloseTo(
+      DEFAULT_SCORE_ANCHOR.scale *
+        (s.momentum * DEFAULT_SCORE_WEIGHTS.momentum +
+          s.age * DEFAULT_SCORE_WEIGHTS.freshness +
+          s.holderHealth * DEFAULT_SCORE_WEIGHTS.holderQuality) +
+        DEFAULT_SCORE_ANCHOR.offset,
+      6,
+    );
   });
 
   it("holds narrative neutral until TokenSage feeds it", () => {
@@ -84,12 +139,33 @@ describe("scoreToken", () => {
 
   it("stays within 0-100 bounds", () => {
     const score = scoreToken(
-      baseToken({ priceChange5mPct: 5000, volume5mUsd: 1e9, holderGrowth10mPct: 9999, ageMinutes: 0 }),
+      baseToken({
+        priceChange5mPct: 5000,
+        volume5mUsd: 1e9,
+        ageMinutes: 0,
+        minutesSinceFirstInBand: 0,
+        freshQuote: quote(5000, 60),
+        tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersHolding: 25 },
+      }),
     );
     for (const value of Object.values(score)) {
       expect(value).toBeGreaterThanOrEqual(0);
       expect(value).toBeLessThanOrEqual(100);
     }
+  });
+});
+
+describe("throughKnots", () => {
+  it("interpolates between knots and holds flat beyond them", () => {
+    const knots = [
+      [0, 0],
+      [10, 100],
+      [20, 50],
+    ] as const;
+    expect(throughKnots(-5, knots)).toBe(0);
+    expect(throughKnots(5, knots)).toBe(50);
+    expect(throughKnots(15, knots)).toBe(75);
+    expect(throughKnots(99, knots)).toBe(50);
   });
 });
 

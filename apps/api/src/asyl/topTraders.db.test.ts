@@ -3,7 +3,18 @@ import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
 import { prisma, type TokenTrader } from "@trenchscanner/core";
 import { GraphBuilder } from "./graph.js";
-import { addTopTraders, loadTopTraders, topTradersNote, usdShort } from "./topTraders.js";
+import {
+  addTopTraders,
+  loadTopTraders,
+  TOP_TRADERS_SITE_DAILY,
+  TOP_TRADERS_SITE_KEY,
+  TOP_TRADERS_USER_DAILY,
+  TopTradersCapError,
+  topTradersNote,
+  topTradersUserKey,
+  usdShort,
+} from "./topTraders.js";
+import { quotaUsed, utcDay } from "./credits.js";
 
 /** Real ed25519 public keys, as wallets are. */
 const [A, B] = [
@@ -30,8 +41,15 @@ const trader = (wallet: string, pnlUsd: number, o: Partial<TokenTrader> = {}): T
   ...o,
 });
 
+const USER = "top-traders-test-user";
+const clearQuota = () =>
+  prisma.asylQuotaUse.deleteMany({
+    where: { key: { in: [TOP_TRADERS_SITE_KEY, topTradersUserKey(USER), topTradersUserKey("other")] } },
+  });
+
 describe("top traders", () => {
-  it("follows pages to 100 and keeps each coin's answer", async () => {
+  it.skipIf(!dbAvailable)("follows pages to 100 and keeps each coin's answer", async () => {
+    await clearQuota();
     let calls = 0;
     const client = {
       async tokenTraders(_mint: string, cursor: string | null) {
@@ -42,12 +60,65 @@ describe("top traders", () => {
       },
     };
     const mint = "TopTrdPaged" + "1".repeat(33);
-    const r = await loadTopTraders(client, mint);
+    const r = await loadTopTraders(client, mint, USER);
     expect(r.traders.map((t) => t.wallet)).toEqual([A, B]);
     expect(r.total).toBe(2);
-    await loadTopTraders(client, mint);
+    await loadTopTraders(client, mint, USER);
     expect(calls).toBe(2);
+    // Two pages asked: the third held for the worst case is handed back; one new coin for the reader.
+    expect(await quotaUsed(TOP_TRADERS_SITE_KEY)).toBe(2);
+    expect(await quotaUsed(topTradersUserKey(USER))).toBe(1);
   });
+
+  it.skipIf(!dbAvailable)(
+    "caps each reader's new coins a day, and a coin already read stays free",
+    async () => {
+      await clearQuota();
+      let calls = 0;
+      const client = {
+        async tokenTraders() {
+          calls += 1;
+          return { traders: [trader(A, 10)], nextCursor: null, total: 1 };
+        },
+      };
+      const mints = Array.from({ length: TOP_TRADERS_USER_DAILY + 1 }, (_, i) =>
+        `TopTrdCap${i}`.padEnd(44, "1"),
+      );
+      for (const m of mints.slice(0, TOP_TRADERS_USER_DAILY)) await loadTopTraders(client, m, USER);
+      await expect(loadTopTraders(client, mints.at(-1)!, USER)).rejects.toEqual(
+        new TopTradersCapError("user"),
+      );
+      expect(calls).toBe(TOP_TRADERS_USER_DAILY);
+      // Read already, so free past the cap; and another reader still has their own.
+      await loadTopTraders(client, mints[0]!, USER);
+      await loadTopTraders(client, mints.at(-1)!, "other");
+      expect(calls).toBe(TOP_TRADERS_USER_DAILY + 1);
+    },
+  );
+
+  it.skipIf(!dbAvailable)(
+    "stops every reader at the site's daily calls, and hands the reader's coin back",
+    async () => {
+      await clearQuota();
+      await prisma.asylQuotaUse.create({
+        data: { key: TOP_TRADERS_SITE_KEY, day: utcDay(), used: TOP_TRADERS_SITE_DAILY - 2 },
+      });
+      let calls = 0;
+      const client = {
+        async tokenTraders() {
+          calls += 1;
+          return { traders: [], nextCursor: null, total: 0 };
+        },
+      };
+      await expect(loadTopTraders(client, "TopTrdSite".padEnd(44, "1"), USER)).rejects.toEqual(
+        new TopTradersCapError("site"),
+      );
+      expect(calls).toBe(0);
+      expect(await quotaUsed(topTradersUserKey(USER))).toBe(0);
+      expect(await quotaUsed(TOP_TRADERS_SITE_KEY)).toBe(TOP_TRADERS_SITE_DAILY - 2);
+      await clearQuota();
+    },
+  );
 
   it("says what it found", () => {
     expect(usdShort(1500)).toBe("$1.5K");

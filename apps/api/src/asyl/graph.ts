@@ -346,15 +346,20 @@ export async function loadCoTraders(wallet: string, limit = COTRADERS_MAX): Prom
   return (await countCoTraders(wallet, limit)).coTraders;
 }
 
+/** The co-trader query's own statement timeout; the worst of the busiest buyers took 48 ms (10-27). */
+export const COTRADERS_TIMEOUT_MS = 10_000;
+
 /** The co-traders, up to `limit`, and how many there are in all (up to COTRADERS_ALL_MAX). */
 export async function countCoTraders(
   wallet: string,
   limit = COTRADERS_MAX,
 ): Promise<{ coTraders: CoTrader[]; total: number }> {
   const windowSec = COTRADE_WINDOW_MS / 1000;
-  const rows = await prisma.$queryRaw<
-    { wallet: string; shared: number; of: number; lead: number; gap: number }[]
-  >`
+  // Its own statement timeout, well under the session's: a read open to every account must not
+  // hold a connection for minutes on a wallet that bought everything (full audit 2026-10-27, AP-4).
+  const rows = await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${COTRADERS_TIMEOUT_MS}`);
+    return tx.$queryRaw<{ wallet: string; shared: number; of: number; lead: number; gap: number }[]>`
     WITH mine AS (
       SELECT "tokenId", "firstBuyAt" FROM "TokenWalletActivity"
        WHERE "wallet" = ${wallet} AND "buys" > 0 AND "firstBuyAt" IS NOT NULL
@@ -374,6 +379,7 @@ export async function countCoTraders(
     HAVING COUNT(DISTINCT o."tokenId") >= ${COTRADE_MIN_SHARED}
      ORDER BY shared DESC, o."wallet"
      LIMIT ${Math.max(limit, COTRADERS_ALL_MAX) * 2}`;
+  });
   const bots = new Set(
     (
       await prisma.sideWalletBot.findMany({

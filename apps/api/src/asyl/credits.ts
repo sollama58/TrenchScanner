@@ -86,10 +86,69 @@ export async function recordSpend(userId: string, credits: number, now = Date.no
     await prisma.asylFlowRead
       .deleteMany({ where: { readAt: { lt: new Date(now - KEEP_DAYS * 86_400_000) } } })
       .catch(() => undefined);
+    await prisma.asylQuotaUse.deleteMany({ where: { day: { lt: cutoff } } }).catch(() => undefined);
   }
 }
 
-/** One chain read at a time per user: a double click never pays twice. */
+/**
+ * Takes `n` of today's `cap` under `key` in AsylQuotaUse (another vendor's metered plan, such as
+ * Solana Tracker's top-traders reads), or nothing when that would pass the cap. One statement, so
+ * two readers at once, or two API instances, can't both take the last of it. True when taken.
+ */
+export async function takeQuota(key: string, n: number, cap: number, now = Date.now()): Promise<boolean> {
+  if (n > cap) return false;
+  const rows = await prisma.$queryRaw<{ used: number }[]>`
+    INSERT INTO "AsylQuotaUse" ("key", "day", "used", "updatedAt")
+    VALUES (${key}, ${utcDay(now)}, ${n}, NOW())
+    ON CONFLICT ("key", "day") DO UPDATE
+       SET "used" = "AsylQuotaUse"."used" + EXCLUDED."used", "updatedAt" = NOW()
+     WHERE "AsylQuotaUse"."used" + EXCLUDED."used" <= ${cap}
+    RETURNING "used"`;
+  return rows.length > 0;
+}
+
+/** Hands back `n` taken by takeQuota today and not spent after all. */
+export async function giveBackQuota(key: string, n: number, now = Date.now()): Promise<void> {
+  if (n <= 0) return;
+  await prisma.$executeRaw`
+    UPDATE "AsylQuotaUse" SET "used" = GREATEST(0, "used" - ${n}), "updatedAt" = NOW()
+     WHERE "key" = ${key} AND "day" = ${utcDay(now)}`;
+}
+
+/** What `key` has used today in AsylQuotaUse. */
+export async function quotaUsed(key: string, now = Date.now()): Promise<number> {
+  const row = await prisma.asylQuotaUse.findUnique({
+    where: { key_day: { key, day: utcDay(now) } },
+    select: { used: true },
+  });
+  return row?.used ?? 0;
+}
+
+/**
+ * Worst cases of the chain reads running now in this process, held against the site's cap until
+ * each read has recorded what it took (full audit 2026-10-27, TR-8). Without it, readers who check
+ * at the same moment each see the same room and together overshoot by (readers x worst case).
+ * Per process: the API runs as one instance (render.yaml). A second instance would need this, and
+ * oneAtATime below, moved into the database (an advisory lock or a reservation row).
+ */
+let heldSite = 0;
+
+/** Credits held by reads in flight in this process. */
+export function siteHeld(): number {
+  return heldSite;
+}
+
+/** Holds `worst` against the site's cap while `fn` runs. Take it synchronously after the check. */
+export async function holdingSite<T>(worst: number, fn: () => Promise<T>): Promise<T> {
+  heldSite += worst;
+  try {
+    return await fn();
+  } finally {
+    heldSite -= worst;
+  }
+}
+
+/** One chain read at a time per user: a double click never pays twice. Per process (see heldSite). */
 const running = new Set<string>();
 
 export async function oneAtATime<T>(userId: string, fn: () => Promise<T>): Promise<T | "busy"> {
