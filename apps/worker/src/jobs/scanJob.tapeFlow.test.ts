@@ -2,7 +2,7 @@
 import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
 import { EMPTY_TRADE_FLOW } from "@trenchscanner/core";
-import { BOOT_TAPE_WARMUP_SECONDS, hourlySampleWaitsForTape, withTapeWindow } from "./scanJob.js";
+import { BOOT_TAPE_WARMUP_SECONDS, hourlySampleWaitsForTape, ownReadsIn, withTapeWindow } from "./scanJob.js";
 
 describe("withTapeWindow (model audit 2026-10-26, §16)", () => {
   const tape = { ...EMPTY_TRADE_FLOW, uniqueBuyers5m: 12, tradesPerMin5m: 3, netFlow5mToMcap: 0.02 };
@@ -58,5 +58,36 @@ describe("hourlySampleWaitsForTape (audit 2026-10-27, DS-8)", () => {
     expect(hourlySampleWaitsForTape(30, true)).toBe(false);
     expect(hourlySampleWaitsForTape(BOOT_TAPE_WARMUP_SECONDS, false)).toBe(false);
     expect(hourlySampleWaitsForTape(3_600, false)).toBe(false);
+  });
+});
+
+describe("ownReadsIn (audit 2026-10-27, DS-3)", () => {
+  const profile = { freshTop10WalletPct: 10, emptyTop10WalletPct: 0, blockZeroHeldPct: 4 };
+  const all = {
+    profile,
+    blockZeroUnobtainable: false,
+    tapePage: true,
+    launchBuyersShare: true,
+    linked: true,
+  };
+
+  it("lets a contender go before the barrier only with every one of its wallet-block reads in", () => {
+    expect(ownReadsIn(all)).toBe(true);
+    expect(ownReadsIn({ ...all, profile: null })).toBe(false);
+    expect(ownReadsIn({ ...all, profile: { ...profile, emptyTop10WalletPct: undefined } })).toBe(false);
+    expect(ownReadsIn({ ...all, profile: { ...profile, blockZeroHeldPct: undefined } })).toBe(false);
+    expect(ownReadsIn({ ...all, tapePage: false })).toBe(false);
+    expect(ownReadsIn({ ...all, launchBuyersShare: false })).toBe(false);
+    expect(ownReadsIn({ ...all, linked: false })).toBe(false);
+  });
+
+  it("doesn't hold it for a Block 0 figure that can't come", () => {
+    expect(
+      ownReadsIn({
+        ...all,
+        profile: { ...profile, blockZeroHeldPct: undefined },
+        blockZeroUnobtainable: true,
+      }),
+    ).toBe(true);
   });
 });
