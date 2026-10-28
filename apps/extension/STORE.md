@@ -77,11 +77,11 @@ justify.
   - No host permissions: the extension calls only the TrenchScanner API, which allows it by CORS,
     so it asks for no access to any site.
 - **Remote code:** No. All code ships in the package.
-- **Data usage**, the boxes to tick (re-checked for 0.9.1, audit EX-2):
+- **Data usage**, the boxes to tick (re-checked for 0.9.2, audit EX-2):
   - **Authentication information**: the extension key.
-  - **Financial and payment information**: Trade Buddy sends the user's other wallet addresses (up to
-    three) and shows their trades and PnL; the display choices synced to the account include those
-    wallets.
+  - **Financial and payment information**: Trade Buddy shows the trades and PnL of the user's wallet
+    and the other wallets they linked on TrenchScanner (up to three, each by signing with it); the
+    display choices synced to the account include wallets added in the panel before 0.9.2.
   - Not ticked: personally identifiable information, health, personal communications, location, web
     history, user activity, website content. Look up sends only the coin address the user pastes,
     and the extension never runs on a website.

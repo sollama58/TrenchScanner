@@ -636,7 +636,10 @@ async function buddy(cached = false): Promise<BuddyRead> {
   }
   if (cached) return { buddy: lastBuddy, problem };
   try {
-    lastBuddy = await api.buddy(key, (await tooltipPrefs()).buddyWallets);
+    // No list: the API follows every wallet linked on Settings (Card 11), and a list would follow
+    // only the linked ones in it. The panel names the wallets it kept from before 0.9.2 that the
+    // answer doesn't follow (panel.ts notLinked).
+    lastBuddy = await api.buddy(key);
     problem = null;
     void chrome.storage.session.set({ buddy: lastBuddy }).catch(() => undefined);
   } catch (e) {

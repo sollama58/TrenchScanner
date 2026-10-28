@@ -267,3 +267,14 @@ its pill placed in the part the column cuts off, which left only the dot in view
 - **Service worker tests** (EX-11, `src/sw.test.ts`): the sender gates (another extension, a ring
   page, the store build, the map frame, the site's origin), `connect`, and the alert and run
   notifications.
+
+0.9.2 (full audit 2026-10-27, with the API's #1130):
+
+- **Trade Buddy follows linked wallets only** (Card 11, AP-1 = EX-1). The API follows the wallets
+  linked on TrenchScanner's Settings → Trade Buddy wallets, each by signing with it, and the panel
+  now asks for no list, so every linked wallet is followed. Settings → Trade Buddy wallets lists the
+  linked ones and links to the site to add more; wallets added in the panel before 0.9.2 show as
+  "Not linked" (with the API's `notLinked`), and Trade Buddy says so above its coins.
+- **Look up** says when a coin has no card because it opens only with a lookup on the site (EX-5),
+  and the board pill on every coin is worded for feed coins, which are all `/stats` answers now.
+- **Key refused** names the 7-day life of an admin's key (AP-6).
