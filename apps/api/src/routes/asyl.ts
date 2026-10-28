@@ -98,6 +98,7 @@ import type { AsylCoverage } from "../asyl/types.js";
 import { addEarlyBuyers, addLaunches, loadCoinReport, type CoinReport } from "../asyl/report.js";
 import { SharedCacheMap } from "../sharedCache.js";
 import { COMMON_FUNDER_WALLETS, commonFunderNote, findCommonFunder } from "../asyl/funders.js";
+import { BETWEEN_WALLETS_MAX, betweenRead, keptBetween, meteredBetween } from "../asyl/between.js";
 import { WATCH_MAX, addWatch, listWatches, markSeen, removeWatch } from "../asyl/watch.js";
 import {
   addBridges,
@@ -129,6 +130,13 @@ const watchBody = z.object({ name: z.string().max(64).nullable().optional() });
 const seenBody = z.object({ wallet: address.nullable().optional() });
 const commonFunderBody = z.object({ wallets: z.array(address).min(2).max(COMMON_FUNDER_WALLETS) });
 const pairParams = z.object({ a: address, b: address });
+const betweenBody = z.object({
+  wallets: z
+    .array(address)
+    .min(2)
+    .max(BETWEEN_WALLETS_MAX)
+    .refine((w) => new Set(w).size >= 2, "two different wallets"),
+});
 const searchQuery = z.object({ q: z.string().trim().min(2).max(60) });
 /**
  * A coin's holders as the reader's own cutoffs keep them (user ask 2026-10-25: one Show holders,
@@ -422,6 +430,17 @@ export async function registerAsylRoutes(
       if (!p.success) return bad(reply, p.error);
       reply.header("Cache-Control", "private, no-store");
       return loadPair(p.data.a, p.data.b);
+    });
+
+    /**
+     * Transfers between two or more wallets (user ask 2026-10-28), free: what the tables hold, and
+     * a chain read someone already paid for within the day (asyl/between.ts).
+     */
+    priv.post("/between", { config: { rateLimit: READ_LIMIT } }, async (request, reply) => {
+      const b = betweenBody.safeParse(request.body);
+      if (!b.success) return bad(reply, b.error);
+      reply.header("Cache-Control", "private, no-store");
+      return betweenRead(b.data.wallets, keptBetween(b.data.wallets));
     });
 
     /** Its co-traders, and the coins they bought that it didn't. */
@@ -754,6 +773,21 @@ export async function registerAsylRoutes(
         focus: p.data.wallet,
         graph,
         flows: { txs: res.value.txs, fromMs: res.value.fromMs, toMs: res.value.toMs },
+        credits: res.credits,
+        cached: res.cached,
+        allowance: res.allowance,
+      };
+    });
+
+    /** Every transfer between the wallets the chain holds: their shared transactions, read in full. */
+    priv.post("/chain/between", { config: { rateLimit: CHAIN_LIMIT } }, async (request, reply) => {
+      const b = betweenBody.safeParse(request.body);
+      if (!b.success) return bad(reply, b.error);
+      if (!(await chainGate(request, reply))) return reply;
+      const res = await meteredBetween(env, opts.helius!, request.user!.userId, b.data.wallets);
+      if ("refused" in res) return refusal(reply, res);
+      return {
+        ...(await betweenRead(b.data.wallets, res.value)),
         credits: res.credits,
         cached: res.cached,
         allowance: res.allowance,

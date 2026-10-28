@@ -386,6 +386,8 @@ const BATCH_CONCURRENCY = 3;
  * bill 10 credits per 100 returned, so a page of 100 is the most one 10-credit call can carry.
  */
 const LAUNCH_TX_PAGE = 100;
+/** Signatures per getTransactionsForAddress page, the most one 10-credit call returns. */
+export const WALLET_SIGNATURES_PAGE = 1000;
 /** Launch-buyer reads in flight at once, each its own request (see getLaunchBuyersBatch). */
 const LAUNCH_READ_CONCURRENCY = 5;
 /** Pages read before giving up on reaching the full buyer count - caps a launch at 30 credits. */
@@ -2681,6 +2683,68 @@ export class HeliusClient {
     const data = res.result.data;
     const token = res.result.paginationToken ?? null;
     return { status: "ok", txs: data, paginationToken: data.length < LAUNCH_TX_PAGE ? null : token };
+  }
+
+  /**
+   * One page of a wallet's signatures, newest first, its token accounts' included
+   * (filters.tokenAccounts "balanceChanged", so a coin sent to the wallet counts though only its
+   * token account is in the transaction): Asyl's transfers between wallets
+   * (apps/api/src/asyl/between.ts) matches these across wallets. getTransactionsForAddress,
+   * failed ones filtered out, up to WALLET_SIGNATURES_PAGE a page for 10 credits. Helius-only:
+   * "unsupported" elsewhere.
+   */
+  async getWalletSignaturesPage(
+    wallet: string,
+    opts: { paginationToken?: string } = {},
+  ): Promise<
+    | { status: "ok"; sigs: { signature: string; at: number | null }[]; paginationToken: string | null }
+    | { status: "unsupported" }
+    | { status: "failed" }
+  > {
+    if (!this.gtfaUsable) return { status: "unsupported" };
+    const ask = (tokenAccounts: boolean) =>
+      this.sendBatch<TransactionsForAddressResult>(
+        [
+          {
+            id: wallet,
+            method: "getTransactionsForAddress",
+            params: [
+              wallet,
+              {
+                transactionDetails: "signatures",
+                sortOrder: "desc",
+                limit: WALLET_SIGNATURES_PAGE,
+                filters: {
+                  status: "succeeded",
+                  ...(tokenAccounts ? { tokenAccounts: "balanceChanged" } : {}),
+                },
+                ...(opts.paginationToken ? { paginationToken: opts.paginationToken } : {}),
+              },
+            ],
+          },
+        ],
+        20_000,
+      );
+    let res = (await ask(true)).get(wallet);
+    // As getWalletTransactionsPage: a node that doesn't know the filter reads the wallet's own only.
+    if (res?.error?.code === RPC_INVALID_PARAMS) res = (await ask(false)).get(wallet);
+    if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
+      this.gtfaUnavailable = true;
+      return { status: "unsupported" };
+    }
+    if (!res || res.error || !Array.isArray(res.result?.data)) {
+      if (res?.error) logger.warn("rpc error on wallet signatures page", { error: res.error });
+      return { status: "failed" };
+    }
+    const data = res.result.data;
+    const sigs = data
+      .filter((d): d is { signature: string; blockTime: number | null } => typeof d.signature === "string")
+      .map((d) => ({
+        signature: d.signature,
+        at: typeof d.blockTime === "number" ? d.blockTime * 1000 : null,
+      }));
+    const token = res.result.paginationToken ?? null;
+    return { status: "ok", sigs, paginationToken: data.length < WALLET_SIGNATURES_PAGE ? null : token };
   }
 
   /**

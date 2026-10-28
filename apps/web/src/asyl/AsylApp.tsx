@@ -23,6 +23,7 @@ import { AnalystLegend } from "./AnalystLayer";
 import { AsylSignIn } from "./AsylSignIn";
 import { DrawEditor, PenBar } from "./DrawEditor";
 import { PairPanel } from "./PairPanel";
+import { BETWEEN_WALLETS_MAX, LinkPanel, TransfersPanel } from "./TransfersPanel";
 import { PickBar, type PickSwitch, type Share } from "./PickBar";
 import { SearchBox } from "./SearchBox";
 import {
@@ -58,6 +59,7 @@ import {
   timelineSteps,
   visibleGraph,
   withDeployLines,
+  type AsylEdge,
   type AsylEdgeKind,
   type WalletSwitch,
   type AsylGraph,
@@ -226,6 +228,10 @@ export function AsylApp() {
   const [coTraderTotals, setCoTraderTotals] = useState<Record<string, number>>({});
   // The bought-together pair whose trades are open (user ask 2026-10-25).
   const [pair, setPair] = useState<{ a: string; b: string } | null>(null);
+  // Transfers between picked wallets, or behind a clicked line (user asks 2026-10-28), and a
+  // clicked line that isn't money between wallets.
+  const [between, setBetween] = useState<{ wallets: string[]; edge: AsylEdge | null } | null>(null);
+  const [linkOpen, setLinkOpen] = useState<AsylEdge | null>(null);
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState<Label[]>([]);
   const [maps, setMaps] = useState<MapSummary[]>([]);
@@ -989,6 +995,39 @@ export function AsylApp() {
     });
   };
 
+  /** Every transfer between the picked wallets (user ask 2026-10-28), in a panel over the map. */
+  const transfersBetween = (wallets: string[]) => {
+    if (wallets.length < 2) return;
+    if (wallets.length > BETWEEN_WALLETS_MAX)
+      return setStatus({
+        tone: "error",
+        text: `Pick ${BETWEEN_WALLETS_MAX} wallets or fewer to see the transfers between them; ${wallets.length} are picked.`,
+      });
+    setBetween({ wallets, edge: null });
+  };
+
+  /**
+   * A line on the map clicked (user ask 2026-10-28): money between two wallets opens the transfers
+   * behind it, a bought-together link its trades, anything else its own details.
+   */
+  const openEdge = (e: AsylEdge) => {
+    const kindOf = (id: string) => kept.nodes.find((n) => n.id === id)?.kind;
+    if (e.kind === "cotrade") return setPair({ a: e.a, b: e.b });
+    if (kindOf(e.a) === "wallet" && kindOf(e.b) === "wallet" && e.a !== e.b)
+      return setBetween({ wallets: [e.a, e.b], edge: e });
+    setLinkOpen(e);
+  };
+  const nameOfId = (id: string) => {
+    const n = graph.nodes.find((x) => x.id === id);
+    return n ? nodeName(n) : shortAddr(id);
+  };
+  const chainOff =
+    typeof session !== "object" || !session.pro
+      ? "Chain reads need Pro Mode"
+      : session.chain && session.chain.left <= 0
+        ? "Today's chain reads are used up"
+        : null;
+
   /** Each picked coin's deployer, one after another, as Show deployer finds one. */
   const showDeployers = (mints: string[]) => {
     if (mints.length === 0) return;
@@ -1517,8 +1556,8 @@ export function AsylApp() {
   // The latest state, for the one key listener.
   const onKey = useRef<(e: KeyboardEvent) => void>(() => undefined);
   onKey.current = (e: KeyboardEvent) => {
-    // The trades panel keeps its own keys (Esc closes it), and leaves the map's alone.
-    if (pair) return;
+    // The trades and transfers panels keep their own keys (Esc closes them), and leave the map's alone.
+    if (pair || between || linkOpen) return;
     if (ask && e.key === "Escape") {
       setAsk(null);
       return;
@@ -2278,6 +2317,7 @@ export function AsylApp() {
               onPick={onPick}
               timeLabels={timeLabels}
               onMoved={() => setDirty(true)}
+              onEdge={openEdge}
               layoutKey={layoutKey}
               handle={view}
             />
@@ -2356,16 +2396,11 @@ export function AsylApp() {
               onGrow={pickActions.grow}
               onSwitch={pickActions.switchKind}
               onClear={() => setPicked(new Set())}
-              chainOff={
-                typeof session !== "object" || !session.pro
-                  ? "Chain reads need Pro Mode"
-                  : session.chain && session.chain.left <= 0
-                    ? "Today's chain reads are used up"
-                    : null
-              }
+              chainOff={chainOff}
               onShowHolders={(live) => showHolders(pickInfo.tokens, live)}
               onShowDeployers={() => showDeployers(pickInfo.tokens)}
               onCommonFunder={() => commonFunder(pickInfo.wallets)}
+              onTransfers={() => transfersBetween(pickInfo.wallets)}
             />
           )}
           {ask && (
@@ -2454,6 +2489,35 @@ export function AsylApp() {
         )}
       </div>
 
+      {between && (
+        <TransfersPanel
+          key={between.wallets.join(",")}
+          wallets={between.wallets}
+          edge={between.edge}
+          pro={!!me?.pro}
+          chainOff={chainOff}
+          nameOf={nameOfId}
+          onSelect={(id) => {
+            setBetween(null);
+            setSelected(id);
+            view.current?.centre(id);
+          }}
+          onSpent={loadMe}
+          onClose={() => setBetween(null)}
+        />
+      )}
+      {linkOpen && (
+        <LinkPanel
+          edge={linkOpen}
+          nameOf={nameOfId}
+          onSelect={(id) => {
+            setLinkOpen(null);
+            setSelected(id);
+            view.current?.centre(id);
+          }}
+          onClose={() => setLinkOpen(null)}
+        />
+      )}
       {pair && (
         <PairPanel
           a={pair.a}

@@ -336,6 +336,39 @@ export interface WatchRow {
   fresh: number;
 }
 
+/** One move between wallets of a set (the API's asyl/between.ts). */
+export interface BetweenTransfer {
+  signature: string | null;
+  at: number | null;
+  from: string;
+  to: string;
+  /** Null for SOL. */
+  mint: string | null;
+  /** SOL or whole coins; null when only the share of supply is known. */
+  amount: number | null;
+  pct: number | null;
+  kind: "transfer" | "funding";
+  source: "stored" | "chain";
+}
+
+export interface BetweenRead {
+  wallets: string[];
+  transfers: BetweenTransfer[];
+  more: boolean;
+  coins: { mint: string; symbol: string | null; name: string | null; image: string | null }[];
+  chain: {
+    covers: { wallet: string; txs: number; complete: boolean; fromMs: number | null }[];
+    shared: number;
+    read: number;
+    stop: "done" | "limit" | "allowance" | "paused";
+    readAt: number;
+  } | null;
+  /** A chain read's: what it took. */
+  credits?: number;
+  cached?: boolean;
+  allowance?: Allowance;
+}
+
 const enc = encodeURIComponent;
 
 /** What a holder read keeps: the least share held now, the least SOL put in, and every one of them. */
@@ -430,6 +463,8 @@ export const asylApi = {
     post<GraphRead & { bridges: BridgeMove[]; note: string; burn: BurnSpend }>(
       `/asyl/chain/bridges/${enc(wallet)}`,
     ),
+  between: (wallets: string[]) => post<BetweenRead>("/asyl/between", { wallets }),
+  chainBetween: (wallets: string[]) => post<BetweenRead>("/asyl/chain/between", { wallets }),
   commonFunder: (wallets: string[]) =>
     post<
       GraphRead & {

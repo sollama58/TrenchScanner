@@ -4,6 +4,7 @@ import {
   DEFAULT_TIME_LABELS,
   EDGE_KINDS,
   EDGE_LABEL,
+  edgeKey,
   edgeTimeFull,
   edgeTimeLabel,
   nodeName,
@@ -390,6 +391,7 @@ export function GraphView({
   analyst = false,
   solUsd = null,
   layoutGraph,
+  onEdge,
 }: {
   graph: AsylGraph;
   /**
@@ -430,6 +432,8 @@ export function GraphView({
   analyst?: boolean;
   /** SOL's price, for Analyst Mode's amounts in dollars. */
   solUsd?: number | null;
+  /** A line, or the dot along it, was clicked. */
+  onEdge?: (edge: AsylEdge) => void;
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [, setFrame] = useState(0);
@@ -437,6 +441,8 @@ export function GraphView({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [hover, setHover] = useState<{ x: number; y: number; text: string[] } | null>(null);
+  // The line under the pointer, which shows its dot to click.
+  const [hoverEdge, setHoverEdge] = useState<string | null>(null);
   // The line tool's first bubble, and where the pointer is, for the line being drawn.
   const [pending, setPending] = useState<string | null>(null);
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
@@ -738,6 +744,8 @@ export function GraphView({
     carry: Map<string, number>;
     /** A drawing grabbed instead of a bubble: a text box (moved) or a line (picked). */
     drawn?: { id: string; text: boolean };
+    /** The line it went down on (edgeKey), which a click opens. */
+    edge?: string | null;
   } | null>(null);
   const pinch = useRef<{ d: number; k: number } | null>(null);
 
@@ -822,6 +830,7 @@ export function GraphView({
       dx: at && w ? at.x - w.x : 0,
       dy: at && w ? at.y - w.y : 0,
       // A picked bubble carries the rest of the pick with it, wholly; Shift drags a bubble alone.
+      edge: id ? null : ((e.target as Element).closest?.("[data-edge]")?.getAttribute("data-edge") ?? null),
       carry:
         id && picked?.has(id) && picked.size > 1
           ? new Map([...picked].filter((x) => x !== id).map((x) => [x, 1]))
@@ -973,6 +982,14 @@ export function GraphView({
       onDraw?.addText(w.x, w.y);
       return;
     }
+    if (!d.moved && d.edge && onEdge) {
+      // A click on a line or its dot (user ask 2026-10-28): what it stands for, in full.
+      const hit = graph.edges.find((x) => edgeKey(x) === d.edge);
+      if (hit) {
+        onEdge(hit);
+        return;
+      }
+    }
     if (!d.moved) {
       onDraw?.select(null);
       onSelect(d.id);
@@ -1112,10 +1129,9 @@ export function GraphView({
                   e.source === "chain" ? "From a chain read" : "",
                 ].filter(Boolean);
                 const st = EDGE_STYLE[e.kind];
-                const key = `${e.kind}|${e.a}|${e.b}|${e.mint ?? ""}`;
+                const key = edgeKey(e);
                 const path = (
                   <path
-                    key={key}
                     d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
                     fill="none"
                     stroke={EDGE_COLOUR[e.kind]}
@@ -1125,16 +1141,35 @@ export function GraphView({
                     strokeLinecap={e.kind === "cotrade" ? "round" : undefined}
                     markerEnd={st.head ? `url(#asyl-head-${e.kind})` : undefined}
                     className="asyl-edge"
-                    onPointerEnter={(ev) => showHover(ev, label)}
-                    onPointerLeave={() => setHover(null)}
                   />
                 );
                 const mid = { x: 0.25 * sx + 0.5 * mx + 0.25 * ex, y: 0.25 * sy + 0.5 * my + 0.25 * ey };
                 const z = 1 / Math.sqrt(view.k);
                 const deploy = e.kind === "created";
-                if (!deploy && e.source !== "chain") return path;
+                const hot = hoverEdge === key;
                 return (
-                  <g key={key} opacity={dim ? (deploy ? 0.25 : 0.2) : 1}>
+                  <g
+                    key={key}
+                    data-edge={key}
+                    className={`asyl-edge-g${onEdge ? " clickable" : ""}${hot ? " hot" : ""}`}
+                    opacity={dim && (deploy || e.source === "chain") ? (deploy ? 0.25 : 0.2) : 1}
+                    onPointerEnter={(ev) => {
+                      showHover(ev, onEdge ? [...label, "Click for its full details"] : label);
+                      setHoverEdge(key);
+                    }}
+                    onPointerLeave={() => {
+                      setHover(null);
+                      setHoverEdge((h) => (h === key ? null : h));
+                    }}
+                  >
+                    {/* A wider, unseen line under it, so a thin line is easy to hover and click. */}
+                    <path
+                      d={`M${sx} ${sy} Q${mx} ${my} ${ex} ${ey}`}
+                      fill="none"
+                      stroke="transparent"
+                      strokeWidth={14 * z}
+                      className="asyl-edge-hit"
+                    />
                     {deploy && (
                       // The Deployed line (user ask 2026-10-24: much more its own): a gold glow under
                       // a marching line, and the deployer's D halfway along.
@@ -1157,8 +1192,6 @@ export function GraphView({
                         strokeDasharray={`${10 * z} ${4 * z}`}
                         markerEnd={`url(#asyl-head-created)`}
                         className="asyl-edge asyl-edge-deploy"
-                        onPointerEnter={(ev) => showHover(ev, label)}
-                        onPointerLeave={() => setHover(null)}
                       />
                     ) : (
                       path
@@ -1171,17 +1204,33 @@ export function GraphView({
                         </text>
                       </g>
                     ) : null}
-                    {e.source === "chain" && (
-                      // A chain read: a ringed dot halfway along, whatever the kind's own pattern.
+                    {e.source === "chain" ? (
+                      // A chain read: a ringed dot halfway along, whatever the kind's own pattern;
+                      // it grows and takes the line's colour under the pointer, and opens on a click.
                       <circle
                         cx={mid.x}
                         cy={mid.y}
-                        r={3.4 * z}
-                        fill="#120c09"
+                        r={(hot ? 5.2 : 3.4) * z}
+                        fill={hot ? EDGE_COLOUR[e.kind] : "#120c09"}
                         stroke="#fff"
                         strokeWidth={1.5 * z}
-                        pointerEvents="none"
+                        className="asyl-edge-dot"
                       />
+                    ) : (
+                      hot &&
+                      onEdge &&
+                      !deploy && (
+                        // Any other line shows a dot to click while the pointer is on it.
+                        <circle
+                          cx={mid.x}
+                          cy={mid.y}
+                          r={4.6 * z}
+                          fill={EDGE_COLOUR[e.kind]}
+                          stroke="#120c09"
+                          strokeWidth={1.5 * z}
+                          className="asyl-edge-dot"
+                        />
+                      )
                     )}
                   </g>
                 );
