@@ -1090,6 +1090,12 @@ const envSchema = z.object({
   AI_REVIEW_MODEL: z.string().default("claude-opus-5-5"),
   AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  // A shadow review's timeout (worker ai/reviewer.ts). It runs detached after the alert, so nothing
+  // waits on it, and a timeout bills the full estimate and stores nothing (audit 2026-10-27 AJ-13):
+  // it gets longer than the in-cycle gate review's AI_REVIEW_TIMEOUT_MS. A shutdown drains it in
+  // full (worker index.ts), so render.yaml's maxShutdownDelaySeconds on the worker and trainer
+  // covers it plus 10s - raise them together.
+  AI_REVIEW_SHADOW_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   // The 2x odds a "buy" needs, 0-1 (user ask 2026-10-25: as selective as it can be). Written into
   // the prompt as the trader's bar, and enforced on the answer: a "buy" with probability2x under
   // it is recorded as "no_buy" (curation/aiReview.ts applyBuyBar). The reviewed pool doubles about

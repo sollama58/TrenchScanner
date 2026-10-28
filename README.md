@@ -64,9 +64,11 @@ The Live tab's **Lighthouse** button shows how every token that passed the pre-c
 **Admin → Trading bot**, shown only to wallets in `ADMIN_WALLET_ADDRESSES`, runs a Solana trading
 bot from a wallet the server holds for you (`packages/core/src/trading`). It buys the signals you
 pick - the matches of any of your filters (a filter produces matches while it is your active one)
-and the alerts of any model, optionally only high-conviction ones, and by default **only those the
+and the alerts of any model, optionally only high-conviction ones, and optionally **only those the
 AI judge passes** (`requireAiBuy`, with an optional floor on its 2x estimate; a fresh signal
-waits for its review, and one never reviewed is skipped) - and sells each position on an exit
+waits for its review, and one never reviewed is skipped; a real-money bot counts only gate-mode
+verdicts). That filter starts off for a new bot until the judge has `AI_REVIEW_MIN_GRADED_BUYS`
+graded buys, and on after - and sells each position on an exit
 plan: by default the same plan the Lighthouse and Models tab simulate (`EXIT_PLAN`: 35% at 2x, 30% at
 4x, 25% at 10x, whatever is still held on a trailing exit 40% off its high from the first sale, out
 at 3 hours; -50% stop before the first sale;

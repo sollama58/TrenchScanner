@@ -381,7 +381,23 @@ export async function reviewPick(
   // Launcher text written to steer the reviewer is a pass on its own, decided here so the model
   // is never the only check against it (and no spend goes on reading it).
   if (launcherTextInstructs(scored)) return launcherTextVeto(scored, decision);
-  return withReviewSlot(() => callReviewer(scored, decision, env, priority, opts.decisionAt));
+  return withReviewSlot(() =>
+    callReviewer(scored, decision, env, priority, opts.decisionAt, reviewTimeoutMs(env, opts.gate === true)),
+  );
+}
+
+/**
+ * How long one review call may take: an in-cycle gate review holds the scan's emission, so it
+ * keeps AI_REVIEW_TIMEOUT_MS; a shadow review runs detached and gets AI_REVIEW_SHADOW_TIMEOUT_MS,
+ * since one cut off is billed and never recorded (audit 2026-10-27 AJ-13).
+ */
+export function reviewTimeoutMs(
+  env: Pick<Env, "AI_REVIEW_TIMEOUT_MS" | "AI_REVIEW_SHADOW_TIMEOUT_MS">,
+  gate: boolean,
+): number {
+  return gate
+    ? env.AI_REVIEW_TIMEOUT_MS
+    : Math.max(env.AI_REVIEW_TIMEOUT_MS, env.AI_REVIEW_SHADOW_TIMEOUT_MS);
 }
 
 /** The call itself, once a review slot is free - see reviewPick. */
@@ -390,7 +406,8 @@ async function callReviewer(
   decision: CurationDecision,
   env: Env,
   priority: "live" | "background",
-  decisionAt?: Date,
+  decisionAt: Date | undefined,
+  timeoutMs: number,
 ): Promise<AiReviewResult | null> {
   const reservation = await reserveAiSpend(
     env,
@@ -437,7 +454,7 @@ async function callReviewer(
       // No client retry, shadow included: a retried timeout bills twice against one estimate,
       // and two timeouts outlast the shutdown drain (index.ts), so a deploy lost the paid answer.
       // A failed review is recorded with its error; the next seat's call on the coin asks again.
-      { maxRetries: 0 },
+      { maxRetries: 0, timeout: timeoutMs },
     );
     const latencyMs = Date.now() - startedAt;
     await settleAiSpend(reservation, responseCostUsd(env.AI_REVIEW_MODEL, response), "review");
