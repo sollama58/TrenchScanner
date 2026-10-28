@@ -10,7 +10,7 @@ const trade = (side: "buy" | "sell", sol: bigint, networkFeeLamports = 100_000n)
 });
 
 describe("feeSummary", () => {
-  it("adds other platforms' gas and priority fee per buy and sale to the savings with the toggle on", () => {
+  it("adds other platforms' gas and priority fee per buy and sale, less our own, to the savings with the toggle on", () => {
     const s = feeSummary([trade("buy", 2n), trade("sell", 4n)]);
     expect(s.otherNetwork).toEqual({
       gasSol: 0.001,
@@ -23,7 +23,8 @@ describe("feeSummary", () => {
       feeSol: 0.03,
       savedSol: 0.03,
       feeWithNetworkSol: 0.052,
-      savedWithNetworkSol: 0.052,
+      // 0.052 less the 0.0002 our two trades paid the network.
+      savedWithNetworkSol: 0.0518,
     });
   });
 

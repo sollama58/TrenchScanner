@@ -1585,6 +1585,8 @@ async function buildTrade(input: {
   percent?: number;
   settings: TradeSettings;
   sacrificeNote?: string | null;
+  /** The trader confirmed a buy the API held for the mint's risks (mintRiskOf). */
+  acceptMintRisk?: boolean;
 }): Promise<BuiltTrade> {
   const body = JSON.stringify({
     mint: input.mint,
@@ -1595,6 +1597,7 @@ async function buildTrade(input: {
     ...feeParams(input.settings),
     ...(input.all ? { all: true } : {}),
     ...(input.percent !== undefined ? { percent: input.percent } : {}),
+    ...(input.acceptMintRisk ? { acceptMintRisk: true } : {}),
   });
   try {
     // Two-factor, when the user chose it for this side (or this size): the API asks, we prompt.
@@ -1612,6 +1615,32 @@ async function buildTrade(input: {
     if (timedOut(e))
       throw new TradeError("The server took too long to build the trade. Nothing was sent; try again.");
     throw e;
+  }
+}
+
+/**
+ * The lines the API gave when it held a buy because the mint can trap a buyer (a live freeze
+ * authority, a permanent delegate: user decision 2026-10-27), or null for any other error.
+ */
+export function mintRiskOf(e: unknown): string[] | null {
+  if (!(e instanceof ApiError) || e.status !== 409) return null;
+  const body = e.body as { code?: unknown; risks?: unknown } | null;
+  if (body?.code !== "mint_risk" || !Array.isArray(body.risks)) return null;
+  const risks = body.risks.filter((r): r is string => typeof r === "string");
+  return risks.length > 0 ? risks : null;
+}
+
+/** The second tap a risky mint's buy needs: the browser's own confirm, naming each risk. */
+export function confirmMintRiskInBrowser(risks: string[]): boolean {
+  return window.confirm(
+    `This coin can trap a buyer:\n\n${risks.map((r) => `• ${r}`).join("\n")}\n\nBuy it anyway?`,
+  );
+}
+
+/** The trader said no to a risky mint's buy: nothing was built or sent. */
+export class MintRiskDeclined extends TradeError {
+  constructor() {
+    super("Not bought: you chose not to buy a coin that can trap its buyer. Nothing was sent.");
   }
 }
 
@@ -1741,6 +1770,11 @@ export async function runTrade(
     sacrificeNote?: string | null;
     /** Set when the token window or quick-trade dialog closes. Checked before the wallet opens. */
     signal?: AbortSignal;
+    /**
+     * Asked when the API holds a buy for the mint's risks; true builds it anyway. Defaults to the
+     * browser's confirm (confirmMintRiskInBrowser).
+     */
+    confirmMintRisk?: (risks: string[]) => boolean | Promise<boolean>;
   },
   onStage: (stage: TradeStage, built?: BuiltTrade) => void | Promise<void>,
 ): Promise<string> {
@@ -1754,7 +1788,7 @@ export async function runTrade(
     // signature uses these, not a setting changed while the wallet was open, and the send uses the
     // same speed the build tipped for.
     const settings: TradeSettings = { ...input.settings };
-    const asked = { ...input, settings };
+    const asked: typeof input & { acceptMintRisk?: boolean } = { ...input, settings };
     if (input.signal?.aborted) throw windowClosed();
     // The wallet first: if it isn't here there's no point building anything.
     const { account, sign, name } = await accountFor(asked.owner);
@@ -1768,7 +1802,20 @@ export async function runTrade(
       if (input.signal?.aborted) throw windowClosed();
       onStage("building");
       try {
-        built = await buildTrade(asked);
+        try {
+          built = await buildTrade(asked);
+        } catch (e) {
+          // A coin whose issuer can freeze or take it: the trader's second tap, then the same build
+          // marked as seen. A rebuild after a slow signature keeps the mark.
+          const risks = mintRiskOf(e);
+          if (!risks || asked.acceptMintRisk) throw e;
+          if (input.signal?.aborted) throw windowClosed();
+          if (!(await (input.confirmMintRisk ?? confirmMintRiskInBrowser)(risks)))
+            throw new MintRiskDeclined();
+          if (input.signal?.aborted) throw windowClosed();
+          asked.acceptMintRisk = true;
+          built = await buildTrade(asked);
+        }
         fetchedAt = blockhashFetchedAt(built, Date.now());
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
