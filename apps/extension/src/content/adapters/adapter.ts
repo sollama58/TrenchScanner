@@ -17,6 +17,8 @@ export interface SiteAdapter {
   findRows(root: ParentNode): Element[];
   /** The token address a row shows, or null when none can be read with certainty. */
   mintOf(row: Element): string | null;
+  /** The row is marked as a board column's (Axiom's Pulse, Terminal's Trenches), wherever it sits. */
+  inColumn(row: Element): boolean;
 }
 
 export interface AdapterSpec {
@@ -50,6 +52,8 @@ export interface Mark {
   attr: string;
   selector?: string;
   box?: string;
+  /** Only a board column's rows carry this mark (Terminal's copy button, say, sits on every coin). */
+  column?: boolean;
 }
 
 /** Attributes read for an address after the links: image URLs and data attributes. */
@@ -85,6 +89,10 @@ function mintInUrl(href: string, patterns: readonly RegExp[]): string | null {
 export function adapterFrom(spec: AdapterSpec): SiteAdapter {
   const marks = (spec.marked ?? []).map((m) => ({ ...m, selector: m.selector ?? `[${m.attr}]` }));
   const anyMark = marks.map((m) => m.selector).join(", ");
+  const columnMark = marks
+    .filter((m) => m.column)
+    .map((m) => m.selector)
+    .join(", ");
   const rowOf = (link: Element): Element | null => {
     for (const selector of [...spec.rowSelectors, "[data-index]"]) {
       const row = link.closest(selector);
@@ -163,6 +171,9 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
         }
       }
       return null;
+    },
+    inColumn(row) {
+      return !!columnMark && (row.matches(columnMark) || !!row.querySelector(columnMark));
     },
   };
 }

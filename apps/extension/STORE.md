@@ -64,10 +64,11 @@ justify.
   - `storage`: keeps the user's TrenchScanner extension key, display settings and which alerts were
     already notified or read on this device.
   - `sidePanel`: the extension's only interface is a side panel.
-  - `notifications`: tells the user of a new alert from their own filters and models, only if they
-    turn that on in Settings.
-  - `alarms`: checks the user's alerts once a minute for those notifications and the toolbar
-    icon's unread count, only while either is on.
+  - `notifications`: tells the user of a new alert from their own filters and models, and, with
+    Run alerts, when one of their alerts reaches 2x, 5x or 10x its alert's market cap; each only if
+    they turn it on in Settings.
+  - `alarms`: checks the user's alerts once a minute for those notifications (new alerts and run
+    alerts) and the toolbar icon's unread count, only while one of them is on.
   - No host permissions: the extension calls only the TrenchScanner API, which allows it by CORS,
     so it asks for no access to any site.
 - **Remote code:** No. All code ships in the package.

@@ -16,7 +16,7 @@ export const axiom = adapterFrom({
   rowSelectors: ["[data-pair-address]"],
   // Pulse rows carry the token's address (a saved page, 2026-10-25); other chains' rows hold an
   // 0x address, which never reads as a mint, so they're left alone.
-  marked: [{ attr: "data-pulse-token-address" }],
+  marked: [{ attr: "data-pulse-token-address", column: true }],
   // Discover rows (a saved page, 2026-10-25) link the coin on pump.fun or otcdesks; their own /t/
   // link is the quote token's chip (its picture in a tooltip), another coin.
   coinLinks: PUMP_LINKS,
@@ -34,7 +34,7 @@ export const terminal = adapterFrom({
   // Trending rows (a saved page, 2026-10-25) carry the address on their copy button; their
   // /trade/solana/ link is the quote pill, another coin.
   marked: [
-    { attr: "data-trenches-item", box: SLOT },
+    { attr: "data-trenches-item", box: SLOT, column: true },
     { attr: "id", selector: "[id^='button-copy-address-context-']", box: SLOT },
   ],
 });
