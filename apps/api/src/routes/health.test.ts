@@ -9,6 +9,7 @@ import {
   strictWorkerFailures,
   isFailing,
   summarizeHeartbeat,
+  watchAlarmsOf,
 } from "./health.js";
 
 /**
@@ -512,5 +513,89 @@ describe("a lost run (orphaned)", () => {
   it("is not judged without a lock read", () => {
     expect(summarize({}).orphaned).toBe(false);
     expect(summarize({ heldLocks: null }).orphaned).toBe(false);
+  });
+});
+
+describe("public worker health: the counters and run-out warnings (audit 2026-10-27)", () => {
+  const summary = (job: string, meta: Record<string, unknown>) =>
+    summarizeHeartbeat(
+      {
+        job,
+        lastRunAt: new Date(0),
+        lastSuccessAt: new Date(0),
+        lastError: null,
+        meta,
+      } as unknown as Parameters<typeof summarizeHeartbeat>[0],
+      60_000,
+    );
+
+  it("shows the scan's decision holds, the cycle's and since boot (DS-9)", () => {
+    const run = summary("scan", {
+      durationMs: 28_000,
+      decisionHolds: { preGate5m: 3, walletChecks: 1, sniperWait: 0, linkedWait: 2 },
+      decisionHoldsSinceBoot: { preGate5m: 300, walletChecks: 40, sniperWait: 5, linkedWait: 90 },
+    }).lastRun;
+    expect(run?.decisionHolds).toEqual({ preGate5m: 3, walletChecks: 1, sniperWait: 0, linkedWait: 2 });
+    expect(run?.decisionHoldsSinceBoot).toEqual({
+      preGate5m: 300,
+      walletChecks: 40,
+      sniperWait: 5,
+      linkedWait: 90,
+    });
+  });
+
+  it("shows champion-refresh's fast-path record and how many share alarms are up, as numbers (MT-11)", () => {
+    const run = summary("champion-refresh", {
+      durationMs: 4_000,
+      fastPath: { windowHours: 72, moments: 900, graded: 850, won2x: 140, seats: "Trees 30/120 of 130" },
+      shareAlarms:
+        "Trees: alerted on 40% of 300 decision moments against a 20% share; fast path: 5 of 8 alerting seats raised no alert in 250 decision moments",
+    }).lastRun;
+    expect(run?.fastPath).toEqual({ windowHours: 72, moments: 900, graded: 850, won2x: 140 });
+    expect(run?.shareAlarms).toBe(2);
+  });
+
+  it("reads pipeline-watch's run-out warnings into figures, and null before their first read", () => {
+    expect(watchAlarmsOf(null)).toEqual({
+      heliusBurn: null,
+      training: null,
+      scanLatency: null,
+      telegramAgedOut: null,
+    });
+    const out = watchAlarmsOf({
+      heliusBurn: {
+        last24h: 1_800_000,
+        baselineDaily: 1_200_000,
+        baselineDays: 7,
+        through: "2026-10-27T23:00:00.000Z",
+        checkedAt: "2026-10-27T23:03:00.000Z",
+        notifiedAt: "2026-10-27T23:03:00.000Z",
+      },
+      training: { lastCompletedAt: "2026-10-27T16:00:00.000Z", lastCompletedMs: 7_750_000 },
+      scanLatency: { samples: "20000,30000,25000", lastRunAt: "2026-10-27T23:02:00.000Z" },
+      telegramAgedOut: {
+        seen: 12,
+        since: "2026-10-27T17:00:00.000Z",
+        count: 12,
+        lastAt: "2026-10-27T17:20:00.000Z",
+      },
+    });
+    expect(out).toEqual({
+      heliusBurn: {
+        last24h: 1_800_000,
+        baselineDaily: 1_200_000,
+        baselineDays: 7,
+        ratio: 1.5,
+        checkedAt: "2026-10-27T23:03:00.000Z",
+      },
+      training: {
+        deadlineMs: 240 * 60_000,
+        lastCompletedAt: "2026-10-27T16:00:00.000Z",
+        lastCompletedMs: 7_750_000,
+        deadlineUsedPct: 54,
+      },
+      scanLatency: { cycles: 3, decidedMsP50: 25_000 },
+      telegramAgedOut: { count: 12, since: "2026-10-27T17:00:00.000Z", lastAt: "2026-10-27T17:20:00.000Z" },
+    });
   });
 });

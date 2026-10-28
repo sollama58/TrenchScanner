@@ -84,7 +84,7 @@ import { aiReviewEnabled } from "./ai/reviewer.js";
 import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
-import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
+import { runPipelineWatch, TRAINING_DEADLINE_MINUTES } from "./jobs/pipelineWatchJob.js";
 import { canaryFailureMeta, runTradeCanary } from "./jobs/tradeCanaryJob.js";
 import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
@@ -1228,8 +1228,9 @@ async function main() {
         // run cut at 150 would be redone and cut again). One that hangs (a dead connection, a
         // training thread that never answers) would otherwise stop training for good and block
         // "Retrain now". /health/worker calls a run hung well before this, once its exams stop
-        // moving (TRAINING_DEADLINE_MS in apps/api/src/routes/health.ts).
-        deadlineMinutes: 240,
+        // moving (TRAINING_DEADLINE_MS in apps/api/src/routes/health.ts), and pipeline-watch tells
+        // the admins once runs take three quarters of it.
+        deadlineMinutes: TRAINING_DEADLINE_MINUTES,
         // The admin panel's "Retrain now" (POST /admin/curator/retrain) leaves a request row.
         runEarly: { everyMs: 60_000, due: retrainRequested },
         // "Stop and retrain": the same row, left while a run is going (each run marks the requests
