@@ -26,6 +26,7 @@ import {
 } from "@trenchscanner/core";
 import { applyContestResults } from "./curatorTrainingJob.js";
 import { runModelBackupJob } from "./modelBackupJob.js";
+import { PartialJobFailure } from "../scheduler.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -343,5 +344,37 @@ describe.skipIf(!dbAvailable)("model backups", () => {
     expect(row.offsiteError).toBeNull();
     expect(puts[0]).toContain("/models/trenchscanner/model-backups/");
     expect(await uploadPendingBackups(loadEnv())).toMatchObject({ configured: false });
+  });
+
+  it("fails the pass, keeping its counts, once an off-site copy has been refused for over a day", async () => {
+    await seedGeneration(0.25, "Linear");
+    const env = {
+      ...loadEnv(),
+      MODEL_BACKUP_S3_ENDPOINT: "https://example.r2.cloudflarestorage.com",
+      MODEL_BACKUP_S3_BUCKET: "models",
+      MODEL_BACKUP_S3_ACCESS_KEY_ID: "id",
+      MODEL_BACKUP_S3_SECRET_ACCESS_KEY: "secret",
+    };
+    const failing = (async () => new Response("nope", { status: 403 })) as unknown as typeof fetch;
+    const now = new Date();
+
+    // A refusal on a backup taken this hour is retried next pass and is no news.
+    const fresh = (await saveModelBackup("manual"))!;
+    const first = await runModelBackupJob(env, now, failing);
+    expect(first).toMatchObject({ uploadFailed: expect.any(Number), offsiteStuckModels: 0 });
+    expect((await prisma.modelBackup.findUnique({ where: { id: fresh.id } }))!.offsiteError).toContain("403");
+
+    // The same refusal on a backup two days old means no off-site copy is being made.
+    await prisma.modelBackup.update({
+      where: { id: fresh.id },
+      data: { createdAt: new Date(now.getTime() - 2 * 86_400_000) },
+    });
+    const err = await runModelBackupJob(env, now, failing).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PartialJobFailure);
+    expect((err as PartialJobFailure).message).toMatch(/off-site copy refused for over a day: 1 model/);
+    expect((err as PartialJobFailure).meta).toMatchObject({ offsiteConfigured: true, offsiteStuckModels: 1 });
+
+    // Without a bucket nothing is uploaded, so nothing can be stuck.
+    await expect(runModelBackupJob(loadEnv(), now)).resolves.toMatchObject({ offsiteConfigured: false });
   });
 });

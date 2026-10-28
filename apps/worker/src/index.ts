@@ -191,8 +191,11 @@ const solUsdHistory = new SolUsdHistory();
 /** A day plus slack: a daily job whose last run is older than this missed its slot. */
 const DAILY_CATCH_UP_AFTER_HOURS = 26;
 /**
- * The nightly sweeps' deadline (cleanup, outcome-tracking): a run takes 3-16 minutes, 30 at the
- * worst seen, so one still going at two hours is hung, and the restart's catch-up re-runs it.
+ * The nightly sweeps' deadline (cleanup, outcome-tracking). On 2026-10-27 cleanup took about 8
+ * minutes and outcome-tracking 40 (2,427 s, 2,298 of them its live-price reads for ~51k mints,
+ * up from 36 on 10-23: full audit 2026-10-27, DB-13), so one still going at two hours is hung, and
+ * the restart's catch-up re-runs it. outcome-tracking's runtime trends up with the mints it
+ * prices: past about 90 minutes this deadline is the next thing to move.
  */
 const DAILY_SWEEP_DEADLINE_MINUTES = 120;
 /** The KOL roster read's: a few calls and an avatar pass. */
