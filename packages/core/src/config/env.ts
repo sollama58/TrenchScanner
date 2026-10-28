@@ -920,6 +920,21 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // A seat calls on the fast path only while its entry-row lift lower bound clears 1
+  // (curation/entryProof.ts, user decision 2026-10-27). On (the default) holds back the fast-path
+  // calls of seats with no proven edge there; the cycle still decides the coin. Off restores every
+  // seat's fast-path calls, the rollback if the cycle's later anchors cost more than they save.
+  CURATOR_ENTRY_PROOF: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // No seat calls a coin 60+ minutes old or 30+ minutes past its first band entry
+  // (curation/curator.ts isPastCalling, user decision 2026-10-27). On (the default); off restores
+  // those calls. The moments bank either way.
+  CURATOR_SKIP_PAST_CALLING: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // A Meteora DBC or Raydium LaunchLab curve keeps its created time, and a trading one is the
   // pair ahead of a deeper side pool. Off (the default): those venues are not a clock, which is
   // what shipped on 2026-10-21. On changes the price and the pair age of those coins, so which

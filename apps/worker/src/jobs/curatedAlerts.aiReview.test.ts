@@ -40,7 +40,8 @@ function fixture(mintAddress: string): ScoredToken {
     sells24h: 300,
     holderGrowthPct: 15,
     top10HolderPct: 20,
-    ageMinutes: 90,
+    // Young enough for a seat to call (isPastCalling).
+    ageMinutes: 20,
     graduated: true,
     narrativeTags: [],
     rugScreen: { passed: true, reasons: [] },
