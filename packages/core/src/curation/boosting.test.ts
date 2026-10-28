@@ -3,9 +3,14 @@ import {
   averageBoosted,
   binColumn,
   boostedContributions,
+  DEFAULT_BOOSTING_OPTIONS,
+  growTree,
+  rowMajorBins,
   scoreBoosted,
   trainBoostedCurator,
+  type BoostedTree,
   type BoostingRow,
+  type GrowContext,
 } from "./boosting.js";
 import {
   modelRationale,
@@ -219,6 +224,137 @@ describe("binColumn", () => {
         expect(bits(got.edges)).toEqual(bits(want.edges));
         expect(Array.from(got.bins)).toEqual(Array.from(want.bins));
       }
+    }
+  });
+});
+
+describe("growTree", () => {
+  // The split search as it was before the 2026-10-27 exam-time work (full audit DB-2, MT-10): one
+  // pass over the node's rows per feature, through fresh histograms. The fast one must grow the
+  // same tree to the bit, so speeding up the exams changes no model the run ships.
+  function growTreeReference(rows: Uint32Array, ctx: GrowContext): BoostedTree {
+    const { l2, minLeafRows, minLeafHessian, learningRate, maxDepth } = ctx.opts;
+    const bestSplit = (nodeRows: Uint32Array, gSum: number, hSum: number) => {
+      const parentScore = (gSum * gSum) / (hSum + l2);
+      let best: { gain: number; feature: number; binCut: number; missingLeft: boolean } | null = null;
+      for (const f of ctx.features) {
+        const nb = ctx.edges[f]!.length + 2;
+        if (nb <= 2) continue;
+        const G = new Float64Array(nb);
+        const H = new Float64Array(nb);
+        const C = new Uint32Array(nb);
+        for (let k = 0; k < nodeRows.length; k++) {
+          const i = nodeRows[k]!;
+          const b = ctx.bins[f]![i]!;
+          G[b] = G[b]! + ctx.grad[i]!;
+          H[b] = H[b]! + ctx.hess[i]!;
+          C[b] = C[b]! + 1;
+        }
+        let gl = 0;
+        let hl = 0;
+        let cl = 0;
+        for (let k = 1; k < nb - 1; k++) {
+          gl += G[k]!;
+          hl += H[k]!;
+          cl += C[k]!;
+          for (const missLeft of [false, true]) {
+            const gL = missLeft ? gl + G[0]! : gl;
+            const hL = missLeft ? hl + H[0]! : hl;
+            const cL = missLeft ? cl + C[0]! : cl;
+            const gR = gSum - gL;
+            const hR = hSum - hL;
+            const cR = nodeRows.length - cL;
+            if (cL < minLeafRows || cR < minLeafRows || hL < minLeafHessian || hR < minLeafHessian) continue;
+            const gain = (gL * gL) / (hL + l2) + (gR * gR) / (hR + l2) - parentScore;
+            if (gain > 1e-9 && (best === null || gain > best.gain)) {
+              best = { gain, feature: f, binCut: k, missingLeft: C[0] === 0 ? hL >= hR : missLeft };
+            }
+            if (C[0] === 0) break;
+          }
+        }
+      }
+      return best;
+    };
+    const tree: BoostedTree = { feature: [], threshold: [], missingLeft: [], left: [], right: [], value: [] };
+    const grow = (nodeRows: Uint32Array, depth: number): number => {
+      let g = 0;
+      let h = 0;
+      for (const i of nodeRows) {
+        g += ctx.grad[i]!;
+        h += ctx.hess[i]!;
+      }
+      const id = tree.feature.length;
+      tree.feature.push(-1);
+      tree.threshold.push(0);
+      tree.missingLeft.push(0);
+      tree.left.push(-1);
+      tree.right.push(-1);
+      tree.value.push(ctx.nodeValue ? ctx.nodeValue(g, h, nodeRows) : (-g / (h + l2)) * learningRate);
+      if (depth >= maxDepth) return id;
+      const split = bestSplit(nodeRows, g, h);
+      if (split === null) return id;
+      const left: number[] = [];
+      const right: number[] = [];
+      for (const i of nodeRows) {
+        const b = ctx.bins[split.feature]![i]!;
+        ((b === 0 ? split.missingLeft : b <= split.binCut) ? left : right).push(i);
+      }
+      tree.feature[id] = split.feature;
+      tree.threshold[id] = ctx.edges[split.feature]![split.binCut - 1]!;
+      tree.missingLeft[id] = split.missingLeft ? 1 : 0;
+      tree.left[id] = grow(Uint32Array.from(left), depth + 1);
+      tree.right[id] = grow(Uint32Array.from(right), depth + 1);
+      return id;
+    };
+    grow(rows, 0);
+    return tree;
+  }
+
+  const treeBits = (t: BoostedTree) => ({
+    ...t,
+    threshold: Array.from(new BigUint64Array(Float64Array.from(t.threshold).buffer), String),
+    value: Array.from(new BigUint64Array(Float64Array.from(t.value).buffer), String),
+  });
+
+  it("grows the same tree, to the bit, as the per-feature split search it replaced", () => {
+    for (let seed = 1; seed <= 30; seed++) {
+      const rand = rng(seed);
+      const n = 50 + Math.floor(rand() * 1500);
+      const featureCount = 1 + Math.floor(rand() * 12);
+      // Missing values, ties, a constant and an all-missing column, and very few distinct values.
+      const binned = Array.from({ length: featureCount }, (_, f) => {
+        const levels = f === 0 ? 1 : 1 + Math.floor(rand() * 40);
+        const col = Float64Array.from({ length: n }, () => {
+          if (f === 1 && featureCount > 2) return NaN;
+          return rand() < 0.2 ? NaN : Math.floor(rand() * levels);
+        });
+        return binColumn(col, 2 + Math.floor(rand() * 40));
+      });
+      const grad = Float64Array.from({ length: n }, () => rand() - 0.3);
+      const hess = Float64Array.from({ length: n }, () => 0.05 + rand() * 0.2);
+      const sampled = Uint32Array.from(Array.from({ length: n }, (_, i) => i).filter(() => rand() < 0.8));
+      const features = Array.from({ length: featureCount }, (_, f) => f).filter(() => rand() < 0.8);
+      const opts = {
+        ...DEFAULT_BOOSTING_OPTIONS,
+        maxDepth: 1 + Math.floor(rand() * 6),
+        minLeafRows: 1 + Math.floor(rand() * 40),
+        minLeafHessian: rand() * 2,
+      };
+      const bins = binned.map((b) => b.bins);
+      const ctx: GrowContext = {
+        bins,
+        edges: binned.map((b) => b.edges),
+        grad,
+        hess,
+        opts,
+        features: features.length > 0 ? features : [0],
+        ...(seed % 3 === 0
+          ? { nodeValue: (g: number, h: number, rows: Uint32Array) => g / (h + rows.length) }
+          : {}),
+      };
+      const want = treeBits(growTreeReference(sampled, ctx));
+      expect(treeBits(growTree(sampled, ctx))).toEqual(want);
+      expect(treeBits(growTree(sampled, { ...ctx, rowBins: rowMajorBins(bins, n) }))).toEqual(want);
     }
   });
 });
