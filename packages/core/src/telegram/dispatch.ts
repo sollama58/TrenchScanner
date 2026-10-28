@@ -88,7 +88,8 @@ const ACCESS_CHECK_BATCH = 8;
  */
 const MAX_RETRY_AFTER_MS = 3_600_000;
 /** Failed passes before a chat is switched off rather than retried forever... */
-const MAX_FAILURES = 100;
+export const TELEGRAM_MAX_FAILURES = 100;
+const MAX_FAILURES = TELEGRAM_MAX_FAILURES;
 /**
  * ...and only once nothing has reached it for this long, too. Passes run every few seconds while
  * alerts flow, so 100 failed passes alone could be a few minutes of one bad hour.

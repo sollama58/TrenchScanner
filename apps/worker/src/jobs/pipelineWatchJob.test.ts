@@ -9,6 +9,7 @@ import {
   CREDITS_OUT_BANNER,
   decidedMs,
   findAgedOutProblems,
+  findDisabledChatProblems,
   findScanLatencyProblems,
   findTrainingRunProblems,
   SCAN_LATENCY_SAMPLES,
@@ -491,6 +492,18 @@ describe("pipeline watch: warning before a run-out (audit 2026-10-27, T3)", () =
     // A restarted dispatcher counts from zero: its count is all new.
     const restarted = findAgedOutProblems(quiet.state, 2, NOW + 2 * HOUR);
     expect(restarted.problems[0]!.text).toContain("2 dropped unsent");
+  });
+
+  it("tells the admins while any linked chat is switched off for failing", () => {
+    expect(findDisabledChatProblems(0)).toEqual([]);
+    expect(findDisabledChatProblems(1)).toEqual([
+      {
+        key: "telegram-disabled",
+        text: "Telegram alerts: 1 linked chat switched off after a day of failed sends - the owner gets nothing until it is switched back on",
+        side: true,
+      },
+    ]);
+    expect(findDisabledChatProblems(3)[0]!.text).toContain("3 linked chats switched off");
   });
 
   it("times a cycle from its start to the contenders' decisions (DS-11)", () => {
