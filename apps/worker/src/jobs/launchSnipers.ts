@@ -264,6 +264,16 @@ export function sniperShareUnobtainable(mint: string): boolean {
   return e !== undefined && e.complete && e.buyers.length === 0;
 }
 
+/**
+ * Whether the Block 0 figure (blockZeroHeldPct) can never be measured for this mint, so a decision
+ * should not wait for it: the launch was read and gave no slots to go by, or (sniperShareUnobtainable)
+ * its history has no curve launch at all. A read still to come, or one that failed, is not this.
+ */
+export function blockZeroUnobtainable(mint: string): boolean {
+  const e = entries.get(mint);
+  return sniperShareUnobtainable(mint) || (e !== undefined && e.figures.blockZeroBuyers === null);
+}
+
 /** A cache entry for a launch read, carrying over `prev`'s balances when its accounts are the same. */
 function entryOf(
   reading: LaunchBuyersReading,

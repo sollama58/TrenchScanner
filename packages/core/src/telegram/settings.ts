@@ -47,7 +47,7 @@ const PART_BUTTONS: { part: AlertPart; label: string }[] = [
   { part: "holders", label: "Holders" },
   { part: "volume", label: "Volume" },
   { part: "age", label: "Age" },
-  { part: "conviction", label: "Conviction" },
+  { part: "conviction", label: "Model score" },
   { part: "calibrated", label: "2x rate" },
   { part: "reasons", label: "Reasons" },
   { part: "filters", label: "Filters" },

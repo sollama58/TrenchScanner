@@ -1,5 +1,10 @@
 import { fetchJson, HttpError } from "./httpClient.js";
-import { pumpFunFrontendGate, pumpFunSwapGate, type PumpFunGate } from "./pumpfunGate.js";
+import {
+  PUMPFUN_REQUEST_HEADERS,
+  pumpFunFrontendGate,
+  pumpFunSwapGate,
+  type PumpFunGate,
+} from "./pumpfunGate.js";
 import { createLogger } from "../logger.js";
 import { mintSupplies, onCurrentSupply } from "../mintSupply.js";
 import { normalizeSocialUrl } from "./tokensage.js";
@@ -264,6 +269,8 @@ export class PumpFunClient {
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs,
           retries: 0,
         },
@@ -290,6 +297,8 @@ export class PumpFunClient {
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs,
           retries: 0,
         },
@@ -323,6 +332,8 @@ export class PumpFunClient {
         `${this.baseUrl}/coins/king-of-the-hill?includeNsfw=false`,
         {
           gate: this.frontendGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs: 8000,
           retries: 1,
         },
@@ -346,6 +357,8 @@ export class PumpFunClient {
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs: 5000,
           retries: 0,
         },
@@ -369,6 +382,8 @@ export class PumpFunClient {
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs,
           retries: 0,
         },
@@ -403,6 +418,8 @@ export class PumpFunClient {
         `${this.swapBaseUrl}/v2/coins/${encodeURIComponent(mintAddress)}/trades?limit=100&cursor=${encodeURIComponent(cursor)}`,
         {
           gate: this.swapGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs,
           retries: 0,
         },
@@ -424,6 +441,8 @@ export class PumpFunClient {
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs: 5000,
           retries: 0,
         },
@@ -471,6 +490,8 @@ export class PumpFunClient {
         `${this.swapBaseUrl}/v1/coins/${encodeURIComponent(mintAddress)}/candles?interval=${interval}&limit=${MINUTE_CANDLE_PAGE}&currency=USD`,
         {
           gate: this.swapGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs,
           retries: 0,
         },
@@ -508,6 +529,8 @@ export class PumpFunClient {
       try {
         coins = await fetchJson<PumpFunCoin[]>(`${this.baseUrl}/coins/currently-live?${query.toString()}`, {
           gate: this.frontendGate,
+
+          headers: PUMPFUN_REQUEST_HEADERS,
           timeoutMs: 8000,
           retries: 1,
         });
@@ -560,6 +583,8 @@ export class PumpFunClient {
     try {
       const coins = await fetchJson<PumpFunCoin[]>(`${this.baseUrl}/coins?${query.toString()}`, {
         gate: this.frontendGate,
+
+        headers: PUMPFUN_REQUEST_HEADERS,
         timeoutMs: 8000,
         retries: 1,
       });

@@ -124,6 +124,18 @@ describe("tokenImageSources", () => {
     expect(tokenImageSources(null, 96, "../../pump")).toEqual([]);
   });
 
+  it("puts Pump.fun's small copy before a launcher URL it can't resize", () => {
+    // A 1,041,448 B original loaded for a card avatar (audit 10-27 WB-16).
+    const mint = "2bjLxGw7HYx47ir6RJq8ijXjMJnVFtFCgBFzTN9Gpump";
+    const own = "https://meta.example.fun/images/coin.png";
+    expect(tokenImageSources(own, 96, mint)).toEqual([
+      `https://images.pump.fun/coin-image/${mint}?variant=96x96`,
+      own,
+    ]);
+    // Nothing smaller to offer for any other mint: the original alone.
+    expect(tokenImageSources(own, 96, "4sF5F6jxjj1MTPbc379n7rchnrxUdC38y3RMmcDXvNsi")).toEqual([own]);
+  });
+
   it("has just the original for other hosts, and nothing for non-https", () => {
     expect(tokenImageSources("https://pbs.twimg.com/media/abc.jpg")).toEqual([
       "https://pbs.twimg.com/media/abc.jpg",

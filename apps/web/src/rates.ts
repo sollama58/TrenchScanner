@@ -12,19 +12,27 @@ export const Z90 = 1.645;
 
 /**
  * The grading rule the Models tab's rates count (REPORTED_LABEL_RULE = 3 in packages/core
- * curation/labels.ts): rule-3 and rule-4 rows together.
+ * curation/labels.ts): rule 3 and every newer rule (4, 5 and 6) together.
  */
 export const RULE_NOTE = "Graded rule 3+: 2x within 15 min of the alert, before a 50% stop.";
 
-/** The rule-4 grade on its own (CURRENT_LABEL_RULE): the alert priced from a seconds-old quote. */
-export const RULE4_NOTE = "Graded rule 4: 2x within 15 min of the alert (fresh quote), before a 50% stop.";
-
 /**
  * Lighthouse and TokenSage rates read rollups with no label-rule filter; their history starts after
- * the old scan-price grades, so in practice they mix rule 3 and rule 4 like the Models tab.
+ * the old scan-price grades, so in practice they mix rules 3 to 6 like the Models tab.
  */
 export const RULE_NOTE_UNFILTERED =
-  "Graded rules 3 and 4 (no rule filter): 2x within 15 min of the alert, before a 50% stop.";
+  "Graded rules 3-6 (no rule filter): 2x within 15 min of the alert, before a 50% stop.";
+
+/** The short form the Lighthouse card footers end with. */
+export const RULE_RANGE_SHORT = "rules 3-6";
+
+/**
+ * What a graded rate promises a follower (audit 10-27 GF-11): it is measured from the alert's own
+ * price. An independent re-grade found a buyer about a minute later kept roughly half the wins as 2x
+ * from their own price (38-40 of 80), while a buy within seconds of the alert costs little.
+ */
+export const FOLLOWER_NOTE =
+  "Rates are measured from the alert price: a buy within seconds of the alert gets close to them, one a minute or more later keeps only about half the 2x wins.";
 
 /** Below the floor: shown, but muted and never green. */
 export const isEarly = (graded: number | null | undefined) => (graded ?? 0) < MIN_GRADED_FOR_RATE;

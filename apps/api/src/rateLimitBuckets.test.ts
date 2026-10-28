@@ -24,16 +24,16 @@ describe("sizeRouteRateLimits", () => {
   const hit = (app: Awaited<ReturnType<typeof server>>, url: string, key: string) =>
     app.inject({ method: "GET", url, headers: { "x-k": key } }).then((r) => r.statusCode);
 
-  it("keeps a caller's bucket while 5,000 other callers come through, and leaves /ext/v1 alone", async () => {
+  it("keeps a caller's bucket while 5,000 other callers come through, /ext/v1 included", async () => {
     const app = await server();
     for (const url of ["/limited", "/ext/v1/limited"]) {
       expect(await hit(app, url, "first")).toBe(200);
       expect(await hit(app, url, "first")).toBe(429);
       for (let i = 0; i < 5_001; i++) await hit(app, url, `k${i}`);
     }
-    // Still remembered on the sized route; flushed out of the default-sized one.
+    // Still remembered on both: the extension's routes are no longer left at the default (AP-3).
     expect(await hit(app, "/limited", "first")).toBe(429);
-    expect(await hit(app, "/ext/v1/limited", "first")).toBe(200);
+    expect(await hit(app, "/ext/v1/limited", "first")).toBe(429);
     await app.close();
   }, 30_000);
 });

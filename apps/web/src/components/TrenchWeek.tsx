@@ -66,7 +66,9 @@ export function TrenchWeek({ base }: { base: string }) {
       <p className="faint small lh-trench-foot">
         {cur.samples.graded.toLocaleString()} graded calls · {cur.samples.screened.toLocaleString()} tokens
         screened in the window. The line is the last week in {d.windowHours}-hour steps; hover it to read any
-        of them. Rates need {d.minSample}+ graded calls, and the newest hours keep grading for an hour.
+        of them. Rates need {d.minSample}+ graded calls, and the newest hours keep grading for an hour. They
+        count each coin's decision moments; the market weather also counts the hourly re-reads of every coin
+        in the band, older ones included, so its 2x rate reads lower.
       </p>
     </div>
   );

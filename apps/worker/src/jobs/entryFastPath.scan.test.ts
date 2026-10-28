@@ -11,7 +11,7 @@ import {
   type ScoredToken,
 } from "@trenchscanner/core";
 import type { CandidateSampleRef } from "./candidateOutcomeJob.js";
-import { runEntryScan, runScanCycle, type ScanDeps } from "./scanJob.js";
+import { runEntryScan, runScanCycle, setUptimeSource, type ScanDeps } from "./scanJob.js";
 
 /** Every coin put before the curators, with the decision moment it was put there on. */
 const decided = vi.hoisted(
@@ -155,7 +155,10 @@ function expectSameReadings(actual: Record<string, unknown>, expected: Record<st
 
 describe.skipIf(!dbAvailable)("the entry fast path's first scan", () => {
   const created: string[] = [];
+  // Long past a boot: the hourly samples below don't wait for a live-tape page (BOOT_TAPE_WARMUP_SECONDS).
+  setUptimeSource(() => 3_600);
   afterAll(async () => {
+    setUptimeSource();
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { in: created } } });
   });

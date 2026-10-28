@@ -4,6 +4,7 @@ import {
   everyWhileVisible,
   pollIsStale,
   pollMountMaxAge,
+  pollTickMaxAge,
   pollWant,
   shouldPollOnVisible,
   viewForMint,
@@ -140,5 +141,12 @@ describe("everyWhileVisible", () => {
       vi.unstubAllGlobals();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("pollTickMaxAge", () => {
+  it("lets a timed tick reuse another view's read from the last half interval, never for a chart", () => {
+    expect(pollTickMaxAge("/curated/models?days=30", 120_000)).toBe(60_000);
+    expect(pollTickMaxAge("/tokens/abc/chart", 15_000)).toBe(0);
   });
 });

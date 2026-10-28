@@ -86,6 +86,44 @@ export function findProgramAddress(seeds: Uint8Array[], programIdBase58: string)
   throw new Error("unable to find a viable program address bump");
 }
 
+/** Metaplex's Token Metadata program: a classic SPL mint's name, symbol and metadata URI. */
+export const TOKEN_METADATA_PROGRAM_ID = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
+
+/** The `["metadata", program, mint]` PDA under Token Metadata: where a mint's metadata URI lives. */
+export function metaplexMetadataAddress(mintAddress: string): string {
+  return findProgramAddress(
+    [new TextEncoder().encode("metadata"), bs58.decode(TOKEN_METADATA_PROGRAM_ID), bs58.decode(mintAddress)],
+    TOKEN_METADATA_PROGRAM_ID,
+  );
+}
+
+/** Longest name, symbol or URI decodeMetaplexUri reads; Metaplex caps them at 32, 10 and 200. */
+const METAPLEX_MAX_STRING = 1_000;
+
+/**
+ * The `uri` of a Token Metadata account (MetadataV1: key, update authority, mint, then the name,
+ * symbol and uri as length-prefixed strings padded with NULs). Null when the bytes aren't one, or
+ * carry no URI.
+ */
+export function decodeMetaplexUri(data: Uint8Array): string | null {
+  const METADATA_V1 = 4;
+  if (data.length < 65 || data[0] !== METADATA_V1) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let offset = 65;
+  const readString = (): string | null => {
+    if (offset + 4 > data.length) return null;
+    const len = view.getUint32(offset, true);
+    offset += 4;
+    if (len > METAPLEX_MAX_STRING || offset + len > data.length) return null;
+    const text = new TextDecoder().decode(data.subarray(offset, offset + len));
+    offset += len;
+    return text.replace(/\0+$/, "").trim();
+  };
+  if (readString() === null || readString() === null) return null;
+  const uri = readString();
+  return uri ? uri : null;
+}
+
 /**
  * Pump.fun's Mayhem Mode program. A token launched in Mayhem Mode gets a per-mint state account
  * under this program; a normal Pump.fun token never does. See mayhemStateAddress below.

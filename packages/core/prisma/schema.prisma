@@ -2639,6 +2639,9 @@ model AiReplayVerdict {
   inputTokens        Int?
   outputTokens       Int?
 
+  /// One verdict per playbook per alert in a run: an ingest racing a re-ingest of the same batch
+  /// (a lost lock) skips the copies instead of doubling the record (worker ai/replay.ts).
+  @@unique([runId, playbookId, candidateOutcomeId])
   @@index([runId])
   @@index([playbookId])
 }

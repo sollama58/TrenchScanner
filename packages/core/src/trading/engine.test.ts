@@ -3,7 +3,9 @@ import bs58 from "bs58";
 import { PrismaClient } from "@prisma/client";
 import { appendPoolParams, namePassLock, PASS_LOCK_APPLICATION_NAME, prisma } from "../db.js";
 import {
+  aiJudgeHasRecord,
   feeForRetry,
+  resetAiJudgeRecordCache,
   runTradingEngine,
   SIGNAL_COMMIT_GRACE_MS,
   signalHorizon,
@@ -486,11 +488,12 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect((await position()).status).toBe("open");
   };
 
-  const aiReview = (decision: "buy" | "no_buy", probability2x = 0.6) =>
+  // A real-money bot trades on gate-mode verdicts only (the in-cycle review before the alert).
+  const aiReview = (decision: "buy" | "no_buy", probability2x = 0.6, mode: "gate" | "shadow" = "gate") =>
     prisma.aiReview.create({
       data: {
         tokenId,
-        mode: "shadow",
+        mode,
         model: "test",
         decision,
         probability2x,
@@ -533,6 +536,16 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect(run.skipped).toBe(1);
     await aiReview("buy");
     expect((await tick()).buys).toBe(0);
+  });
+
+  it("with the AI gate on, a live bot never buys on a shadow review's verdict", async () => {
+    await gated();
+    await aiReview("buy", 0.9, "shadow");
+    // Read as no verdict: the window holds while the signal is fresh, then skips it.
+    expect((await tick()).buys).toBe(0);
+    const run = await tick(3);
+    expect(run.buys).toBe(0);
+    expect(run.skipped).toBe(1);
   });
 
   it("while the AI reviewer switch is on test (admins only), a live bot never buys on a verdict", async () => {
@@ -1232,7 +1245,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
       await prisma.aiReview.create({
         data: {
           tokenId: otherId,
-          mode: "shadow",
+          mode: "gate",
           model: "test",
           decision: "buy",
           probability2x: 0.6,
@@ -1340,6 +1353,71 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect(chain.sent).toHaveLength(0);
     await prisma.tradingWallet.update({ where: { userId }, data: { withdrawTo: admin } });
     await prisma.user.update({ where: { id: userId }, data: { walletAddress: admin } });
+  });
+});
+
+describe.skipIf(!dbAvailable)("aiJudgeHasRecord", () => {
+  const tag = `judge-record-${Date.now()}`;
+  afterAll(async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: tag } } });
+    resetAiJudgeRecordCache();
+  });
+
+  it("counts coins the judge called buy whose outcome is graded, each coin once", async () => {
+    const gradedBuyCoins = async () =>
+      (
+        await prisma.aiReview.groupBy({
+          by: ["tokenId"],
+          where: { decision: "buy", candidateOutcome: { is: { finalizedAt: { not: null } } } },
+        })
+      ).length;
+    const before = await gradedBuyCoins();
+    const coin = async (name: string, reviews: { decision: string; finalized: boolean }[]) => {
+      const token = await prisma.token.create({ data: { mintAddress: `${tag}-${name}` } });
+      for (const r of reviews) {
+        const outcome = await prisma.candidateOutcome.create({
+          data: {
+            tokenId: token.id,
+            anchorAt: new Date(),
+            anchorPriceUsd: 1,
+            anchorMcapUsd: 10_000,
+            sampleKind: "event",
+            labelRule: 3,
+            features: {},
+            nextCheckAt: new Date(),
+            peak1hPriceUsd: 1,
+            low1hPriceUsd: 1,
+            lowBefore2xPriceUsd: 1,
+            peak24hPriceUsd: 1,
+            finalizedAt: r.finalized ? new Date() : null,
+          },
+        });
+        await prisma.aiReview.create({
+          data: {
+            tokenId: token.id,
+            candidateOutcomeId: outcome.id,
+            mode: "shadow",
+            model: "test",
+            decision: r.decision,
+            latencyMs: 1,
+            anchorPriceUsd: 1,
+            anchorMcapUsd: 10_000,
+          },
+        });
+      }
+    };
+    // Two graded buys on one coin count once; a no_buy and an ungraded buy don't count.
+    await coin("twice", [
+      { decision: "buy", finalized: true },
+      { decision: "buy", finalized: true },
+    ]);
+    await coin("once", [{ decision: "buy", finalized: true }]);
+    await coin("pass", [{ decision: "no_buy", finalized: true }]);
+    await coin("open", [{ decision: "buy", finalized: false }]);
+    resetAiJudgeRecordCache();
+    expect(await aiJudgeHasRecord(before + 2)).toBe(true);
+    resetAiJudgeRecordCache();
+    expect(await aiJudgeHasRecord(before + 3)).toBe(false);
   });
 });
 

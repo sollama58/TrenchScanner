@@ -1000,11 +1000,15 @@ export function resolveOutcome(alert: OutcomeSources): OutcomeView {
     // freezes at the first 2x (see applyPriceTick), so nothing left in the window can change it.
     // Showing it as "watching" put a green 2x check on a stopped-out call for up to 15 minutes.
     const disqualified = hit2x && disqualifiedByDrawdown(live);
-    if (elapsedMin >= WIN_WINDOW_MINUTES || disqualified) {
+    // A call past the stop with no 2x yet can no longer win (the grade is 2x before the stop), so
+    // it settles as a miss now rather than reading as live for the rest of the window (audit 10-27
+    // WB-17). A 2x that still lands later turns it "disqualified", as above.
+    const stopped = !hit2x && disqualifiedByDrawdown(live);
+    if (elapsedMin >= WIN_WINDOW_MINUTES || disqualified || stopped) {
       return {
         status: disqualified ? "disqualified" : hit2x ? "won" : "missed",
         hit2x,
-        hitGoal: hitGoal ? true : elapsedMin >= GOAL_WINDOW_MINUTES ? false : null,
+        hitGoal: hitGoal ? true : elapsedMin >= GOAL_WINDOW_MINUTES || stopped ? false : null,
         hitTenX:
           live.peakBeforeStop60mPriceUsd == null
             ? null

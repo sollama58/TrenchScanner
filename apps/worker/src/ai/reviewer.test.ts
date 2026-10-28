@@ -6,7 +6,7 @@ import {
   type Env,
   type ScoredToken,
 } from "@trenchscanner/core";
-import { parseVerdictText, reviewPick, verdictFromParsed } from "./reviewer.js";
+import { parseVerdictText, reviewPick, reviewTimeoutMs, verdictFromParsed } from "./reviewer.js";
 
 const decision = {
   curate: true,
@@ -78,5 +78,18 @@ describe("verdictFromParsed", () => {
     expect(held.probability2x).toBe(0.4);
     expect(held.risks).toEqual(["2x odds 40% under the 50% buy bar"]);
     expect(verdictFromParsed({ ...parsed, probability2x: 0.6 }, 0.5).decision).toBe("buy");
+  });
+});
+
+describe("reviewTimeoutMs", () => {
+  const env = { AI_REVIEW_TIMEOUT_MS: 60_000, AI_REVIEW_SHADOW_TIMEOUT_MS: 120_000 };
+
+  it("keeps the gate review's short timeout and gives a detached shadow review longer", () => {
+    expect(reviewTimeoutMs(env, true)).toBe(60_000);
+    expect(reviewTimeoutMs(env, false)).toBe(120_000);
+  });
+
+  it("never gives a shadow review less than a gate review", () => {
+    expect(reviewTimeoutMs({ ...env, AI_REVIEW_SHADOW_TIMEOUT_MS: 30_000 }, false)).toBe(60_000);
   });
 });

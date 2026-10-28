@@ -16,6 +16,7 @@ import {
   tokenSageFlagSeverity,
   tokenSageRulesAtLeast,
   normalizeSocialUrl,
+  tokenSageDescription,
   tokenSageSocials,
   storableAnalysis,
   STORED_ANALYSIS_MAX_BYTES,
@@ -72,6 +73,18 @@ describe("tokenSageSocials", () => {
     });
     expect(tokenSageSocials({ raw: { twitter: "https://evil.com/x" } })).toEqual({});
     expect(tokenSageSocials(null)).toEqual({});
+  });
+});
+
+describe("tokenSageDescription", () => {
+  it("reads the description TokenSage's metadata read found, trimmed and capped (DA-11)", () => {
+    expect(tokenSageDescription({ raw: { description: "  a dog on the moon " } })).toBe("a dog on the moon");
+    expect(tokenSageDescription({ raw: { description: "x".repeat(3_000) } })).toHaveLength(2_000);
+    // Empty can't be told from "not asked" when raw is our own hints: left unknown.
+    expect(tokenSageDescription({ raw: { description: "   " } })).toBeUndefined();
+    expect(tokenSageDescription({ raw: { description: 7 } })).toBeUndefined();
+    expect(tokenSageDescription({ raw: null })).toBeUndefined();
+    expect(tokenSageDescription(null)).toBeUndefined();
   });
 });
 

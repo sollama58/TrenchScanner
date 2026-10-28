@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 /**
  * The Pro token view's sizes, the reader's own (user ask 2026-10-19): the width of the column beside
@@ -99,6 +99,15 @@ export function TermSplit({
   // A column's left edge: dragged left, the column widens.
   const sign = axis === "x" ? -1 : 1;
   const clamp = (n: number) => Math.round(Math.min(max, Math.max(min, n)));
+  // A focusable separator must say where it sits (aria-valuenow): the reader's size, else the
+  // layout's own as measured after it renders (audit 10-27 WB-19).
+  const [measured, setMeasured] = useState<number | null>(null);
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
+  useEffect(() => {
+    // Re-measured when the reader's size is cleared.
+    if (value === null) setMeasured(clamp(sizeRef.current()));
+  }, [value]);
   const sizeAt = (e: React.PointerEvent) =>
     clamp(drag.current!.from + sign * ((axis === "x" ? e.clientX : e.clientY) - drag.current!.at));
   return (
@@ -106,7 +115,7 @@ export function TermSplit({
       role="separator"
       aria-orientation={axis === "x" ? "vertical" : "horizontal"}
       aria-label={label}
-      aria-valuenow={value ?? undefined}
+      aria-valuenow={value ?? measured ?? min}
       aria-valuemin={min}
       aria-valuemax={max}
       tabIndex={0}

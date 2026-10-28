@@ -1,6 +1,6 @@
 import type { LighthouseCount, LighthouseTally, MarketLighthouse, MarketWeather } from "../api";
 import { pct, signedPct } from "../format";
-import { MIN_GRADED_FOR_RATE as MIN_GRADED } from "../rates";
+import { MIN_GRADED_FOR_RATE as MIN_GRADED, RULE_RANGE_SHORT } from "../rates";
 import type { Series, Unit } from "../lighthouseMetrics";
 import {
   BODY_BOTTOM,
@@ -498,7 +498,7 @@ export async function renderScreenedCard(s: Screened, span: string): Promise<HTM
     "Every token that passed our safety pre-checks, graded from when it looked ready.",
     {
       badge: windowBadge(`Last ${span}`),
-      footer: `${n(s.graded)} tokens graded on a fixed exit plan, rules 3-4`,
+      footer: `${n(s.graded)} tokens graded on a fixed exit plan, ${RULE_RANGE_SHORT}`,
       link: LINK,
       time: true,
     },
@@ -595,7 +595,7 @@ export async function renderHourOfDayCard(h: HourOfDayData, clock: Clock): Promi
     `Every token that passed our safety pre-checks over ${n(h.days)} days, by the hour it was decided on.`,
     {
       badge: (c, right, cy) => pill(c, right, cy, `Local time · ${clock.name}`, clockGlyph),
-      footer: `${n(st.calls)} screened, ${n(st.graded)} graded on a fixed exit plan, rules 3-4`,
+      footer: `${n(st.calls)} screened, ${n(st.graded)} graded on a fixed exit plan, ${RULE_RANGE_SHORT}`,
       link: LINK,
     },
   );
@@ -922,7 +922,7 @@ export async function renderNarrativesPayCard(
     `Model alerts by narrative: return and 2x rate against the average alert.`,
     {
       badge: windowBadge(`Last ${span}`),
-      footer: `${n(outcomes.graded)} graded model alerts · 2x in 15 min before a 50% stop, rules 3-4`,
+      footer: `${n(outcomes.graded)} graded model alerts · 2x in 15 min before a 50% stop, ${RULE_RANGE_SHORT}`,
       link: LINK,
       time: true,
     },

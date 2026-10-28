@@ -226,7 +226,19 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
                     {t.source ? ` · ${t.source.name}` : ""}
                   </small>
                 </span>
-                <span className={`returns-x num ${tone(t.peakPct)}`}>{multiple(t.peakPct)}</span>
+                <span
+                  className={`returns-x num ${tone(t.peakPct)}`}
+                  title="Peak: the highest it went above the alert price"
+                >
+                  {multiple(t.peakPct)}
+                  {t.returnPct != null && (
+                    <small className="returns-plan faint" title="What the exit plan returned on this call">
+                      {" "}
+                      plan {signedPct(t.returnPct, 0)}
+                      {t.open ? " so far" : ""}
+                    </small>
+                  )}
+                </span>
                 <button
                   type="button"
                   className="ghost small"
