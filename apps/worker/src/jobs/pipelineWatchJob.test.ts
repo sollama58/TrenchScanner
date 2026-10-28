@@ -514,7 +514,7 @@ describe("pipeline watch: warning before a run-out (audit 2026-10-27, T3)", () =
     ).toBe(16_200);
   });
 
-  it("flags the cycle's median time to its decisions past 35 s over 10 cycles, clearing under 30 s (DS-11)", () => {
+  it("flags the cycle's median time to its decisions past 27 s over 10 cycles, clearing under 24 s (DS-11)", () => {
     let state = null as Parameters<typeof findScanLatencyProblems>[0];
     const feed = (ms: number[], start: number, flagged = false) => {
       let problems: ReturnType<typeof findScanLatencyProblems>["problems"] = [];
@@ -537,10 +537,12 @@ describe("pipeline watch: warning before a run-out (audit 2026-10-27, T3)", () =
     expect(findScanLatencyProblems(state, { runAt: new Date(NOW + 20 * MIN), ms: 1 }, true).state).toEqual(
       state,
     );
-    // Down to 32 s: still flagged while it was, not flagged when it wasn't.
-    expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(32_000), NOW + HOUR, true)).toHaveLength(1);
+    // Down to 25 s: still flagged while it was, not flagged when it wasn't.
+    expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(25_000), NOW + HOUR, true)).toHaveLength(1);
     expect(findScanLatencyProblems(state, null, false).problems).toEqual([]);
-    expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(28_000), NOW + 2 * HOUR, true)).toEqual([]);
+    expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(22_000), NOW + 2 * HOUR, true)).toEqual([]);
+    // Back to 2026-10-27's 27.6 s median: flagged again.
+    expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(27_600), NOW + 3 * HOUR)).toHaveLength(1);
   });
 
   it("flags training runs at three quarters of their deadline, finished or in flight (DB-2)", () => {
