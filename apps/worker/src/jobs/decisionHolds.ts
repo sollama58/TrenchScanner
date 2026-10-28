@@ -12,6 +12,8 @@
  * - `launchReadWait`: waiting on the launch read's Block 0 figure (launchReadReady). Named `sniperWait`
  *   until 2026-10-27, when the wait keyed on the retired top-10 snipers share (audit, SW-4).
  * - `linkedWait`: waiting on the Linked and CEX-funded counts (linkedListReady).
+ * - `preBondWait`: the pre-bond cut's lookups for the coin are still running behind the cycle
+ *   (launchTimes.ts startPreBondLookups; since 2026-10-28, when they left the decision path).
  *
  * A coin counts once per reason per cycle it is held, so a coin held for three cycles counts
  * three times, and one waiting on both the snipers and the linked list counts under both. A hold
@@ -19,7 +21,13 @@
  * CANDIDATE_EVENT_SPACING_MINUTES is held all the same); read the counts against the cycle's
  * banked event rows (samplesBanked) for scale.
  */
-export const DECISION_HOLD_REASONS = ["preGate5m", "walletChecks", "launchReadWait", "linkedWait"] as const;
+export const DECISION_HOLD_REASONS = [
+  "preGate5m",
+  "walletChecks",
+  "launchReadWait",
+  "linkedWait",
+  "preBondWait",
+] as const;
 export type DecisionHoldReason = (typeof DECISION_HOLD_REASONS)[number];
 
 function zeroes(): Record<DecisionHoldReason, number> {

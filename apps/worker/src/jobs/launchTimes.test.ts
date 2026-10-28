@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "@trenchscanner/core";
 import {
+  preBondLookupPending,
   rememberGraduations,
   rememberLaunchTimes,
   resetLaunchTimes,
   resolveLaunchTimes,
   resolvePreBondSeconds,
+  startPreBondLookups,
 } from "./launchTimes.js";
 
 const env = {
@@ -122,6 +124,61 @@ describe("resolvePreBondSeconds", () => {
       SAFETY_MIN_PREBOND_SECONDS: 0,
     });
     expect(out.size).toBe(0);
+  });
+});
+
+describe("startPreBondLookups", () => {
+  beforeEach(() => resetLaunchTimes());
+
+  it("answers what is known at once and holds only the coin whose lookup is still running", async () => {
+    // 2026-10-28: the pool lookup queued behind DexScreener's budget held every contender a median
+    // 14 s; now the cycle goes on and only the bought-out curve waits for its answer.
+    rememberLaunchTimes([{ mintAddress: "known", createdAt: GRAD }]);
+    const curve = { mintAddress: "dowo", dexId: "pumpfun", pairCreatedAt: GRAD, buys24h: 5, sells24h: 0 };
+    let answer!: (at: Date) => void;
+    const pool = vi.fn(() => new Promise<Date>((resolve) => (answer = resolve)));
+    const c = clients(vi.fn(), pool);
+    const candidates = [curve, { mintAddress: "known", graduatedAt: new Date(GRAD.getTime() + 60_000) }];
+
+    const first = startPreBondLookups(candidates, new Map(), c, env);
+    expect(first.known.get("known")).toBe(60);
+    expect(first.known.has("dowo")).toBe(false);
+    expect(preBondLookupPending("dowo")).toBe(true);
+    expect(preBondLookupPending("known")).toBe(false);
+
+    // The next cycle, with the answer still out, neither asks again nor lets the coin through.
+    const again = startPreBondLookups(candidates, new Map(), c, env);
+    expect(again.known.has("dowo")).toBe(false);
+    expect(pool).toHaveBeenCalledTimes(1);
+    expect(preBondLookupPending("dowo")).toBe(true);
+
+    answer(GRAD);
+    await first.pending;
+    expect(preBondLookupPending("dowo")).toBe(false);
+    const after = startPreBondLookups(candidates, new Map(), c, env);
+    expect(after.known.get("dowo")).toBe(0);
+    expect(pool).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks Pump.fun for the launch right after the pool answers, inside the same hold", async () => {
+    const curve = { mintAddress: "late", dexId: "pumpfun", buys24h: 5, sells24h: 0 };
+    const launchTime = vi.fn().mockResolvedValue(new Date(GRAD.getTime() - 3_000));
+    const c = clients(launchTime, vi.fn().mockResolvedValue(GRAD));
+    const run = startPreBondLookups([curve], new Map(), c, env);
+    expect(preBondLookupPending("late")).toBe(true);
+    await run.pending;
+    expect(launchTime).toHaveBeenCalledTimes(1);
+    expect(preBondLookupPending("late")).toBe(false);
+    expect(startPreBondLookups([curve], new Map(), c, env).known.get("late")).toBe(3);
+  });
+
+  it("releases the hold when a lookup fails, so the coin is decided as an unknown passes the cut", async () => {
+    const curve = { mintAddress: "down", dexId: "pumpfun", buys24h: 5, sells24h: 0 };
+    const c = clients(vi.fn(), vi.fn().mockRejectedValue(new Error("429")));
+    const run = startPreBondLookups([curve], new Map(), c, env);
+    await run.pending;
+    expect(preBondLookupPending("down")).toBe(false);
+    expect(startPreBondLookups([curve], new Map(), c, env).known.size).toBe(0);
   });
 });
 
