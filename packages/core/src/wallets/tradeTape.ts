@@ -422,7 +422,11 @@ export function summarizeTape(trades: readonly TapeTrade[], ctx: TapeContext): W
       };
       byWallet.set(t.wallet, w);
     }
-    if (t.side === "buy") {
+    // Only a priced trade is a buy or a sell (user decision 2026-10-27, audit SW-5): a transfer
+    // between wallets, priced at 0 SOL above, moves the holding but buys and dumps nothing, so it
+    // makes no first buyer, no fast exit and no dump into the stop.
+    const priced = t.sol > 0;
+    if (priced && t.side === "buy") {
       w.buys += 1;
       w.solIn += t.sol;
       w.tokensBought += t.tokens;
@@ -430,7 +434,7 @@ export function summarizeTape(trades: readonly TapeTrade[], ctx: TapeContext): W
         w.firstBuyAtMs = t.atMs;
         if (!w.isCreator && firstBuyers.length < TAPE_FIRST_BUYERS) firstBuyers.push(t.wallet);
       }
-    } else {
+    } else if (priced) {
       w.sells += 1;
       w.solOut += t.sol;
       w.tokensSold += t.tokens;
@@ -565,7 +569,9 @@ export function stopCauseOf(
 ): StopCause {
   const sellers = new Map<string, { sol: number; tokens: number }>();
   for (const t of trades) {
-    if (t.side !== "sell" || t.atMs <= window.anchorAtMs || t.atMs > window.stoppedAtMs) continue;
+    // Priced sells only, as summarizeTape counts them: a transfer out sold nothing.
+    if (t.side !== "sell" || t.sol <= 0 || t.atMs <= window.anchorAtMs || t.atMs > window.stoppedAtMs)
+      continue;
     const s = sellers.get(t.wallet) ?? { sol: 0, tokens: 0 };
     s.sol += t.sol;
     s.tokens += t.tokens;
