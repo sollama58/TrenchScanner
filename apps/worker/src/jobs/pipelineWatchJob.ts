@@ -614,13 +614,16 @@ export function findDisabledChatProblems(disabledChats: number): Problem[] {
  * cycle went from about 6 s to a 28 s median between 2026-10-14 and 2026-10-27 with nothing saying
  * so, since every flow kept producing. The median of the last SCAN_LATENCY_SAMPLES completed cycles
  * past SCAN_LATENCY_ALERT_MS is told about, and clears once back under SCAN_LATENCY_CLEAR_MS, so a
- * median sitting on the line doesn't notify every few minutes. The line sits above 2026-10-27's
- * median (27.6 s, p75 34.9 s) so it catches the next regression rather than this one; lower it as
+ * median sitting on the line doesn't notify every few minutes. 35 s / 30 s at first, above
+ * 2026-10-27's median (27.6 s, p75 34.9 s). Lowered on 2026-10-28 once the viewed-coin lookup
+ * (#1137) and the pre-bond lookups (#1150) left the decision path: over 36 cycles after #1150 the
+ * 10-cycle median ran 21.3-22.3 s (cycle p90 23.9 s), so 27 s still catches a return to 10-27's
+ * 27.6 s and 24 s clears above today's median (notes/post-fix-eval-2026-10-28). Lower it again as
  * the cycle gets faster.
  */
 export const SCAN_LATENCY_SAMPLES = 10;
-export const SCAN_LATENCY_ALERT_MS = 35_000;
-export const SCAN_LATENCY_CLEAR_MS = 30_000;
+export const SCAN_LATENCY_ALERT_MS = 27_000;
+export const SCAN_LATENCY_CLEAR_MS = 24_000;
 
 export type ScanLatencyState = {
   /** The newest cycles' start-to-decided times, oldest first. */
