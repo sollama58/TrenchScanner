@@ -1054,10 +1054,19 @@ const PUSH_SENT_COLUMNS = [
  * data: not the subscription, the account or the endpoint. The extension pulls the feed itself, so
  * no send of its own is recorded anywhere.
  */
+type PushSentRow = {
+  id: string;
+  sentAt: Date;
+  tokenId: string;
+  curatedAlertId: string | null;
+  matchId: string | null;
+  batched: boolean;
+};
+
 async function* pushSentPages(since: Date, until: Date, pageSize = EXPORT_PAGE_SIZE) {
   let last: { at: Date; id: string } | null = null;
   for (;;) {
-    const rows = await prisma.webPushAlertSent.findMany({
+    const rows: PushSentRow[] = await prisma.webPushAlertSent.findMany({
       where: { AND: [{ sentAt: { gte: since, lt: until } }, after("sentAt", last)] },
       orderBy: [{ sentAt: "asc" }, { id: "asc" }],
       take: pageSize,
