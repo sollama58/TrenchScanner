@@ -522,7 +522,7 @@ describe("pipeline watch: warning before a run-out (audit 2026-10-27, T3)", () =
         ({ state, problems } = findScanLatencyProblems(
           state,
           { runAt: new Date(start + i * MIN), ms: m },
-          flagged,
+          new Set(flagged ? ["scan-latency"] : []),
         ));
       });
       return problems;
@@ -534,15 +534,61 @@ describe("pipeline watch: warning before a run-out (audit 2026-10-27, T3)", () =
     expect(slow[0]).toMatchObject({ key: "scan-latency", side: true });
     expect(slow[0]!.text).toContain("50.0 s from start to contenders decided");
     // The same cycle read again is not a new sample.
-    expect(findScanLatencyProblems(state, { runAt: new Date(NOW + 20 * MIN), ms: 1 }, true).state).toEqual(
-      state,
-    );
+    expect(
+      findScanLatencyProblems(state, { runAt: new Date(NOW + 20 * MIN), ms: 1 }, new Set(["scan-latency"]))
+        .state,
+    ).toEqual(state);
     // Down to 25 s: still flagged while it was, not flagged when it wasn't.
     expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(25_000), NOW + HOUR, true)).toHaveLength(1);
-    expect(findScanLatencyProblems(state, null, false).problems).toEqual([]);
+    expect(findScanLatencyProblems(state, null, new Set()).problems).toEqual([]);
     expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(22_000), NOW + 2 * HOUR, true)).toEqual([]);
     // Back to 2026-10-27's 27.6 s median: flagged again.
     expect(feed(Array(SCAN_LATENCY_SAMPLES).fill(27_600), NOW + 3 * HOUR)).toHaveLength(1);
+  });
+
+  it("flags the fast path's and early decisions' median times on their own windows (check-in 2026-10-29)", () => {
+    let state = null as Parameters<typeof findScanLatencyProblems>[0];
+    const feed = (
+      times: { fastMs?: number | null; earlyMs?: number | null }[],
+      start: number,
+      flagged: string[] = [],
+    ) => {
+      let problems: ReturnType<typeof findScanLatencyProblems>["problems"] = [];
+      times.forEach((t, i) => {
+        ({ state, problems } = findScanLatencyProblems(
+          state,
+          { runAt: new Date(start + i * MIN), ms: 20_000, ...t },
+          new Set(flagged),
+        ));
+      });
+      return problems;
+    };
+    // 2026-10-29's fast path (5.4-6.6 s) and a cycle with no fast-path decision: no sample, no problem.
+    expect(feed(Array(SCAN_LATENCY_SAMPLES).fill({ fastMs: 6_000, earlyMs: 12_000 }), NOW)).toEqual([]);
+    expect(feed([{ fastMs: null, earlyMs: null }], NOW + HOUR)).toEqual([]);
+    expect(state!.fastSamples).toHaveLength(SCAN_LATENCY_SAMPLES);
+    expect(state!.samples).toHaveLength(SCAN_LATENCY_SAMPLES);
+    // Twice that: flagged, apart from the cycle's own alarm.
+    const slow = feed(Array(SCAN_LATENCY_SAMPLES).fill({ fastMs: 13_000 }), NOW + 2 * HOUR);
+    expect(slow.map((p) => p.key)).toEqual(["fast-path-latency"]);
+    expect(slow[0]).toMatchObject({ side: true });
+    expect(slow[0]!.text).toContain("13.0 s from a coin crossing to its decision");
+    // Down to 10 s: still up while it was, not raised when it wasn't; under 9 s clears.
+    expect(
+      feed(Array(SCAN_LATENCY_SAMPLES).fill({ fastMs: 10_000 }), NOW + 3 * HOUR, ["fast-path-latency"]),
+    ).toHaveLength(1);
+    expect(feed([{ fastMs: 10_000 }], NOW + 4 * HOUR)).toEqual([]);
+    expect(
+      feed(Array(SCAN_LATENCY_SAMPLES).fill({ fastMs: 8_000 }), NOW + 5 * HOUR, ["fast-path-latency"]),
+    ).toEqual([]);
+    // The early decisions past 20 s, clearing under 17 s.
+    const late = feed(Array(SCAN_LATENCY_SAMPLES).fill({ earlyMs: 21_000 }), NOW + 6 * HOUR);
+    expect(late.map((p) => p.key)).toEqual(["early-decision-latency"]);
+    expect(late[0]!.text).toContain("21.0 s from the cycle's start to a coin decided early");
+    expect(feed([{ earlyMs: 18_000 }], NOW + 7 * HOUR, ["early-decision-latency"])).toHaveLength(1);
+    expect(
+      feed(Array(SCAN_LATENCY_SAMPLES).fill({ earlyMs: 16_000 }), NOW + 8 * HOUR, ["early-decision-latency"]),
+    ).toEqual([]);
   });
 
   it("flags training runs at three quarters of their deadline, finished or in flight (DB-2)", () => {
@@ -1057,7 +1103,11 @@ describe.skipIf(!dbAvailable)("pipeline watch: the run-out warnings carry over b
       for (const job of WATCHED_JOBS) {
         const meta =
           job === "scan"
-            ? { stagesMs: { discovery: 2_000, wallets: 15_000, contenders: 300, candidates: 4_000 } }
+            ? {
+                stagesMs: { discovery: 2_000, wallets: 15_000, contenders: 300, candidates: 4_000 },
+                entryFastPath: { fastScans: 2, crossToDecisionMsMedian: 6_053 },
+                earlyDecisions: { coins: 3, waves: 1, firstAtMs: 11_000, msMedian: 11_000 },
+              }
             : job === "telegram-dispatch"
               ? { agedOutSinceBoot }
               : {};
@@ -1079,10 +1129,20 @@ describe.skipIf(!dbAvailable)("pipeline watch: the run-out warnings carry over b
       return out as Record<string, unknown>;
     };
     const first = await run(now - MIN, 7);
-    expect(first.scanLatency).toEqual({ samples: "17300", lastRunAt: new Date(now - MIN).toISOString() });
+    expect(first.scanLatency).toEqual({
+      samples: "17300",
+      fastSamples: "6053",
+      earlySamples: "11000",
+      lastRunAt: new Date(now - MIN).toISOString(),
+    });
     expect(first.telegramAgedOut).toMatchObject({ seen: 7, since: null, count: 0 });
     const second = await run(now, 9);
-    expect(second.scanLatency).toEqual({ samples: "17300,17300", lastRunAt: new Date(now).toISOString() });
+    expect(second.scanLatency).toEqual({
+      samples: "17300,17300",
+      fastSamples: "6053,6053",
+      earlySamples: "11000,11000",
+      lastRunAt: new Date(now).toISOString(),
+    });
     expect(second.telegramAgedOut).toMatchObject({ seen: 9, count: 2 });
     expect(String(second.stalledKeys)).toContain("telegram-aged-out");
   });
