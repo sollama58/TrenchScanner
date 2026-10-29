@@ -158,8 +158,14 @@ export class HolderMarks {
     this.reading = true;
     const map = await this.deps.holders(mint).catch(() => null);
     this.reading = false;
+    // The page moved to another coin while this read was out (chart audit 2026-10-29): its sync
+    // skipped the read because this one was out, so the new coin is read now. Stamping mapAt here
+    // would hold the new coin's markers back for MAP_MS.
+    if (mint !== this.mint) {
+      this.schedule();
+      return;
+    }
     this.mapAt = Date.now();
-    if (mint !== this.mint) return;
     this.map = map;
     this.holders = new Map((map?.holders ?? []).map((h) => [h.wallet, h]));
     for (const mark of this.marks.values()) mark.key = "";

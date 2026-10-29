@@ -166,8 +166,8 @@ describe("trade bubbles above the series (2026-10-21)", () => {
 
 const prefs = markPrefsOf(DEFAULT_APPEARANCE);
 
-/** Marks placed as bubbles. `columnOf` defaults to the x, so one x is one column. */
-function bubblesAt(
+/** Marks as one bubble per identity and bar. `columnOf` defaults to the x, so one x is one column. */
+function collapsedAt(
   sources: readonly MarkSource[],
   xOf: (m: WalletMark, i: number) => number = () => 50,
   columnOf?: (m: WalletMark, i: number) => number,
@@ -183,13 +183,16 @@ function bubblesAt(
     r: 8 * MARK_SCALE.m,
     column: col(m, i),
   }));
-  return layoutMarks(
-    collapseBubbleSpots(spots, (m) => m.bubble ?? null),
-    20,
-    400,
-    1,
-    40,
-  );
+  return collapseBubbleSpots(spots, (m) => m.bubble ?? null);
+}
+
+/** Those bubbles placed. */
+function bubblesAt(
+  sources: readonly MarkSource[],
+  xOf: (m: WalletMark, i: number) => number = () => 50,
+  columnOf?: (m: WalletMark, i: number) => number,
+) {
+  return layoutMarks(collapsedAt(sources, xOf, columnOf), 20, 400, 1, 40);
 }
 
 const walletsOf = (placed: ReturnType<typeof bubblesAt>) =>
@@ -264,15 +267,27 @@ describe("one bubble per KOL, known side and plain side", () => {
         [4_000, 1, 2],
       ],
     };
-    const placed = bubblesAt(
-      [later, plain("S")],
-      (m) => Math.floor(m.t / 1_000) * 4,
-      (m) => Math.floor(m.t / 1_000),
-    );
-    const buys = placed.filter((p) => p.side === "buy" && bubbleItems(p).some((m) => m.wallet === "K"));
+    // Bars 4px apart (a zoomed-out view): grouping is still per bar.
+    const xOf = (m: WalletMark) => Math.floor(m.t / 1_000) * 4;
+    const columnOf = (m: WalletMark) => Math.floor(m.t / 1_000);
+    const spots = collapsedAt([later, plain("S")], xOf, columnOf);
+    const buys = spots.filter((p) => p.side === "buy" && p.item.wallet === "K");
     expect(buys).toHaveLength(4);
-    expect(walletsOf(buys.filter((p) => p.column === 1))).toEqual([["K", "S"]]);
-    expect(placed.filter((p) => p.side === "sell")).toHaveLength(1);
+    expect(
+      buys
+        .filter((p) => p.column === 1)
+        .map((p) => [p.item.wallet, ...(p.grouped ?? []).map((m) => m.wallet)]),
+    ).toEqual([["K", "S"]]);
+    expect(spots.filter((p) => p.side === "sell")).toHaveLength(1);
+    // Placed, those bubbles overlap on the plot, so they stack and fold (chart audit 2026-10-29)
+    // and every trade is still in one bubble's detail.
+    const placed = bubblesAt([later, plain("S")], xOf, columnOf);
+    expect(placed.flatMap((p) => bubbleItems(p)).length).toBe(
+      spots.flatMap((p) => [p.item, ...(p.grouped ?? [])]).length,
+    );
+    for (const a of placed)
+      for (const b of placed)
+        if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(a.r + b.r);
   });
 
   it("does not join a known side that is stamped with its own wallet", () => {
@@ -339,6 +354,67 @@ describe("trade bubbles one grid above the candle", () => {
     expect(bottom(out[0]!)).toBeCloseTo(toY(110));
     expect(out[1]!.y).toBeLessThan(out[0]!.y);
     expect(out[2]!.y).toBeLessThan(out[1]!.y);
+  });
+});
+
+describe("bubbles on neighbouring bars (chart audit 2026-10-29)", () => {
+  // Price p sits at y = 400 - p. Every candle high is 100; one grid line is 10 price.
+  const toY = (p: number) => 400 - p;
+  const onBar = (item: string, column: number, x: number): MarkSpot<string> => ({
+    ...spot(item, "buy", x, 8),
+    edgeY: 300,
+    priceY: 320,
+    hi: 100,
+    gridStep: 10,
+    column,
+  });
+
+  it("stacks a bubble that would overlap one on the next bar, then folds the rest into a +N", () => {
+    // Six bars 3px apart: every circle would sit on its neighbours.
+    const raw = [0, 1, 2, 3, 4, 5].map((i) => onBar(`t${i}`, i, 50 + i * 3));
+    const out = layoutMarks(raw, 20, 400, 1, undefined, { steps: 1, toY });
+    expect(out.map((p) => p.level)).toEqual([0, 1, 2]);
+    expect(out.flatMap((p) => bubbleItems(p)).sort()).toEqual(raw.map((r) => r.item).sort());
+    for (const a of out)
+      for (const b of out)
+        if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(a.r + b.r);
+    // Each bubble can be clicked at its own centre.
+    for (const p of out) expect(markAt(out, p.x, p.y)).toBe(p);
+  });
+
+  it("leaves bubbles on bars far enough apart on the first level", () => {
+    const raw = [0, 1, 2].map((i) => onBar(`t${i}`, i, 50 + i * 30));
+    const out = layoutMarks(raw, 20, 400, 1, undefined, { steps: 1, toY });
+    expect(out.map((p) => p.level)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("a stack under the top of the pane (chart audit 2026-10-29)", () => {
+  // The highest candle sits just under the headroom: level 0 fits, level 1 would cross y = 30.
+  const toY = (p: number) => 400 - p;
+  const top = (item: string): MarkSpot<string> => ({
+    ...spot(item, "buy", 50, 8),
+    edgeY: 60,
+    priceY: 70,
+    hi: 340,
+    gridStep: 10,
+    column: 1,
+  });
+
+  it("folds a level that would cross the ceiling into the +N of the bubble below", () => {
+    const raw = [top("a"), top("b"), top("c")];
+    const out = layoutMarks(raw, 20, 400, 1, undefined, { steps: 1, toY, ceilingY: 30 });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.level).toBe(0);
+    expect(out[0]!.y - out[0]!.r).toBeGreaterThanOrEqual(30);
+    expect(out[0]!.more).toEqual(["b", "c"]);
+    expect(bubbleMoreCount(out[0]!)).toBe(2);
+  });
+
+  it("stacks as before with room above", () => {
+    const raw = [top("a"), top("b"), top("c")];
+    const out = layoutMarks(raw, 20, 400, 1, undefined, { steps: 1, toY, ceilingY: -1_000 });
+    expect(out.map((p) => p.level)).toEqual([0, 1, 2]);
   });
 });
 

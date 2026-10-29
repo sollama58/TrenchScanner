@@ -354,7 +354,8 @@ export async function registerHealthRoutes(
       heliusPlan,
       // The run-out warnings pipeline-watch keeps (full audit 2026-10-27, T3), figures only: Helius
       // credits in the last 24 h against the usual day, with no plan size needed; training's last
-      // completed run against its deadline; the scan cycle's median time to its decisions; and
+      // completed run against its deadline; the scan cycle's median time to its decisions, and the
+      // fast path's and early decisions' own; and
       // alerts Telegram dropped unsent in the episode in progress.
       heliusBurn: watch.heliusBurn,
       training: watch.training,
@@ -437,21 +438,33 @@ export function watchAlarmsOf(meta: Record<string, unknown> | null | undefined) 
 
   const scan = obj("scanLatency");
   // Comma-separated milliseconds: heartbeat meta holds no arrays.
-  const samples = (str(scan, "samples") ?? "")
-    .split(",")
-    .filter(Boolean)
-    .map(Number)
-    .filter((n) => Number.isFinite(n));
-  const sorted = [...samples].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
+  const windowOf = (k: string) =>
+    (str(scan, k) ?? "")
+      .split(",")
+      .filter(Boolean)
+      .map(Number)
+      .filter((n) => Number.isFinite(n));
+  const p50 = (samples: number[]) => {
+    const sorted = [...samples].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return Math.round(sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2);
+  };
+  const samples = windowOf("samples");
+  const fast = windowOf("fastSamples");
+  const early = windowOf("earlySamples");
+  // The cycle's barrier, and the decisions made apart from it (check-in 2026-10-29, B): the entry
+  // fast path's crossing-to-decision time and the early-decided coins' time from the cycle's start,
+  // each the median over the last cycles that had one (null before any).
   const scanLatency =
-    sorted.length === 0
+    samples.length === 0 && fast.length === 0 && early.length === 0
       ? null
       : {
-          cycles: sorted.length,
-          decidedMsP50: Math.round(
-            sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2,
-          ),
+          cycles: samples.length,
+          decidedMsP50: samples.length === 0 ? null : p50(samples),
+          fastPathCycles: fast.length,
+          fastPathDecisionMsP50: fast.length === 0 ? null : p50(fast),
+          earlyCycles: early.length,
+          earlyDecisionMsP50: early.length === 0 ? null : p50(early),
         };
 
   const aged = obj("telegramAgedOut");
@@ -590,6 +603,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "jupiterCalls",
     "liveLaunchQuotes",
     "entryFastPath",
+    // The contenders decided before the barrier: coins, waves, the first wave's and the median
+    // coin's time from the cycle's start (scanJob.ts decideEarly; post-fix eval 2026-10-28).
+    "earlyDecisions",
     "launchScreen",
     "rugCheckLookups",
     "linkedWalletCalls",

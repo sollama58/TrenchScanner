@@ -69,6 +69,7 @@ describe("dispatchFailure", () => {
     agedOut: 0,
     agedOutSinceBoot: 0,
     held: 0,
+    heldForS: 0,
     disabled: 0,
     ...over,
   });
@@ -242,6 +243,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       agedOut: 0,
       agedOutSinceBoot: 0,
       held: 0,
+      heldForS: 0,
       disabled: 0,
     });
     expect(api.calls).toHaveLength(0);
@@ -1045,6 +1047,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       agedOut: 0,
       agedOutSinceBoot: 0,
       held: 0,
+      heldForS: 0,
       disabled: 0,
     });
     expect(api.calls).toHaveLength(0);
@@ -1124,7 +1127,8 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
     resetArtworkMisses();
     await prisma.telegramChat.updateMany({
       where: { chatId: { in: chatIds } },
-      data: { sentThrough: new Date(Date.now() - 60_000), lastSentAt: new Date() },
+      // The last test's 429s left holds on the rows (hold.ts), which would keep its chats back.
+      data: { sentThrough: new Date(Date.now() - 60_000), lastSentAt: new Date(), holdUntil: null },
     });
     // The limited chats were served longest ago, so they go first and the rest come after the 429s.
     await prisma.telegramChat.updateMany({
@@ -1262,6 +1266,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch: a chat that can't be sent to
         failures: 0,
         lastError: null,
         enabled: true,
+        holdUntil: null,
       },
     });
   });
@@ -1338,6 +1343,9 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch: a chat that can't be sent to
     let row = await chat();
     expect(row.lastError).toBe("429: Too Many Requests: retry after 60 (retry after 60 s)");
     expect(row.failures).toBe(0);
+    // Kept on the row, where the API's replies and a restarted worker see it.
+    expect(row.holdUntil!.getTime()).toBeGreaterThanOrEqual(start + 60_000);
+    expect(limited.heldForS).toBeGreaterThanOrEqual(30);
 
     // The next passes, inside the minute, don't ask Telegram again.
     failMine(api, null);
@@ -1351,6 +1359,26 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch: a chat that can't be sent to
     expect(mine(api)).toHaveLength(1);
     row = await chat();
     expect(row.lastError).toBeNull();
+  });
+
+  it("waits out a hold the API's replies ran into, though this process never saw the 429", async () => {
+    const api = new FakeTelegramApi();
+    await alert(new Date(Date.now() - 20_000));
+    const start = Date.now();
+    await prisma.telegramChat.update({
+      where: { id: chatRowId },
+      data: { holdUntil: new Date(start + 120_000) },
+    });
+    try {
+      const summary = await run(api, start);
+      expect(mine(api)).toHaveLength(0);
+      expect(summary.held).toBeGreaterThanOrEqual(1);
+      expect(summary.heldForS).toBeGreaterThanOrEqual(90);
+      await run(api, start + 121_000);
+      expect(mine(api)).toHaveLength(1);
+    } finally {
+      await prisma.telegramChat.update({ where: { id: chatRowId }, data: { holdUntil: null } });
+    }
   });
 
   it("keeps a group's spacing from one pass to the next", async () => {

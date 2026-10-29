@@ -157,6 +157,8 @@ export function chunkInputs(chunks: readonly CandleChunkRow[], factor: number): 
     coverTo: c.coverTo,
     bars: scaleBars(c.bars, factor),
     priority: SOURCE_PRIORITY[c.source],
+    // One source's chunks are read as one (core's candleSeries).
+    source: c.source,
   }));
 }
 

@@ -259,7 +259,10 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
   } else if (feed?.problem === "offline") {
     parts.push(el("p", { className: "status warn", textContent: "Can't reach TrenchScanner. Retrying…" }));
   }
+  // Every way out prunes the maps (chart audit 2026-10-29): a map no longer drawn otherwise kept
+  // following its coin behind the panel.
   if (!feed) {
+    pruneMaps(new Set());
     parts.push(el("p", { className: "status", textContent: "Loading your alerts…" }));
     return parts;
   }
@@ -270,6 +273,7 @@ function alertsView(saved: OverlaySettings): HTMLElement[] {
   const score = scorecard(listed.map(({ token }) => token));
   if (score) parts.push(score);
   if (shown.length === 0) {
+    pruneMaps(new Set());
     parts.push(
       el("p", {
         className: "status",
@@ -408,13 +412,16 @@ function buddyView(settings: OverlaySettings): HTMLElement[] {
     parts.push(el("p", { className: "status warn", textContent: "Can't reach TrenchScanner. Retrying…" }));
   }
   const answer = buddy?.buddy ?? null;
+  // Every way out prunes the maps, as in alertsView.
   if (!answer) {
+    pruneMaps(new Set());
     parts.push(el("p", { className: "status", textContent: "Reading your wallet's trades…" }));
     return parts;
   }
   const unlinked = notLinked(answer);
   if (unlinked.length > 0) parts.push(notLinkedNote(unlinked));
   if (answer.coins.length === 0) {
+    pruneMaps(new Set());
     parts.push(
       section(
         "Trade Buddy",
@@ -1418,7 +1425,14 @@ function draw(): void {
   app.replaceChildren(tabs(), ...body);
 }
 
+/** The latest poll: an older one still reading when another starts schedules nothing. */
+let pollRun = 0;
+
 async function poll(): Promise<void> {
+  // A tab click or the panel shown again can start a poll while one is reading. Both used to
+  // schedule the next, and while reads took longer than POLL_MS the two loops never merged again
+  // (chart audit 2026-10-29). Only the latest run schedules.
+  const run = ++pollRun;
   window.clearTimeout(pollTimer);
   if (document.visibilityState === "visible" && status?.connected) {
     // Status too: settings saved from another browser, or a key refused since the last poll.
@@ -1436,6 +1450,7 @@ async function poll(): Promise<void> {
     // the lookup redraws on its own reads.
     if (view !== "settings" && view !== "coin") draw();
   }
+  if (run !== pollRun) return;
   pollTimer = window.setTimeout(() => void poll(), POLL_MS);
 }
 

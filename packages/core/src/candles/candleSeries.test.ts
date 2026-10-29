@@ -185,6 +185,89 @@ describe("candleSeries", () => {
     ]);
   });
 
+  it("reads a stretch from one of two equal sources stamping the same trades a second apart", () => {
+    // Production, xj7jwF…pump (chart audit 2026-10-29, D1): the API's saved stream ("chart",
+    // stamped by slot) and the worker's curve tape ("curve", stamped on arrival) held the same
+    // move one second apart, 18:48:20 15467 -> 15588 and 18:48:21 15466 -> 15587, and both were
+    // drawn: the second reopened at the old price, a phantom candle with a fake wick.
+    const P = 1_793_299_300_000;
+    const H = Math.floor(P / (60 * M)) * 60 * M;
+    const one = (t: number, o: number, c: number, vol: number): StoredBar => ({
+      t,
+      o,
+      h: Math.max(o, c),
+      l: Math.min(o, c),
+      c,
+      vol,
+    });
+    const chart = [one(P, 15_467.17, 15_587.97, 2), one(P + 5 * S, 15_587.97, 15_700, 1)];
+    const curve = [one(P + S, 15_466.44, 15_587.23, 2), one(P + 6 * S, 15_587.23, 15_699.5, 1)];
+    const inputs: SeriesInput[] = [
+      { ...input(1, H, H + 60 * M, chart, 3), source: "chart" },
+      { ...input(1, H, H + 60 * M, curve, 3), source: "curve" },
+    ];
+    const fine = candleSeries(inputs, 1, P - 10 * S, P + 10 * S);
+    expect(fine.map((b) => [(b.t - P) / S, b.o, b.c])).toEqual([
+      [0, 15_467.17, 15_587.97],
+      [5, 15_587.97, 15_700],
+    ]);
+    // Folded, the move is counted once: no reopening at the old price, the volume not doubled.
+    const minute = candleSeries(inputs, 60, H, H + 60 * M).find((b) => b.t <= P && P < b.t + M)!;
+    expect(minute).toMatchObject({ o: 15_467.17, c: 15_700, l: 15_467.17, vol: 3 });
+    // The same without sources named: each input is a source of its own.
+    const plain = candleSeries([input(1, H, H + 60 * M, chart, 3), input(1, H, H + 60 * M, curve, 3)], 1);
+    expect(plain.map((b) => (b.t - P) / S)).toEqual([0, 5]);
+  });
+
+  it("fills from the other source where the owner's cover breaks, and reads one source's chunks as one", () => {
+    // The owner ("chart") covers 0-30 s and 40-60 s: the hole between is the other source's.
+    const chart = [bar(T0 + 5 * S, 1, 2), bar(T0 + 45 * S, 4, 5)];
+    const curve = [bar(T0 + 6 * S, 1, 2), bar(T0 + 33 * S, 2, 3), bar(T0 + 46 * S, 4, 5)];
+    const out = candleSeries(
+      [
+        { ...input(1, T0, T0 + 30 * S, chart.slice(0, 1), 3), source: "chart" },
+        { ...input(1, T0 + 40 * S, T0 + M, chart.slice(1), 3), source: "chart" },
+        { ...input(1, T0, T0 + M, curve, 3), source: "curve" },
+      ],
+      1,
+    );
+    expect(out.map((b) => (b.t - T0) / S)).toEqual([5, 33, 45]);
+    // A curve chunk whose cover runs on past it (the quiet minutes after its hour) owns the start
+    // of the next hour, where its next chunk's bars are its own.
+    const H = 60 * M;
+    const runOn = candleSeries(
+      [
+        { ...input(1, T0, T0 + H + 30 * M, [bar(T0 + H - S, 1, 2)], 3), source: "curve" },
+        { ...input(1, T0 + H, T0 + 2 * H, [bar(T0 + H + 10 * S, 2, 3)], 3), source: "curve" },
+      ],
+      1,
+    );
+    expect(runOn.map((b) => (b.t - T0 - H) / S)).toEqual([-1, 10]);
+  });
+
+  it("cuts a coarse bar where a finer source takes over, and at the page's end", () => {
+    // The launch minute on a 1-second chart: Pump.fun's minute until the tape's seconds begin.
+    const minutes = [bar(T0, 1, 2), bar(T0 + M, 2, 3)];
+    const tape = [bar(T0 + 20 * S, 2, 3), bar(T0 + 30 * S, 3, 2)];
+    const out = candleSeries(
+      [input(60, T0, T0 + 2 * M, minutes, 4), input(1, T0 + 20 * S + 400, T0 + M, tape, 4)],
+      1,
+    );
+    expect(out.map((b) => [(b.t - T0) / S, b.coarse ?? false, b.w ?? 1])).toEqual([
+      [0, true, 20],
+      [20, false, 1],
+      [30, false, 1],
+      [60, true, 60],
+    ]);
+    // A page ending inside a wide bar keeps only its part: the rest is the next page's.
+    const fives = [bar(T0, 1, 2), bar(T0 + 5 * M, 2, 3)];
+    const page = candleSeries([input(300, T0, T0 + 10 * M, fives)], 60, T0, T0 + 7 * M);
+    expect(page.map((b) => [(b.t - T0) / M, b.w])).toEqual([
+      [0, 300],
+      [5, 120],
+    ]);
+  });
+
   it("clips to the asked window", () => {
     const bars = Array.from({ length: 10 }, (_, i) => bar(T0 + i * M, i + 1, i + 2));
     const out = candleSeries([input(60, T0, T0 + 10 * M, bars)], 60, T0 + 3 * M, T0 + 5 * M);

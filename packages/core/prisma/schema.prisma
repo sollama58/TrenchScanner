@@ -289,6 +289,11 @@ model TelegramChat {
   /// What Telegram last answered when a send failed; cleared on the next success.
   lastError              String?
   failures               Int       @default(0)
+  /// No message goes to this chat before this: the end of the retry_after Telegram answered a send,
+  /// edit or reply here with (a 429). Written by the worker's dispatcher and the API's command and
+  /// button replies alike, so neither keeps asking during the other's flood wait, which made
+  /// Telegram stretch it to 12+ minutes in a supergroup's evenings (check-in 2026-10-29).
+  holdUntil              DateTime?
   /// When the chat was told its account's own Telegram model picks have all left the roster, so
   /// it gets the top models' calls instead (dispatch.ts). Cleared once a pick is back.
   picksFallbackNoticedAt DateTime?

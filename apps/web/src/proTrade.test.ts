@@ -13,6 +13,7 @@ import {
   readTradeSettings,
   sacrificeLine,
   summarizePosition,
+  candleEntryMcap,
   shownPosition,
   shownQuote,
   shownFee,
@@ -281,6 +282,53 @@ describe("summarizePosition", () => {
     expect(summarizePosition({ ...p, supply: null }, 40_000).valueSol).toBeNull();
     // Nothing held is worth nothing, whatever the price.
     expect(summarizePosition({ ...base }, null).valueSol).toBe(0);
+  });
+
+  describe("the chart's entry line (chart audit 2026-10-29)", () => {
+    // Minute candles, $10K..$12K then $30K..$34K. SOL is $200 today, but was $100 at the buys,
+    // and the buys paid fees: the SOL figure at today's price lands on neither candle.
+    const candles = [
+      { t: 0, o: 10_500, c: 11_500, h: 12_000, l: 10_000 },
+      { t: 60_000, o: 31_000, c: 33_000, h: 34_000, l: 30_000 },
+    ];
+    const p: PositionResponse = {
+      ...base,
+      balance: "3000000000000",
+      trades: [
+        { signature: "a", t: 30_000, side: "buy", lamports: "-120000000", tokens: "1000000000000" },
+        { signature: "b", t: 90_000, side: "buy", lamports: "-700000000", tokens: "2000000000000" },
+      ],
+    };
+
+    it("prices each buy off its own candle, weighted by the coins it bought", () => {
+      // (1 × $11K + 2 × $32K) / 3 = $25K.
+      expect(candleEntryMcap(p, candles)).toBeCloseTo(25_000);
+      // The SOL-cost figure: 0.82 SOL for 0.3% of supply at $200 = $54.7K, off both candles.
+      expect(summarizePosition(p, 32_000).entryMcap).toBeGreaterThan(34_000);
+    });
+
+    it("counts only the current position's buys", () => {
+      const again: PositionResponse = {
+        ...p,
+        balance: "1000000000000",
+        trades: [
+          { signature: "x", t: 10_000, side: "buy", lamports: "-1", tokens: "5000000000000" },
+          { signature: "y", t: 20_000, side: "sell", lamports: "1", tokens: "-5000000000000" },
+          { signature: "a", t: 90_000, side: "buy", lamports: "-1", tokens: "1000000000000" },
+        ],
+      };
+      expect(candleEntryMcap(again, candles)).toBeCloseTo(32_000);
+    });
+
+    it("gives no figure when a buy has no candle, so the caller keeps entryMcap", () => {
+      expect(candleEntryMcap(p, [])).toBeNull();
+      expect(candleEntryMcap(p, [candles[1]!])).toBeNull();
+      expect(candleEntryMcap(p, [candles[0]!])).toBeCloseTo(11_000);
+      // Without a high and low, the open and close bound the candle.
+      expect(candleEntryMcap(p, [{ t: 0, o: 10_000, c: 12_000 }])).toBeCloseTo(11_000);
+      const late = { ...p, trades: [{ ...p.trades[0]!, t: 60 * 60_000 }], balance: "1000000000000" };
+      expect(candleEntryMcap(late, candles)).toBeNull();
+    });
   });
 });
 

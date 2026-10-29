@@ -555,6 +555,28 @@ describe("public worker health: the counters and run-out warnings (audit 2026-10
     expect(run?.shareAlarms).toBe(2);
   });
 
+  it("reads a heartbeat from before the fast-path and early windows were kept", () => {
+    expect(
+      watchAlarmsOf({ scanLatency: { samples: "20000,30000", lastRunAt: "2026-10-27T23:02:00.000Z" } })
+        .scanLatency,
+    ).toEqual({
+      cycles: 2,
+      decidedMsP50: 25_000,
+      fastPathCycles: 0,
+      fastPathDecisionMsP50: null,
+      earlyCycles: 0,
+      earlyDecisionMsP50: null,
+    });
+  });
+
+  it("shows the scan's early decisions, which the summary used to drop", () => {
+    const run = summary("scan", {
+      durationMs: 30_000,
+      earlyDecisions: { coins: 4, waves: 2, firstAtMs: 11_200, msMedian: 13_400 },
+    }).lastRun;
+    expect(run?.earlyDecisions).toEqual({ coins: 4, waves: 2, firstAtMs: 11_200, msMedian: 13_400 });
+  });
+
   it("reads pipeline-watch's run-out warnings into figures, and null before their first read", () => {
     expect(watchAlarmsOf(null)).toEqual({
       heliusBurn: null,
@@ -572,7 +594,12 @@ describe("public worker health: the counters and run-out warnings (audit 2026-10
         notifiedAt: "2026-10-27T23:03:00.000Z",
       },
       training: { lastCompletedAt: "2026-10-27T16:00:00.000Z", lastCompletedMs: 7_750_000 },
-      scanLatency: { samples: "20000,30000,25000", lastRunAt: "2026-10-27T23:02:00.000Z" },
+      scanLatency: {
+        samples: "20000,30000,25000",
+        fastSamples: "6000,5400,6600,32000",
+        earlySamples: "12000",
+        lastRunAt: "2026-10-27T23:02:00.000Z",
+      },
       telegramAgedOut: {
         seen: 12,
         since: "2026-10-27T17:00:00.000Z",
@@ -594,7 +621,14 @@ describe("public worker health: the counters and run-out warnings (audit 2026-10
         lastCompletedMs: 7_750_000,
         deadlineUsedPct: 54,
       },
-      scanLatency: { cycles: 3, decidedMsP50: 25_000 },
+      scanLatency: {
+        cycles: 3,
+        decidedMsP50: 25_000,
+        fastPathCycles: 4,
+        fastPathDecisionMsP50: 6_300,
+        earlyCycles: 1,
+        earlyDecisionMsP50: 12_000,
+      },
       telegramAgedOut: { count: 12, since: "2026-10-27T17:00:00.000Z", lastAt: "2026-10-27T17:20:00.000Z" },
     });
   });

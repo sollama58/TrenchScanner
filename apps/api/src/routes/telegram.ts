@@ -8,7 +8,7 @@ import {
   TELEGRAM_LINK_CODE_TTL_MS,
   alertParts,
   alertStyle,
-  TelegramApi,
+  HoldRecordingTelegramApi,
   adminWalletSet,
   dashboardUrl,
   formatTestMessage,
@@ -96,7 +96,9 @@ export async function registerTelegramRoutes(
 ) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const configured = telegramConfigured(token);
-  const api = configured ? new TelegramApi(token) : null;
+  // A 429 on any reply or edit here is kept on the chat's row, so the worker's alerts and the next
+  // press wait out the same flood wait instead of stretching it (packages/core/src/telegram/hold.ts).
+  const api = configured ? new HoldRecordingTelegramApi(token) : null;
   const secret = configured ? webhookSecret(token) : "";
   // A Refresh press under an alert waits briefly for a fresh DexScreener reading (free, under the
   // same call budget as the dashboard's live tick) before reading the database.

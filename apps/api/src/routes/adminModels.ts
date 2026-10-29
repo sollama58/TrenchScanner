@@ -91,7 +91,9 @@ export async function registerAdminModelRoutes(
     }
     const { since, until, model } = parsed.data;
     const key = `${since.getTime()}:${until.getTime()}:${model ?? ""}`;
-    return performance.for(key).get(() => buildModelPerformance({ since, until }, model));
+    return performance
+      .for(key)
+      .get(() => buildModelPerformance({ since, until }, model, opts.env.CURVE_TAPE_MAX_AGE_MINUTES));
   });
 
   const explained = new Map<string, CallExplain>();
