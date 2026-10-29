@@ -295,17 +295,28 @@ export function clearedKeys(before: Set<string>, now: Set<string>): string[] {
  */
 export const TELEGRAM_LAG_MS = 5 * 60_000;
 
-/** Pure: which flows and jobs are stalled. `oldestChatCursor`: the furthest-behind enabled chat. */
+/**
+ * Pure: which flows and jobs are stalled. `oldestChatCursor`: the furthest-behind enabled chat;
+ * `cursorHeld`: whether Telegram is holding that chat (a 429's retry_after, TelegramChat.holdUntil).
+ * A held chat's lag is notified but is not a stall: restarting the scanner can't lift Telegram's
+ * hold, and a restart used to forget it and resend straight into it (check-in 2026-10-29).
+ */
 export function findProblems(
   flows: FlowCheck[],
   jobs: JobCheck[],
   now: number,
   oldestChatCursor: Date | null = null,
+  cursorHeld = false,
 ): Problem[] {
   const out: Problem[] = [];
   if (oldestChatCursor !== null && now - oldestChatCursor.getTime() > TELEGRAM_LAG_MS) {
     const mins = Math.round((now - oldestChatCursor.getTime()) / 60_000);
-    out.push({ key: "telegram", text: `Telegram alerts: a linked chat is ${mins} min behind` });
+    const text = `Telegram alerts: a linked chat is ${mins} min behind`;
+    out.push(
+      cursorHeld
+        ? { key: "telegram", text: `${text} (Telegram's rate limit on it)`, side: true }
+        : { key: "telegram", text },
+    );
   }
   for (const f of flows) {
     if (f.recent === 0 && f.baseline > 0) {
@@ -968,6 +979,44 @@ async function readAgedOutSinceBoot(): Promise<number | null> {
   return typeof n === "number" && Number.isFinite(n) ? n : null;
 }
 
+/**
+ * A hold this long or longer is told at once. Telegram's own short waits (a few seconds) pass
+ * unnoticed; one of minutes is the evening stall, and an alert held past MAX_ALERT_AGE_MS (15 min)
+ * is dropped unsent, so this is the warning before that, not after (check-in 2026-10-29).
+ */
+export const TELEGRAM_HOLD_ALERT_MS = 2 * 60_000;
+
+/**
+ * Pure: linked chats Telegram is holding (TelegramChat.holdUntil, a 429's retry_after) for
+ * TELEGRAM_HOLD_ALERT_MS or more. Notify-only: nothing here restarts.
+ */
+export function findTelegramHoldProblems(held: { kind: string; holdUntil: Date }[], now: number): Problem[] {
+  const long = held.filter((c) => c.holdUntil.getTime() - now >= TELEGRAM_HOLD_ALERT_MS);
+  if (long.length === 0) return [];
+  const longest = long.reduce((a, b) => (b.holdUntil > a.holdUntil ? b : a));
+  const mins = Math.ceil((longest.holdUntil.getTime() - now) / 60_000);
+  const who = long.length === 1 ? `a linked ${longest.kind}` : `${long.length} linked chats`;
+  return [
+    {
+      key: "telegram-held",
+      text:
+        `Telegram alerts: Telegram is holding ${who} for ${mins} more min (rate limit, until ` +
+        `${longest.holdUntil.toISOString().slice(11, 16)} UTC); alerts over 15 min old by then are dropped`,
+      side: true,
+    },
+  ];
+}
+
+/** Enabled chats with a Telegram hold still running. */
+function heldChats(now: number): Promise<{ kind: string; holdUntil: Date }[]> {
+  return prisma.telegramChat
+    .findMany({
+      where: { enabled: true, revokedAt: null, holdUntil: { gt: new Date(now) } },
+      select: { kind: true, holdUntil: true },
+    })
+    .then((rows) => rows.flatMap((r) => (r.holdUntil ? [{ kind: r.kind, holdUntil: r.holdUntil }] : [])));
+}
+
 /** Linked chats the dispatcher switched off for failing (see findDisabledChatProblems). */
 function countDisabledChats(): Promise<number> {
   return prisma.telegramChat.count({
@@ -975,13 +1024,12 @@ function countDisabledChats(): Promise<number> {
   });
 }
 
-async function oldestChatCursor(): Promise<Date | null> {
-  const row = await prisma.telegramChat.findFirst({
+function oldestChatCursor(): Promise<{ sentThrough: Date; holdUntil: Date | null } | null> {
+  return prisma.telegramChat.findFirst({
     where: { enabled: true, revokedAt: null },
     orderBy: { sentThrough: "asc" },
-    select: { sentThrough: true },
+    select: { sentThrough: true, holdUntil: true },
   });
-  return row?.sentThrough ?? null;
 }
 
 /** What the last run left on this job's own heartbeat: the stall in progress and the restart state. */
@@ -1318,6 +1366,7 @@ async function watchOnce(
     scanCycle,
     agedOutSinceBoot,
     disabledChats,
+    held,
   ] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
@@ -1331,6 +1380,7 @@ async function watchOnce(
     readScanCycle(),
     readAgedOutSinceBoot(),
     countDisabledChats(),
+    heldChats(now),
   ]);
   const agedOut = findAgedOutProblems(before.agedOut, agedOutSinceBoot, now);
   const scanLatency = findScanLatencyProblems(before.scanLatency, scanCycle, before.keys);
@@ -1355,7 +1405,11 @@ async function watchOnce(
     training: training.state,
   };
   const problems = [
-    ...creditsOutFlows(findProblems(flows, jobs, now, cursor), (t) => heliusCreditsOut(t) !== null, now),
+    ...creditsOutFlows(
+      findProblems(flows, jobs, now, cursor?.sentThrough ?? null, (cursor?.holdUntil?.getTime() ?? 0) > now),
+      (t) => heliusCreditsOut(t) !== null,
+      now,
+    ),
     ...findSideJobProblems(sideJobs, now),
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
@@ -1364,6 +1418,7 @@ async function watchOnce(
     ...findTradeOutcomeProblems(trades),
     ...agedOut.problems,
     ...findDisabledChatProblems(disabledChats),
+    ...findTelegramHoldProblems(held, now),
     ...scanLatency.problems,
     ...training.problems,
   ];

@@ -9,6 +9,7 @@ import {
   latestAiVerdict,
   parseCommand,
   BOT_REPLIES_PER_SECOND,
+  GROUP_REPLIES_PER_MINUTE,
   replyCooldownSize,
   takeReplySlot,
 } from "./updates.js";
@@ -77,6 +78,26 @@ describe("takeReplySlot", () => {
     expect(given).toBe(BOT_REPLIES_PER_SECOND);
     // A chat refused for the bot-wide cap is answered in the next second, not held 3s.
     expect(takeReplySlot(-2_000_099, t + 1_000)).toBe(true);
+  });
+});
+
+describe("takeReplySlot in a group", () => {
+  it("gives a group GROUP_REPLIES_PER_MINUTE a minute across lanes, an admin's change apart", () => {
+    const t = clock + 180_000;
+    const group = -3_000_000;
+    let given = 0;
+    // Two lanes, each past its own cooldown every time: the group's minute is what runs out.
+    for (let i = 0; i < 20; i++) {
+      if (takeReplySlot(group, t + i * CHAT_REPLY_COOLDOWN_MS, i % 2 ? "refresh" : "", true)) given++;
+    }
+    expect(given).toBe(GROUP_REPLIES_PER_MINUTE);
+    expect(takeReplySlot(group, t + 20 * CHAT_REPLY_COOLDOWN_MS, "admin", true)).toBe(true);
+    // A minute after the first, its slot is back.
+    expect(takeReplySlot(group, t + 60_000 + 21 * CHAT_REPLY_COOLDOWN_MS, "", true)).toBe(true);
+    // A private chat has no such budget: Telegram's limit there is per second.
+    let privateGiven = 0;
+    for (let i = 0; i < 20; i++) if (takeReplySlot(4_000_000, t + i * CHAT_REPLY_COOLDOWN_MS)) privateGiven++;
+    expect(privateGiven).toBe(20);
   });
 });
 
@@ -376,6 +397,64 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     // An unknown button is answered and otherwise ignored.
     const odd = { ...press, callback_query: { ...press.callback_query!, data: "zz" } };
     expect((await handleTelegramUpdate(api, odd, opts)).action).toBe("ignored");
+  });
+
+  it("neither replies nor edits while Telegram holds the chat", async () => {
+    const api = new FakeTelegramApi();
+    const chatId = nextChat--;
+    // Switched off from the dashboard, so the dispatcher's tests running beside these (which send
+    // every linked chat their calls) never count it; replies and presses don't look at the switch.
+    await prisma.telegramChat.create({
+      data: {
+        chatId: BigInt(chatId),
+        kind: "private",
+        userId,
+        enabled: false,
+        holdUntil: new Date(Date.now() + 5 * 60_000),
+      },
+    });
+    const now = () => Date.now();
+    expect((await handleTelegramUpdate(api, message(chatId, "/status"), { now })).action).toBe("throttled");
+    expect(api.sent()).toHaveLength(0);
+    const press: TelegramUpdate = {
+      update_id: 12,
+      callback_query: {
+        id: "cb-held",
+        from: me,
+        data: refreshCallbackData(`${TAG}-held-token`, new Date())!,
+        message: { message_id: 78, chat: { id: chatId, type: "private", first_name: "Ada" }, date: 0 },
+      },
+    };
+    const boards: TelegramBoards = {
+      activeAlerts: async () => [],
+      board: async () => {
+        throw new Error("not asked");
+      },
+      alertNow: async () => {
+        throw new Error("not asked");
+      },
+    };
+    expect((await handleTelegramUpdate(api, press, { boards, now })).action).toBe("throttled");
+    expect(api.calls).toEqual([
+      {
+        method: "answerCallbackQuery",
+        params: expect.objectContaining({
+          text: "Telegram is pausing the bot's messages in this chat. Try again in 5 min.",
+        }),
+      },
+    ]);
+    // Once the hold has run out, the chat is answered again.
+    await prisma.telegramChat.updateMany({
+      where: { chatId: BigInt(chatId) },
+      data: { holdUntil: new Date(Date.now() - 1_000) },
+    });
+    expect((await handleTelegramUpdate(api, message(chatId, "/status"), { now: tick })).action).toBe(
+      "status",
+    );
+    await prisma.telegramChat.updateMany({
+      where: { chatId: BigInt(chatId) },
+      data: { revokedAt: new Date() },
+    });
   });
 
   it("refreshes a single alert in place, once per 15 s, and only an alert this chat was sent", async () => {
