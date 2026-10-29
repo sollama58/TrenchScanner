@@ -104,6 +104,31 @@ describe("CurveTape", () => {
     expect(tape.features("m", 2 * CURVE_GAP_MS + 7_000).curveCoveredSec).toBeNull();
   });
 
+  it("ends the stream's run at the last moment it was shown live, so a later read opens a new cover", () => {
+    // A silent subscription was confirmed every round and saved as quiet (chart audit D3).
+    const tape = new CurveTape();
+    tape.record("m", 0, state(1), "read");
+    tape.confirmStreamed("m", 0, 10_000);
+    tape.record("m", 10_000, state(2), "stream");
+    tape.confirmStreamed("m", 0, 130_000);
+    expect(tape.ticksAfter("m", -1)).toMatchObject({ confirmedAt: 130_000, streamFrom: 0 });
+    tape.endStreamRun("m", 20_000);
+    expect(tape.ticksAfter("m", -1)).toMatchObject({ confirmedAt: 20_000, streamFrom: null });
+    // Never back past the newest change it holds.
+    tape.endStreamRun("m", 5_000);
+    expect(tape.ticksAfter("m", -1)?.confirmedAt).toBe(10_000);
+    // The check's read, past the gap: the price is known from there, the move into it is not.
+    tape.record("m", 125_000, state(3), "read");
+    expect(tape.ticksAfter("m", -1)).toMatchObject({
+      coveredFrom: 125_000,
+      confirmedAt: 125_000,
+      streamFrom: null,
+      ticks: [{ at: 125_000, price: 3, realQuote: 0 }],
+    });
+    tape.endStreamRun("never", 0);
+    expect(tape.ticksAfter("never", -1)).toBeNull();
+  });
+
   it("ignores a read older than the newest change, and leaves changes unknown on a polled minute", () => {
     const tape = new CurveTape();
     tape.record("m", 0, state(1), "read");
