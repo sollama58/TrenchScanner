@@ -168,6 +168,23 @@ describe("foldModelPerformance", () => {
   });
 });
 
+describe("curve tape coverage", () => {
+  it("counts only the moments the tape is meant to cover", () => {
+    const window = { since: new Date(T0), until: new Date(T0 + HOUR) };
+    const moments = [
+      moment({ at: T0 + MIN, tape: true }),
+      moment({ at: T0 + 2 * MIN, tape: false }),
+      // Coins the tape never follows (another launchpad's, graduated, past its age).
+      moment({ at: T0 + 3 * MIN, tape: null }),
+      moment({ at: T0 + 4 * MIN, tape: null }),
+    ];
+    const r = foldModelPerformance([], moments, window, { now: new Date(T0 + 3 * HOUR) });
+    expect(r.current.eventCoverage.rows).toBe(4);
+    expect(r.current.eventCoverage.readPct).toBe(100);
+    expect(r.current.eventCoverage.tapePct).toBe(50);
+  });
+});
+
 describe("performanceQuerySchema", () => {
   it("takes a preset or a custom range between 30 minutes and 7 days", () => {
     expect(performanceQuerySchema.safeParse({ minutes: "60" }).success).toBe(true);
@@ -262,6 +279,18 @@ describe.skipIf(!dbAvailable)("GET /admin/models/performance", () => {
         },
       });
     }
+    // Event moments on coins the curve tape never follows: off the tape, and out of its column.
+    for (const [key, features] of [
+      ["c", { ageSource: 0, ageMinutes: 1 }],
+      ["d", { ageSource: 1, launchAgeMinutes: 40 }],
+      ["e", { graduated: 1, launchAgeMinutes: 5 }],
+    ] as const) {
+      const at = new Date(now - 2 * HOUR);
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${key}`, firstSeenAt: at } });
+      await prisma.candidateOutcome.create({
+        data: row(token.id, "event", at, false, { nsRead: 1, curveCoveredSec: null, ...features }),
+      });
+    }
     app = await buildServer(env);
   });
 
@@ -286,6 +315,9 @@ describe.skipIf(!dbAvailable)("GET /admin/models/performance", () => {
     expect(r.current.coverage.fullPct).toBe(100);
     // The curve tape's own flag, not the scan's one-minute return (which both rows carry).
     expect(r.current.coverage.tapePct).toBe(50);
+    // Of the four event moments only a's coin is one the tape follows, and it was on it.
+    expect(r.current.eventCoverage.rows).toBe(4);
+    expect(r.current.eventCoverage.tapePct).toBe(100);
     expect(r.paths.map((p) => p.path).sort()).toEqual(["cycle", "fast"]);
     expect(r.models.find((m) => m.id === SEAT)!.fastSharePct).toBe(50);
     expect(r.series.current.reduce((s, b) => s + b.alerts, 0)).toBe(2);

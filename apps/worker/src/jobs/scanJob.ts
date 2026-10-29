@@ -1674,6 +1674,8 @@ interface EarlyDecisions {
   coins: number;
   waves: number;
   firstAtMs?: number;
+  /** The median coin's time from the cycle's start to its early decision (pipelineWatchJob.ts alarms on it). */
+  msMedian?: number;
 }
 let lastEarlyDecisions: EarlyDecisions = { coins: 0, waves: 0 };
 
@@ -2718,6 +2720,8 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   // scan reads its one coin, whose reads are the whole block.
   const earlyDecided = new Set<string>();
   const earlyDecisions: EarlyDecisions = { coins: 0, waves: 0 };
+  // Each early-decided coin's time from the cycle's start, for earlyDecisions.msMedian.
+  const earlyCoinMs: number[] = [];
   const earlyEmissions: Promise<number>[] = [];
   let markWalletStageSettled: () => void = () => undefined;
   const walletStageSettled = new Promise<void>((resolve) => (markWalletStageSettled = resolve));
@@ -2812,7 +2816,9 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
       for (const c of found.ready) earlyDecided.add(c.mintAddress);
       earlyDecisions.waves += 1;
       earlyDecisions.coins += found.ready.length;
-      earlyDecisions.firstAtMs ??= Date.now() - startedAt;
+      const waveAtMs = Date.now() - startedAt;
+      earlyDecisions.firstAtMs ??= waveAtMs;
+      for (let i = 0; i < found.ready.length; i++) earlyCoinMs.push(waveAtMs);
       const waveCycle = newCuratedCycle();
       await forEachWithConcurrency(
         found.ready,
@@ -2982,6 +2988,12 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     forEachWithConcurrency(others, CANDIDATE_CONCURRENCY, processOne(readings, sharedReadings, lateCycle)),
   ]);
   const earlyEmitted = (await Promise.all(earlyEmissions)).reduce((sum, n) => sum + n, 0);
+  if (earlyCoinMs.length > 0) {
+    const sorted = earlyCoinMs.sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    earlyDecisions.msMedian =
+      sorted.length % 2 === 1 ? sorted[mid]! : Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
+  }
   if (cycle) lastEarlyDecisions = earlyDecisions;
   const curatedEmitted = earlyEmitted + contenderEmitted + (await emitCurated(lateCycle));
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);

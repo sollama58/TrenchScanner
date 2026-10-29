@@ -42,7 +42,10 @@ export interface PerfCoverage {
   full: boolean | null;
   /** The read included the X account/post. */
   xRead: boolean | null;
-  /** The coin's bonding curve was on the worker's curve tape at the decision (curveCoveredSec). */
+  /**
+   * The coin's bonding curve was on the worker's curve tape at the decision (curveCoveredSec); null
+   * for a coin the tape does not follow by design (curveTapeScopeSql).
+   */
   tape: boolean | null;
 }
 
@@ -232,12 +235,14 @@ export interface PerfCoverageShares {
 function coverage(rows: readonly PerfCoverage[]): PerfCoverageShares {
   const known = rows.filter((r) => r.read !== null);
   const share = (k: keyof PerfCoverage) => pct(known.filter((r) => r[k]).length, known.length);
+  // Of the rows the tape is meant to cover only: the rest carry null (curveTapeScopeSql).
+  const inTapeScope = known.filter((r) => r.tape !== null);
   return {
     rows: known.length,
     readPct: share("read"),
     fullPct: share("full"),
     xReadPct: share("xRead"),
-    tapePct: share("tape"),
+    tapePct: pct(inTapeScope.filter((r) => r.tape).length, inTapeScope.length),
   };
 }
 
@@ -566,19 +571,40 @@ export function foldModelPerformance(
 // ---------- The reads ----------
 
 /**
- * The coverage flags of a features column, as SQL columns (null when the row is gone). The tape flag
- * reads curveCoveredSec, set whenever the curve tape is current for the coin. It used to read
- * pathRet1mPct, the scan's own one-minute return, which is null on any coin under a minute old
- * however well its curve is followed: on 10-27/28 it showed 46% of cycle and 18% of fast-path
- * decisions "on the tape" while the curve tape covered 75% and 82% (thread 2026-10-28).
+ * Whether a features column is a coin the curve tape follows for the features (apps/worker's
+ * jobs/curveTape.ts): a Pump.fun curve not yet graduated, under the features' age, launched where
+ * the scan knows when. Stonks curves are followed for the chart alone, and a coin whose age is its
+ * pool's (ageSource 0) has no launch the scan saw, which in practice means another launchpad's coin
+ * with no Pump.fun curve to follow.
+ *
+ * Counted over every row, the tape column slid from 83% to 76% of cycle decisions over 10-26..29
+ * while the tape covered 94-97% of these coins every day: the decisions on coins it never follows
+ * grew (pool-aged coins from other launchpads, "...mfun" and the like, went from ~0.2% to 5.5% of
+ * cycle rows), so the figure tracked the mix rather than the tape (check-in 2026-10-29).
  */
-function coverageCols(f: Prisma.Sql): Prisma.Sql {
+function curveTapeScopeSql(f: Prisma.Sql, maxAgeMinutes: number): Prisma.Sql {
+  return Prisma.sql`(COALESCE((${f}->>'graduated')::float8, 0) <> 1
+    AND COALESCE((${f}->>'launchpadStonks')::float8, 0) <> 1
+    AND COALESCE((${f}->>'ageSource')::float8, 1) <> 0
+    AND COALESCE((${f}->>'launchAgeMinutes')::float8, (${f}->>'ageMinutes')::float8, 0) <= ${maxAgeMinutes})`;
+}
+
+/**
+ * The coverage flags of a features column, as SQL columns (null when the row is gone). The tape flag
+ * reads curveCoveredSec, set whenever the curve tape is current for the coin, and is null for a coin
+ * outside the tape's scope (curveTapeScopeSql). It used to read pathRet1mPct, the scan's own
+ * one-minute return, which is null on any coin under a minute old however well its curve is
+ * followed: on 10-27/28 it showed 46% of cycle and 18% of fast-path decisions "on the tape" while
+ * the curve tape covered 75% and 82% (thread 2026-10-28).
+ */
+function coverageCols(f: Prisma.Sql, tapeMaxAgeMinutes: number): Prisma.Sql {
   return Prisma.sql`
     CASE WHEN ${f} IS NULL THEN NULL
          ELSE COALESCE((${f}->>'nsRead')::float8 = 1, ${f}->>'nsDepthFull' IS NOT NULL) END AS ns_read,
     CASE WHEN ${f} IS NULL THEN NULL ELSE COALESCE((${f}->>'nsDepthFull')::float8 = 1, false) END AS ns_full,
     CASE WHEN ${f} IS NULL THEN NULL ELSE COALESCE((${f}->>'nsXRead')::float8 = 1, false) END AS ns_x,
-    CASE WHEN ${f} IS NULL THEN NULL ELSE ${f}->>'curveCoveredSec' IS NOT NULL END AS tape`;
+    CASE WHEN ${f} IS NULL OR NOT ${curveTapeScopeSql(f, tapeMaxAgeMinutes)} THEN NULL
+         ELSE ${f}->>'curveCoveredSec' IS NOT NULL END AS tape`;
 }
 
 interface RawCoverage {
@@ -595,10 +621,14 @@ const coverageOf = (r: RawCoverage): PerfCoverage => ({
   tape: r.tape,
 });
 
-/** Reads [since - span, until) and folds it. */
+/**
+ * Reads [since - span, until) and folds it. `tapeMaxAgeMinutes`: the age past which the worker's
+ * curve tape stops feeding the features (CURVE_TAPE_MAX_AGE_MINUTES).
+ */
 export async function buildModelPerformance(
   window: PerfWindow,
   model: string | null = null,
+  tapeMaxAgeMinutes = 15,
 ): Promise<ModelPerformanceReport> {
   const span = window.until.getTime() - window.since.getTime();
   const from = new Date(window.since.getTime() - span);
@@ -645,7 +675,7 @@ export async function buildModelPerformance(
              (COALESCE(a."simReturnPct", co."simReturnPct") IS NULL AND co."openReturnPct" IS NOT NULL) AS sim_open,
              COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
              t."firstSeenAt" AS detected_at, t."launchedAt" AS launched_at,
-             ${coverageCols(Prisma.sql`co."features"`)}
+             ${coverageCols(Prisma.sql`co."features"`, tapeMaxAgeMinutes)}
       FROM "CuratedAlert" a
       JOIN "Token" t ON t."id" = a."tokenId"
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
@@ -664,7 +694,7 @@ export async function buildModelPerformance(
     >`
       SELECT "anchorAt" AS at, "sampleKind" AS kind, "hit2xIn1h" AS hit2x,
              "disqualified" AS disq, "hit4xIn1h" AS hit4x,
-             ${coverageCols(Prisma.sql`"features"`)}
+             ${coverageCols(Prisma.sql`"features"`, tapeMaxAgeMinutes)}
       FROM "CandidateOutcome"
       WHERE "sampleKind" IN ('event', 'entry')
         AND "anchorAt" >= ${from} AND "anchorAt" < ${until}

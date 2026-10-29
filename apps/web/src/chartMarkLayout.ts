@@ -50,7 +50,8 @@ export interface MarkSpot<T> {
   gridStep?: number;
   /**
    * The bar this trade sits on. Wallets group only when they share a column. Neighbouring bars
-   * stay apart, even when a zoomed-out chart draws them a few pixels apart.
+   * stay apart, even when a zoomed-out chart draws them a few pixels apart. That is grouping
+   * only: layoutMarks still stacks a bubble that would overlap one on the next bar.
    */
   column?: number;
 }
@@ -344,15 +345,21 @@ export function gridIntervalAt(
 export interface BubblePriceLift {
   steps: number;
   toY: (price: number) => number | null;
+  /**
+   * The highest plot y a stacked bubble's top may reach (the event flags' row, or 0). A level
+   * above the first that would cross it folds into "+N" instead (chart audit 2026-10-29: the
+   * top candle's second and third bubbles drew above the pane, unseen and unclickable).
+   */
+  ceilingY?: number;
 }
 
 /**
  * The marks' places, in time order. Marks that carry `hi` and `gridStep` sit `steps` grid lines
  * above that candle's high, in price, and stack upward from there. They are not laid out in the
  * overhead band and then moved. Marks without that lift clear the higher of `seriesTop` and
- * their own candle high. Marks that would touch share a column and stack upward; past
- * MAX_LEVELS the outermost mark carries a "+N". `pitch` is a level's height. `gap` scales only
- * the series-band clearance.
+ * their own candle high. Marks that would touch, on this bar or the next, stack upward; past
+ * MAX_LEVELS, or past the lift's `ceilingY`, the nearest mark carries a "+N". `pitch` is a
+ * level's height. `gap` scales only the series-band clearance.
  */
 export function layoutMarks<T>(
   spots: readonly MarkSpot<T>[],
@@ -388,25 +395,30 @@ export function layoutMarks<T>(
   const placed: PlacedMark<T>[] = [];
   // One band for buys and sales. Left to right; equal x keeps the caller's order.
   const mine = spots.map((s, i) => ({ s, i })).sort((a, b) => a.s.x - b.s.x || a.i - b.i);
-  const near = (x: number, r: number, column: number | undefined) => {
+  const ceiling = price?.ceilingY != null && Number.isFinite(price.ceilingY) ? price.ceilingY : null;
+  // Every placed bubble close enough on x, whatever bar it sits on (chart audit 2026-10-29: a
+  // neighbouring bar was skipped here, so a busy launch at 1s or a zoomed-out view drew its
+  // bubbles on top of each other and only one could be clicked). Grouping a KOL with its side
+  // wallets stays per bar (collapseBubbleSpots); this is only whether two circles overlap.
+  const near = (x: number, r: number) => {
     const hits: PlacedMark<T>[] = [];
     for (let i = placed.length - 1; i >= 0; i--) {
       const p = placed[i]!;
       if (x - p.x > 2 * Math.max(p.r, r) + SIDE_GAP + COLUMN_SLACK) break;
-      // A neighbouring bar is not this column, even when the zoom draws it a few pixels away.
-      if (column != null && p.column != null && p.column !== column) continue;
       hits.push(p);
     }
     return hits;
   };
   for (const { s } of mine) {
-    const around = near(s.x, s.r, s.column);
+    const around = near(s.x, s.r);
     const clearOf = (y: number) =>
       around.every((p) => Math.hypot(p.x - s.x, p.y - y) >= p.r + s.r + SIDE_GAP);
     let level = 0;
     while (level < MAX_LEVELS && !clearOf(yAt(s, level))) level++;
-    if (level === MAX_LEVELS) {
-      const y = yAt(s, MAX_LEVELS - 1);
+    // A stacked level whose top would cross the ceiling folds into the "+N" of the bubble below.
+    const offTop = level > 0 && level < MAX_LEVELS && ceiling !== null && yAt(s, level) - s.r < ceiling;
+    if (level === MAX_LEVELS || offTop) {
+      const y = yAt(s, level - 1);
       const host =
         around.length > 0
           ? around.reduce((a, p) => (Math.hypot(p.x - s.x, p.y - y) < Math.hypot(a.x - s.x, a.y - y) ? p : a))

@@ -709,7 +709,10 @@ export interface PositionSummary {
   realizedSol: number | null;
   /** The coins still held at today's value against what they cost; null when it can't be priced. */
   unrealizedSol: number | null;
-  /** The average market cap the position's coins were bought at (USD), by the buys' own prices. */
+  /**
+   * The average market cap the position's coins were bought at (USD): SOL paid per coin, fees and
+   * slippage in, at today's SOL price. The chart's entry line prefers candleEntryMcap.
+   */
   entryMcap: number | null;
   /**
    * The market cap (USD) at which the coins still held would bring the position back to even,
@@ -723,6 +726,95 @@ export interface PositionSummary {
   sells: number;
   /** What this position's trades from our Trade panel saved against the baseline fee, SOL. */
   feesSavedSol: number;
+}
+
+/**
+ * Walk back from today's balance to the latest buy made into a holding under 1% of that buy:
+ * the current position's start, and the raw coins carried into it. Without one, the whole
+ * history is the position, unless older trades were left out (then its start, and its cost,
+ * are unknown: null).
+ */
+function positionStart(
+  trades: readonly { side: string; tokens: bigint }[],
+  balance: bigint,
+  truncated: boolean,
+): { start: number | null; carried: bigint } {
+  let start: number | null = null;
+  let carried = 0n;
+  let after = balance;
+  for (let i = trades.length - 1; i >= 0; i--) {
+    const before = after - trades[i]!.tokens;
+    if (before < 0n) break;
+    if (trades[i]!.side === "buy" && before * 100n <= trades[i]!.tokens) {
+      start = i;
+      carried = before;
+      break;
+    }
+    after = before;
+    if (i === 0 && !truncated) {
+      start = 0;
+      carried = before;
+    }
+  }
+  if (start === null && trades.length === 0 && !truncated) start = 0;
+  return { start, carried };
+}
+
+/** A market-cap candle as the chart draws it (USD, priceChart.ts VolumeCandle). */
+export interface EntryCandle {
+  t: number;
+  o: number;
+  c: number;
+  h?: number;
+  l?: number;
+  /** Its width in ms; a minute when absent. */
+  w?: number;
+}
+
+/** How far past the newest candle's end a buy may land and still be read off it (the candles' lag). */
+const ENTRY_CANDLE_LAG_MS = 5 * 60_000;
+
+/**
+ * The chart's "Your entry" line: the current position's buys priced off the market-cap candle
+ * each one landed in (the middle of its high and low), weighted by the coins each bought (chart
+ * audit 2026-10-29). summarizePosition's `entryMcap` is SOL paid, fees and slippage in, times
+ * today's SOL price, so after SOL moved, or on a fee-heavy buy, the line sat off the candles it
+ * was meant to mark. Null when a buy has no candle (before the first, or long after the last),
+ * or the position's start is unknown; the caller then keeps `entryMcap`.
+ */
+export function candleEntryMcap(p: PositionResponse, candles: readonly EntryCandle[]): number | null {
+  if (candles.length === 0) return null;
+  const trades = p.trades.map((t) => ({ t: t.t, side: t.side, tokens: BigInt(t.tokens) }));
+  const { start } = positionStart(trades, BigInt(p.balance), p.truncated);
+  if (start === null) return null;
+  const bars = [...candles].sort((a, b) => a.t - b.t);
+  let weight = 0;
+  let sum = 0;
+  for (const tr of trades.slice(start)) {
+    if (tr.side !== "buy" || tr.tokens <= 0n) continue;
+    // The bar the buy landed in: the last one that starts at or before it.
+    let lo = 0;
+    let hi = bars.length - 1;
+    let at = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (bars[mid]!.t <= tr.t) {
+        at = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    const bar = bars[at];
+    if (!bar) return null;
+    if (at === bars.length - 1 && tr.t - (bar.t + (bar.w ?? 60_000)) > ENTRY_CANDLE_LAG_MS) return null;
+    const high = bar.h ?? Math.max(bar.o, bar.c);
+    const low = bar.l ?? Math.min(bar.o, bar.c);
+    const mcap = (high + low) / 2;
+    if (!(mcap > 0) || !Number.isFinite(mcap)) return null;
+    const n = Number(tr.tokens);
+    weight += n;
+    sum += n * mcap;
+  }
+  return weight > 0 ? sum / weight : null;
 }
 
 export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null): PositionSummary {
@@ -739,27 +831,7 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
     panel: t.panel ?? null,
   }));
 
-  // Walk back from today's balance to the latest buy made into a holding under 1% of that buy:
-  // the current position's start. Without one, the whole history is the position, unless older
-  // trades were left out (then its start, and its cost, are unknown).
-  let start: number | null = null;
-  let carried = 0n;
-  let after = balance;
-  for (let i = trades.length - 1; i >= 0; i--) {
-    const before = after - trades[i]!.tokens;
-    if (before < 0n) break;
-    if (trades[i]!.side === "buy" && before * 100n <= trades[i]!.tokens) {
-      start = i;
-      carried = before;
-      break;
-    }
-    after = before;
-    if (i === 0 && !p.truncated) {
-      start = 0;
-      carried = before;
-    }
-  }
-  if (start === null && trades.length === 0 && !p.truncated) start = 0;
+  const { start, carried } = positionStart(trades, balance, p.truncated);
 
   let solIn = 0;
   let solOut = 0;
@@ -819,7 +891,8 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
   const unrealizedSol = known && costedValue !== null ? costedValue - Math.max(0, cost) : null;
   const pnlSol = unrealizedSol !== null ? realized + unrealizedSol : null;
   const pnlPct = pnlSol !== null ? pnlSol / investedSol : null;
-  // SOL per token paid across the buys, as a market cap: the line the chart draws as "Entry".
+  // SOL per token paid across the buys (fees in), as a market cap at today's SOL price. The chart's
+  // entry line reads the buys' own candles instead when it has them (candleEntryMcap).
   const entryMcap =
     costedBought > 0 && supply && p.solUsd ? (solIn / (costedBought / scale)) * supply * p.solUsd : null;
   const mine = start === null ? [] : trades.slice(start);

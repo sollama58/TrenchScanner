@@ -276,6 +276,9 @@ describe.skipIf(!dbAvailable)("the entry fast path's first scan", () => {
     try {
       const meta = await runScanCycle(deps, env);
       expect(meta.earlyDecisions).toMatchObject({ coins: 1, waves: 1 });
+      // One coin: its own time from the cycle's start is the median pipeline-watch alarms on.
+      const early = meta.earlyDecisions as { firstAtMs?: number; msMedian?: number };
+      expect(early.msMedian).toBe(early.firstAtMs);
     } finally {
       setOwnReadsCheck();
     }
