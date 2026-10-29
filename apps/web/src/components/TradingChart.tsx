@@ -1810,7 +1810,9 @@ function tickLabel(t: number, type: TickMarkType): string {
 
 /**
  * Price-scale margins. The top fits the highest bubble (one large grid offset) and the event
- * flags. It does not reserve a band that pins every bubble to the top of the pane. The bottom
+ * flags. It does not reserve a band that pins every bubble to the top of the pane, nor room for a
+ * full stack: a stacked bubble that would cross the flags or the pane's top folds into the "+N"
+ * of the one below (layoutMarks `ceilingY`, chart audit 2026-10-29). The bottom
  * grows when the reader's triangles sit under the lowest candle.
  */
 function chartMargins(
