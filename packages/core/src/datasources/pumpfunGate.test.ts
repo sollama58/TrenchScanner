@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HttpError } from "./httpClient.js";
-import { endpointOf, PumpFunGate } from "./pumpfunGate.js";
+import { endpointOf, PumpFunGate, pumpFunFrontendGate, takePumpFunGateStats } from "./pumpfunGate.js";
 
 describe("PumpFunGate", () => {
   it("lets a burst through, then holds back past the budget without waiting", async () => {
@@ -61,6 +61,19 @@ describe("PumpFunGate", () => {
     gate.refused(url, new Headers());
     gate.refused(url);
     expect(gate.takeStats()).toMatchObject({ refused: 3, challenged: 1 });
+  });
+
+  it("puts the challenge count on the heartbeat's numbers", () => {
+    takePumpFunGateStats();
+    pumpFunFrontendGate.refused(
+      "https://frontend-api-v3.pump.fun/coins-v2/" + "D".repeat(44),
+      new Headers({ "cf-mitigated": "challenge" }),
+    );
+    expect(takePumpFunGateStats()).toMatchObject({
+      frontendRefused: 1,
+      frontendChallenged: 1,
+      swapChallenged: 0,
+    });
   });
 
   it("names an endpoint by its path with the coin left out", () => {
