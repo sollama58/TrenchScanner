@@ -367,7 +367,7 @@ async function main() {
           },
           undefined,
           (key, data, bytes, slot) => {
-            if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes);
+            if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes, slot);
             else if (key.startsWith(POOL_STREAM_KEY_PREFIX)) onPoolStreamUpdate(key, data, bytes, slot);
           },
         )
