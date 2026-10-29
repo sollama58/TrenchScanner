@@ -255,12 +255,27 @@ export async function registerCandleRoutes(app: FastifyInstance, opts: { env?: E
       const holeMs = (answer.holes ?? []).reduce((sum, [a, b]) => sum + (b - a), 0);
       recordCandleAnswer("candles", answer.bars.length > 0 ? "store" : null, false, holeMs > span * 0.3);
     }
-    // As the chart's: the newest page a few seconds (3 on the finest timeframes, as /chart/fine's
-    // 1-second answer), older pages, which hold only closed candles, a minute.
-    const maxAge = q.before !== null ? 60 : CANDLE_TIMEFRAMES[q.tf] < 15 ? 3 : 15;
-    reply.header("Cache-Control", `private, max-age=${maxAge}`);
+    reply.header("Cache-Control", candleCacheControl(q.before, q.tf, answer));
     return answer;
   });
+}
+
+/**
+ * As the chart's: the newest page a few seconds (3 on the finest timeframes, as /chart/fine's
+ * 1-second answer), older pages, which hold only closed candles, a minute. A newest page that is
+ * still waiting on data (no bars, or holes a top-up or the browser's fill is filling) is not kept
+ * by the browser at all: the chart re-reads it 3 seconds later to pick the fill up, and a 15-second
+ * browser cache answered those re-reads with the same holey page, so a stretch filled about 40
+ * seconds late (chart audit 2026-10-29). The server's own few-second cache still absorbs the load.
+ */
+export function candleCacheControl(
+  before: number | null,
+  tf: keyof typeof CANDLE_TIMEFRAMES,
+  answer: { bars: unknown[]; holes?: unknown[] },
+): string {
+  if (before !== null) return "private, max-age=60";
+  if (answer.bars.length === 0 || (answer.holes?.length ?? 0) > 0) return "private, no-cache";
+  return `private, max-age=${CANDLE_TIMEFRAMES[tf] < 15 ? 3 : 15}`;
 }
 
 /** A summary of one series input, for the diagnosis. */

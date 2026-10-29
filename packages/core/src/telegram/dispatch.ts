@@ -71,10 +71,12 @@ export const DIGEST_THRESHOLD = 4;
 const PASS_BUDGET_MS = 25_000;
 /**
  * Telegram's limits: about one message a second to any one private chat, twenty a minute to a
- * group, and thirty a second across everything. Spaced a little wider than that.
+ * group, and thirty a second across everything. Spaced a little wider than that. A group's twenty
+ * are shared with the API's command replies and Refresh edits there, which get five a minute
+ * (updates.ts GROUP_REPLIES_PER_MINUTE); at 3.1 s the alerts alone could take all twenty.
  */
 const PRIVATE_GAP_MS = 1_100;
-const GROUP_GAP_MS = 3_100;
+const GROUP_GAP_MS = 4_000;
 const GLOBAL_GAP_MS = 50;
 /** Sends out at once; with GLOBAL_GAP_MS that is what keeps the pass near Telegram's own limit. */
 const MAX_IN_FLIGHT = 8;
@@ -189,6 +191,14 @@ const stuckSends = new Map<string, { oldest: string; through: number; failures: 
  */
 const holdUntil = new Map<string, number>();
 
+/**
+ * The earliest a chat's next send may go out: this process's own spacing and holds, or a hold on
+ * the row (a 429 the API's replies there ran into, or one from before a restart; hold.ts).
+ */
+function heldUntil(chat: { id: string; holdUntil: Date | null }): number {
+  return Math.max(holdUntil.get(chat.id) ?? 0, chat.holdUntil?.getTime() ?? 0);
+}
+
 /** Alerts aged out unsent since this process started (DispatchSummary.agedOutSinceBoot). */
 let agedOutSinceBoot = 0;
 
@@ -273,6 +283,8 @@ export interface DispatchSummary {
   agedOutSinceBoot: number;
   /** Chats left with alerts pending because Telegram's retry_after hadn't run out by the pass's end. */
   held: number;
+  /** The longest of those holds still to run at the pass's end, in seconds (0 with none held). */
+  heldForS: number;
   /** Chats switched off in this pass after failing for FAILING_FOR_MS with nothing getting through. */
   disabled: number;
   /** What Telegram said to the last send left for the next pass, for the heartbeat. */
@@ -302,6 +314,7 @@ function loadChats() {
       sentThrough: true,
       lastSentAt: true,
       failures: true,
+      holdUntil: true,
       createdAt: true,
       picksFallbackNoticedAt: true,
       user: {
@@ -542,6 +555,7 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     agedOut: 0,
     agedOutSinceBoot,
     held: 0,
+    heldForS: 0,
     disabled: 0,
   };
   if (!telegramConfigured(env.TELEGRAM_BOT_TOKEN)) return summary;
@@ -800,10 +814,10 @@ async function dispatchPass(
             through,
           },
         ],
-        nextAt: holdUntil.get(chat.id) ?? 0,
+        nextAt: heldUntil(chat),
       });
     } else {
-      queues.push({ chat, pending, nextAt: holdUntil.get(chat.id) ?? 0 });
+      queues.push({ chat, pending, nextAt: heldUntil(chat) });
     }
   }
 
@@ -982,7 +996,14 @@ async function dispatchPass(
     if (result.code === 429) {
       const wait = Math.min(MAX_RETRY_AFTER_MS, (result.retryAfter ?? 5) * 1_000);
       rateLimited.add(q.chat.id);
-      logger.warn("telegram rate limited", { chat: q.chat.id, wait, chats: rateLimited.size });
+      logger.warn("telegram rate limited", {
+        chat: q.chat.id,
+        kind: q.chat.kind,
+        wait,
+        retryAfterS: result.retryAfter ?? null,
+        digest: isDigest(item.card),
+        chats: rateLimited.size,
+      });
       q.nextAt = now() + wait;
       // Not before Telegram said, in this pass or a later one (the pass ends before a long wait).
       holdUntil.set(q.chat.id, q.nextAt);
@@ -992,10 +1013,14 @@ async function dispatchPass(
       // means the bot-wide limit, and then every chat waits.
       if (rateLimited.size >= 2) for (const other of queues) other.nextAt = Math.max(other.nextAt, q.nextAt);
       // What Telegram said, for the chat's owner and the admin panel; a rate limit is not the
-      // chat's failure, so it doesn't count towards switching it off.
+      // chat's failure, so it doesn't count towards switching it off. The hold goes on the row too,
+      // where the API's replies in this chat and a restarted worker see it (hold.ts).
       await prisma.telegramChat.updateMany({
         where: { id: q.chat.id, revokedAt: null },
-        data: { lastError: `${what} (retry after ${Math.round(wait / 1_000)} s)` },
+        data: {
+          lastError: `${what} (retry after ${Math.round(wait / 1_000)} s)`,
+          holdUntil: new Date(q.nextAt),
+        },
       });
       return;
     }
@@ -1133,7 +1158,9 @@ async function dispatchPass(
       data: off ? { lastError: what, failures, enabled: false } : { lastError: what, failures },
     });
   }
-  summary.held = queues.filter((q) => q.pending.length > 0 && q.nextAt > end).length;
+  const heldQueues = queues.filter((q) => q.pending.length > 0 && q.nextAt > end);
+  summary.held = heldQueues.length;
+  summary.heldForS = Math.ceil(Math.max(0, ...heldQueues.map((q) => q.nextAt - end)) / 1_000);
   for (const [id, until] of holdUntil) if (until <= end) holdUntil.delete(id);
   agedOutSinceBoot += summary.agedOut;
   summary.agedOutSinceBoot = agedOutSinceBoot;

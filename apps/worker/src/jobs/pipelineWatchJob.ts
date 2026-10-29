@@ -65,8 +65,8 @@ const logger = createLogger("pipeline-watch");
  *
  * And, before they run out rather than after (full audit 2026-10-27, T3): Helius spend against the
  * usual day with no plan size needed (heliusBudget.ts checkHeliusBurn), alerts Telegram dropped
- * unsent for being too old (findAgedOutProblems), the scan cycle's time to its decisions
- * (findScanLatencyProblems), and training's run time against its deadline and the hours since a
+ * unsent for being too old (findAgedOutProblems), the scan cycle's time to its decisions and the
+ * fast path's and early decisions' own (findScanLatencyProblems), and training's run time against its deadline and the hours since a
  * run last completed (findTrainingRunProblems, findTrainerProblems). All notify only.
  */
 
@@ -295,17 +295,28 @@ export function clearedKeys(before: Set<string>, now: Set<string>): string[] {
  */
 export const TELEGRAM_LAG_MS = 5 * 60_000;
 
-/** Pure: which flows and jobs are stalled. `oldestChatCursor`: the furthest-behind enabled chat. */
+/**
+ * Pure: which flows and jobs are stalled. `oldestChatCursor`: the furthest-behind enabled chat;
+ * `cursorHeld`: whether Telegram is holding that chat (a 429's retry_after, TelegramChat.holdUntil).
+ * A held chat's lag is notified but is not a stall: restarting the scanner can't lift Telegram's
+ * hold, and a restart used to forget it and resend straight into it (check-in 2026-10-29).
+ */
 export function findProblems(
   flows: FlowCheck[],
   jobs: JobCheck[],
   now: number,
   oldestChatCursor: Date | null = null,
+  cursorHeld = false,
 ): Problem[] {
   const out: Problem[] = [];
   if (oldestChatCursor !== null && now - oldestChatCursor.getTime() > TELEGRAM_LAG_MS) {
     const mins = Math.round((now - oldestChatCursor.getTime()) / 60_000);
-    out.push({ key: "telegram", text: `Telegram alerts: a linked chat is ${mins} min behind` });
+    const text = `Telegram alerts: a linked chat is ${mins} min behind`;
+    out.push(
+      cursorHeld
+        ? { key: "telegram", text: `${text} (Telegram's rate limit on it)`, side: true }
+        : { key: "telegram", text },
+    );
   }
   for (const f of flows) {
     if (f.recent === 0 && f.baseline > 0) {
@@ -625,11 +636,45 @@ export const SCAN_LATENCY_SAMPLES = 10;
 export const SCAN_LATENCY_ALERT_MS = 27_000;
 export const SCAN_LATENCY_CLEAR_MS = 24_000;
 
+/**
+ * The decisions made apart from the cycle's barrier, which the alarm above never saw: 79% of event
+ * rows bank before it (DS-3's early decisions), and the entry fast path decides each crossing coin
+ * on its own scan (entryFastPath.ts). Each gets its own window of per-cycle figures off the scan's
+ * heartbeat (check-in 2026-10-29, B):
+ * - the fast path's median crossing-to-decision time (entryFastPath.crossToDecisionMsMedian), 5.4-
+ *   6.6 s a cycle on 2026-10-29 against a 2-3 s design target, one coin at 32 s. 12 s is twice
+ *   that day's; 9 s clears above it.
+ * - the median early-decided coin's time from the cycle's start (earlyDecisions.msMedian), new on
+ *   the heartbeat with this alarm, so its line is set under the barrier's own (22 s on 2026-10-29,
+ *   and an early decision is never later than the barrier): 20 s warns, 17 s clears. Tune both
+ *   once a few days of figures are on /health/worker.
+ * A cycle with no such decision adds no sample, so a quiet hour keeps the window it had.
+ */
+export const FAST_PATH_LATENCY_ALERT_MS = 12_000;
+export const FAST_PATH_LATENCY_CLEAR_MS = 9_000;
+export const EARLY_DECISION_LATENCY_ALERT_MS = 20_000;
+export const EARLY_DECISION_LATENCY_CLEAR_MS = 17_000;
+
 export type ScanLatencyState = {
   /** The newest cycles' start-to-decided times, oldest first. */
   samples: number[];
+  /** The newest cycles' fast-path median crossing-to-decision times, oldest first. */
+  fastSamples: number[];
+  /** The newest cycles' median start-to-early-decision times, oldest first. */
+  earlySamples: number[];
   /** The scan run the newest sample came from (its lastRunAt), so a cycle is counted once. */
   lastRunAt: string | null;
+};
+
+/** One completed scan cycle's figures (readScanCycle); each null when the cycle had none. */
+export type ScanCycleTimes = {
+  runAt: Date;
+  /** Start to the contenders decided (decidedMs). */
+  ms: number | null;
+  /** The fast path's median crossing-to-decision time since the last cycle. */
+  fastMs?: number | null;
+  /** The median early-decided coin's time from the cycle's start. */
+  earlyMs?: number | null;
 };
 
 /**
@@ -654,34 +699,86 @@ function middle(values: number[]): number {
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-/** Pure: the samples after one more completed cycle (or none new), and the problem, if any. */
+/** `samples` with `ms` added when it is a figure, keeping the newest SCAN_LATENCY_SAMPLES. */
+function withSample(samples: number[], ms: number | null | undefined): number[] {
+  return typeof ms === "number" && Number.isFinite(ms)
+    ? [...samples, ms].slice(-SCAN_LATENCY_SAMPLES)
+    : samples;
+}
+
+/** The window's median past its line (the clear line while it was flagged), or null. */
+function slowMedian(samples: number[], alertMs: number, clearMs: number, wasFlagged: boolean): number | null {
+  if (samples.length < SCAN_LATENCY_SAMPLES) return null;
+  const p50 = middle(samples);
+  return p50 > (wasFlagged ? clearMs : alertMs) ? p50 : null;
+}
+
+/**
+ * Pure: the samples after one more completed cycle (or none new), and the problems, if any.
+ * `flagged` is the problem keys the last run had up.
+ */
 export function findScanLatencyProblems(
   prev: ScanLatencyState | null,
-  cycle: { runAt: Date; ms: number } | null,
-  wasFlagged: boolean,
+  cycle: ScanCycleTimes | null,
+  flagged: ReadonlySet<string>,
 ): { state: ScanLatencyState; problems: Problem[] } {
-  let state = prev ?? { samples: [], lastRunAt: null };
+  let state = prev ?? { samples: [], fastSamples: [], earlySamples: [], lastRunAt: null };
   if (cycle !== null && cycle.runAt.toISOString() !== state.lastRunAt) {
     state = {
-      samples: [...state.samples, cycle.ms].slice(-SCAN_LATENCY_SAMPLES),
+      samples: withSample(state.samples, cycle.ms),
+      fastSamples: withSample(state.fastSamples, cycle.fastMs),
+      earlySamples: withSample(state.earlySamples, cycle.earlyMs),
       lastRunAt: cycle.runAt.toISOString(),
     };
   }
-  if (state.samples.length < SCAN_LATENCY_SAMPLES) return { state, problems: [] };
-  const p50 = middle(state.samples);
-  if (p50 <= (wasFlagged ? SCAN_LATENCY_CLEAR_MS : SCAN_LATENCY_ALERT_MS)) return { state, problems: [] };
-  return {
-    state,
-    problems: [
-      {
-        key: "scan-latency",
-        text:
-          `Scan cycle: ${(p50 / 1000).toFixed(1)} s from start to contenders decided at the median of the last ` +
-          `${SCAN_LATENCY_SAMPLES} cycles (warns past ${SCAN_LATENCY_ALERT_MS / 1000} s) - see the scan's stagesMs on /health/worker`,
-        side: true,
-      },
-    ],
-  };
+  const problems: Problem[] = [];
+  const seconds = (ms: number) => (ms / 1000).toFixed(1);
+  const cycleP50 = slowMedian(
+    state.samples,
+    SCAN_LATENCY_ALERT_MS,
+    SCAN_LATENCY_CLEAR_MS,
+    flagged.has("scan-latency"),
+  );
+  if (cycleP50 !== null) {
+    problems.push({
+      key: "scan-latency",
+      text:
+        `Scan cycle: ${seconds(cycleP50)} s from start to contenders decided at the median of the last ` +
+        `${SCAN_LATENCY_SAMPLES} cycles (warns past ${SCAN_LATENCY_ALERT_MS / 1000} s) - see the scan's stagesMs on /health/worker`,
+      side: true,
+    });
+  }
+  const fastP50 = slowMedian(
+    state.fastSamples,
+    FAST_PATH_LATENCY_ALERT_MS,
+    FAST_PATH_LATENCY_CLEAR_MS,
+    flagged.has("fast-path-latency"),
+  );
+  if (fastP50 !== null) {
+    problems.push({
+      key: "fast-path-latency",
+      text:
+        `Entry fast path: ${seconds(fastP50)} s from a coin crossing to its decision at the median of the last ` +
+        `${SCAN_LATENCY_SAMPLES} cycles with one (warns past ${FAST_PATH_LATENCY_ALERT_MS / 1000} s) - see the scan's entryFastPath on /health/worker`,
+      side: true,
+    });
+  }
+  const earlyP50 = slowMedian(
+    state.earlySamples,
+    EARLY_DECISION_LATENCY_ALERT_MS,
+    EARLY_DECISION_LATENCY_CLEAR_MS,
+    flagged.has("early-decision-latency"),
+  );
+  if (earlyP50 !== null) {
+    problems.push({
+      key: "early-decision-latency",
+      text:
+        `Early decisions: ${seconds(earlyP50)} s from the cycle's start to a coin decided early at the median of the last ` +
+        `${SCAN_LATENCY_SAMPLES} cycles with one (warns past ${EARLY_DECISION_LATENCY_ALERT_MS / 1000} s) - see the scan's earlyDecisions on /health/worker`,
+      side: true,
+    });
+  }
+  return { state, problems };
 }
 
 /**
@@ -853,13 +950,26 @@ async function countTradeOutcomes(now: number): Promise<TradeOutcomeCheck> {
   return { total: rows.reduce((n, r) => n + r._count._all, 0), failed: of("failed"), expired: of("expired") };
 }
 
-/** The scan's newest completed cycle's start-to-decided time (decidedMs), or null. */
-async function readScanCycle(): Promise<{ runAt: Date; ms: number } | null> {
+/**
+ * The scan's newest completed cycle's figures: its start-to-decided time (decidedMs), the fast
+ * path's crossing-to-decision median and the early decisions' median, or null.
+ */
+async function readScanCycle(): Promise<ScanCycleTimes | null> {
   const row = await prisma.systemHeartbeat.findUnique({ where: { job: "scan" } });
   // A failed cycle's laps stop where it failed.
   if (!row || !row.lastSuccessAt || row.lastSuccessAt.getTime() < row.lastRunAt.getTime()) return null;
-  const ms = decidedMs((row.meta as Record<string, unknown> | null)?.stagesMs);
-  return ms === null ? null : { runAt: row.lastRunAt, ms };
+  const meta = row.meta as Record<string, unknown> | null;
+  const figure = (key: string, field: string) => {
+    const o = meta?.[key];
+    const v = typeof o === "object" && o !== null ? (o as Record<string, unknown>)[field] : undefined;
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  };
+  return {
+    runAt: row.lastRunAt,
+    ms: decidedMs(meta?.stagesMs),
+    fastMs: figure("entryFastPath", "crossToDecisionMsMedian"),
+    earlyMs: figure("earlyDecisions", "msMedian"),
+  };
 }
 
 /** The Telegram dispatcher's count of alerts it skipped as too old since its process booted, or null. */
@@ -869,6 +979,44 @@ async function readAgedOutSinceBoot(): Promise<number | null> {
   return typeof n === "number" && Number.isFinite(n) ? n : null;
 }
 
+/**
+ * A hold this long or longer is told at once. Telegram's own short waits (a few seconds) pass
+ * unnoticed; one of minutes is the evening stall, and an alert held past MAX_ALERT_AGE_MS (15 min)
+ * is dropped unsent, so this is the warning before that, not after (check-in 2026-10-29).
+ */
+export const TELEGRAM_HOLD_ALERT_MS = 2 * 60_000;
+
+/**
+ * Pure: linked chats Telegram is holding (TelegramChat.holdUntil, a 429's retry_after) for
+ * TELEGRAM_HOLD_ALERT_MS or more. Notify-only: nothing here restarts.
+ */
+export function findTelegramHoldProblems(held: { kind: string; holdUntil: Date }[], now: number): Problem[] {
+  const long = held.filter((c) => c.holdUntil.getTime() - now >= TELEGRAM_HOLD_ALERT_MS);
+  if (long.length === 0) return [];
+  const longest = long.reduce((a, b) => (b.holdUntil > a.holdUntil ? b : a));
+  const mins = Math.ceil((longest.holdUntil.getTime() - now) / 60_000);
+  const who = long.length === 1 ? `a linked ${longest.kind}` : `${long.length} linked chats`;
+  return [
+    {
+      key: "telegram-held",
+      text:
+        `Telegram alerts: Telegram is holding ${who} for ${mins} more min (rate limit, until ` +
+        `${longest.holdUntil.toISOString().slice(11, 16)} UTC); alerts over 15 min old by then are dropped`,
+      side: true,
+    },
+  ];
+}
+
+/** Enabled chats with a Telegram hold still running. */
+function heldChats(now: number): Promise<{ kind: string; holdUntil: Date }[]> {
+  return prisma.telegramChat
+    .findMany({
+      where: { enabled: true, revokedAt: null, holdUntil: { gt: new Date(now) } },
+      select: { kind: true, holdUntil: true },
+    })
+    .then((rows) => rows.flatMap((r) => (r.holdUntil ? [{ kind: r.kind, holdUntil: r.holdUntil }] : [])));
+}
+
 /** Linked chats the dispatcher switched off for failing (see findDisabledChatProblems). */
 function countDisabledChats(): Promise<number> {
   return prisma.telegramChat.count({
@@ -876,13 +1024,12 @@ function countDisabledChats(): Promise<number> {
   });
 }
 
-async function oldestChatCursor(): Promise<Date | null> {
-  const row = await prisma.telegramChat.findFirst({
+function oldestChatCursor(): Promise<{ sentThrough: Date; holdUntil: Date | null } | null> {
+  return prisma.telegramChat.findFirst({
     where: { enabled: true, revokedAt: null },
     orderBy: { sentThrough: "asc" },
-    select: { sentThrough: true },
+    select: { sentThrough: true, holdUntil: true },
   });
-  return row?.sentThrough ?? null;
 }
 
 /** What the last run left on this job's own heartbeat: the stall in progress and the restart state. */
@@ -921,13 +1068,21 @@ function readAgedOutState(m: Record<string, unknown> | null): AgedOutState | nul
 
 function readScanLatencyState(m: Record<string, unknown> | null): ScanLatencyState | null {
   if (!m || typeof m.samples !== "string") return null;
+  // Heartbeat meta holds no arrays: each window is comma-separated milliseconds. The fast-path and
+  // early windows are absent on a heartbeat written before they were kept.
+  const list = (v: unknown) =>
+    typeof v !== "string"
+      ? []
+      : v
+          .split(",")
+          .filter(Boolean)
+          .map(Number)
+          .filter((n) => Number.isFinite(n))
+          .slice(-SCAN_LATENCY_SAMPLES);
   return {
-    samples: m.samples
-      .split(",")
-      .filter(Boolean)
-      .map(Number)
-      .filter((n) => Number.isFinite(n))
-      .slice(-SCAN_LATENCY_SAMPLES),
+    samples: list(m.samples),
+    fastSamples: list(m.fastSamples),
+    earlySamples: list(m.earlySamples),
     lastRunAt: typeof m.lastRunAt === "string" ? m.lastRunAt : null,
   };
 }
@@ -1137,7 +1292,12 @@ function carriedMeta(
     scanLatency:
       state.scanLatency === null
         ? null
-        : { samples: state.scanLatency.samples.join(","), lastRunAt: state.scanLatency.lastRunAt },
+        : {
+            samples: state.scanLatency.samples.join(","),
+            fastSamples: state.scanLatency.fastSamples.join(","),
+            earlySamples: state.scanLatency.earlySamples.join(","),
+            lastRunAt: state.scanLatency.lastRunAt,
+          },
     training: state.training,
   };
 }
@@ -1206,6 +1366,7 @@ async function watchOnce(
     scanCycle,
     agedOutSinceBoot,
     disabledChats,
+    held,
   ] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
@@ -1219,9 +1380,10 @@ async function watchOnce(
     readScanCycle(),
     readAgedOutSinceBoot(),
     countDisabledChats(),
+    heldChats(now),
   ]);
   const agedOut = findAgedOutProblems(before.agedOut, agedOutSinceBoot, now);
-  const scanLatency = findScanLatencyProblems(before.scanLatency, scanCycle, before.keys.has("scan-latency"));
+  const scanLatency = findScanLatencyProblems(before.scanLatency, scanCycle, before.keys);
   const trainingJob = trainerJobs.find((j) => j.job === "curator-training");
   const training = trainingJob
     ? findTrainingRunProblems(
@@ -1243,7 +1405,11 @@ async function watchOnce(
     training: training.state,
   };
   const problems = [
-    ...creditsOutFlows(findProblems(flows, jobs, now, cursor), (t) => heliusCreditsOut(t) !== null, now),
+    ...creditsOutFlows(
+      findProblems(flows, jobs, now, cursor?.sentThrough ?? null, (cursor?.holdUntil?.getTime() ?? 0) > now),
+      (t) => heliusCreditsOut(t) !== null,
+      now,
+    ),
     ...findSideJobProblems(sideJobs, now),
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
@@ -1252,6 +1418,7 @@ async function watchOnce(
     ...findTradeOutcomeProblems(trades),
     ...agedOut.problems,
     ...findDisabledChatProblems(disabledChats),
+    ...findTelegramHoldProblems(held, now),
     ...scanLatency.problems,
     ...training.problems,
   ];

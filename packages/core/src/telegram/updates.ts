@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { createLogger } from "../logger.js";
+import { telegramHoldMs } from "./hold.js";
 import {
   chatTitle,
   userDisplayName,
@@ -141,11 +142,20 @@ export function takeReplySlot(
   chatId: bigint | number,
   t: number,
   lane: "" | "admin" | "refresh" = "",
+  inGroup = false,
 ): boolean {
   const key = lane ? `${chatId}:${lane}` : String(chatId);
   const last = lastReplyAt.get(key);
   if (last !== undefined && t - last >= 0 && t - last < CHAT_REPLY_COOLDOWN_MS) return false;
+  const group = lane !== "admin" && inGroup ? String(chatId) : null;
+  const recent = group === null ? null : recentGroupReplies(group, t);
+  if (recent !== null && recent.length >= GROUP_REPLIES_PER_MINUTE) return false;
   if (!takeBotReply(t)) return false;
+  if (group !== null && recent !== null) {
+    recent.push(t);
+    groupReplies.delete(group);
+    groupReplies.set(group, recent);
+  }
   lastReplyAt.delete(key);
   lastReplyAt.set(key, t);
   for (const [k, at] of lastReplyAt) {
@@ -174,6 +184,52 @@ function takeBotReply(t: number): boolean {
   if (botWindowReplies >= BOT_REPLIES_PER_SECOND) return false;
   botWindowReplies += 1;
   return true;
+}
+
+/**
+ * Replies and button edits per rolling minute in one group or supergroup, every lane but an
+ * admin's together. Telegram lets a bot send a group about twenty messages a minute, edits
+ * included, and the chat's alerts need most of them: the dispatcher spaces a group's alerts four
+ * seconds apart (dispatch.ts GROUP_GAP_MS, fifteen a minute), which leaves these five. Each lane
+ * on its own 3 s cooldown allowed up to sixty a minute between them, and in a busy supergroup's
+ * evenings members' Refresh presses and commands ran the group into Telegram's flood wait, which
+ * held its alerts for 12+ minutes (check-in 2026-10-29).
+ */
+export const GROUP_REPLIES_PER_MINUTE = 5;
+const GROUP_REPLY_WINDOW_MS = 60_000;
+/** Group chat id -> when its replies in the last minute went out, oldest first; in time order. */
+const groupReplies = new Map<string, number[]>();
+
+function recentGroupReplies(group: string, t: number): number[] {
+  const recent = (groupReplies.get(group) ?? []).filter((at) => at <= t && t - at < GROUP_REPLY_WINDOW_MS);
+  if (groupReplies.size > MAX_COOLDOWN_CHATS) {
+    for (const [k, times] of groupReplies) {
+      if (groupReplies.size <= MAX_COOLDOWN_CHATS && t - (times.at(-1) ?? 0) < GROUP_REPLY_WINDOW_MS) break;
+      groupReplies.delete(k);
+    }
+  }
+  return recent;
+}
+
+/**
+ * takeReplySlot, and not while Telegram is holding the chat (TelegramChat.holdUntil, hold.ts): a
+ * request inside a flood wait only makes Telegram stretch it, and the chat's alerts wait it out
+ * too. An admin's change still goes through; it is rare, and the change is what they asked for.
+ */
+async function mayReply(
+  chatId: bigint,
+  t: number,
+  lane: "" | "admin" | "refresh",
+  inGroup: boolean,
+): Promise<boolean> {
+  if (lane !== "admin" && (await telegramHoldMs(chatId, t)) > 0) return false;
+  return takeReplySlot(chatId, t, lane, inGroup);
+}
+
+/** What a button press is told while Telegram holds its chat. */
+function heldText(ms: number): string {
+  const wait = ms < 90_000 ? `${Math.max(1, Math.ceil(ms / 1_000))}s` : `${Math.ceil(ms / 60_000)} min`;
+  return `Telegram is pausing the bot's messages in this chat. Try again in ${wait}.`;
 }
 
 /** How many chats the cooldown is holding, for tests. */
@@ -310,7 +366,8 @@ export async function handleTelegramUpdate(
     case "link": {
       if (!looksLikeTelegramCode(parsed.arg)) {
         if (parsed.command === "start" || isPrivate) {
-          if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
+          if (!(await mayReply(chatId, (opts.now ?? Date.now)(), "", !isPrivate)))
+            return { action: "throttled" };
           await api.sendMessage(chatId, isPrivate ? HELP_PRIVATE : HELP_GROUP);
           return { action: "help" };
         }
@@ -319,7 +376,7 @@ export async function handleTelegramUpdate(
       return link(api, message, parsed.arg, opts);
     }
     case "status": {
-      if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
+      if (!(await mayReply(chatId, (opts.now ?? Date.now)(), "", !isPrivate))) return { action: "throttled" };
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
         select: {
@@ -352,7 +409,7 @@ export async function handleTelegramUpdate(
       const now = (opts.now ?? Date.now)();
       // A change is an admin's, in a group: checked first, so only its reply uses the admin lane.
       const admin = words.length > 0 && (!isGroup || (await isGroupAdmin(api, message)));
-      if (!takeReplySlot(chatId, now, admin ? "admin" : "")) return { action: "throttled" };
+      if (!(await mayReply(chatId, now, admin ? "admin" : "", !isPrivate))) return { action: "throttled" };
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
         select: { id: true, hidden: true },
@@ -411,7 +468,7 @@ export async function handleTelegramUpdate(
     case "board": {
       if (!opts.boards) return { action: "ignored" };
       // Inside the cooldown: dropped without a word, since a reply is what is being rationed.
-      if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
+      if (!(await mayReply(chatId, (opts.now ?? Date.now)(), "", !isPrivate))) return { action: "throttled" };
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
         select: { id: true, ...SETTINGS_SELECT, user: { select: { walletAddress: true } } },
@@ -444,7 +501,7 @@ export async function handleTelegramUpdate(
     case "mincap": {
       const changing = parsed.command === "mincap" && parsed.arg.trim() !== "";
       const admin = changing && (!isGroup || (await isGroupAdmin(api, message)));
-      if (!takeReplySlot(chatId, (opts.now ?? Date.now)(), admin ? "admin" : "")) {
+      if (!(await mayReply(chatId, (opts.now ?? Date.now)(), admin ? "admin" : "", !isPrivate))) {
         return { action: "throttled" };
       }
       const row = await prisma.telegramChat.findFirst({
@@ -486,7 +543,8 @@ export async function handleTelegramUpdate(
     case "stop":
     case "unlink": {
       if (isGroup && !(await isGroupAdmin(api, message))) {
-        if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
+        if (!(await mayReply(chatId, (opts.now ?? Date.now)(), "", !isPrivate)))
+          return { action: "throttled" };
         await api.sendMessage(chatId, "Only a group admin can stop alerts here.");
         return { action: "refused" };
       }
@@ -562,10 +620,16 @@ async function handleButton(
     return { action: "ignored" };
   }
   const chatId = BigInt(message.chat.id);
+  // Every button here edits a message, which spends the chat's send limit like a new one.
+  const held = await telegramHoldMs(chatId, (opts.now ?? Date.now)());
+  if (held > 0) {
+    await api.answerCallbackQuery(query.id, heldText(held));
+    return { action: "throttled" };
+  }
   // The board and alerts buttons re-read the board, so they share the chat's command cooldown; a
   // press inside it only stops the spinner. The settings buttons are cheap edits (a change is an
   // admin's, in a group) and Preview has its own cooldown, so they are left to run.
-  if (!isSettings && !takeReplySlot(chatId, (opts.now ?? Date.now)())) {
+  if (!isSettings && !takeReplySlot(chatId, (opts.now ?? Date.now)(), "", message.chat.type !== "private")) {
     await api.answerCallbackQuery(query.id, "Slow down a moment, then try again.");
     return { action: "throttled" };
   }
@@ -634,7 +698,12 @@ async function refreshButton(
   }
   const chatId = BigInt(message.chat.id);
   const t = (opts.now ?? Date.now)();
-  if (!takeReplySlot(chatId, t, "refresh")) {
+  const held = await telegramHoldMs(chatId, t);
+  if (held > 0) {
+    await api.answerCallbackQuery(query.id, heldText(held));
+    return { action: "throttled" };
+  }
+  if (!takeReplySlot(chatId, t, "refresh", message.chat.type !== "private")) {
     await api.answerCallbackQuery(query.id, "Slow down a moment, then try again.");
     return { action: "throttled" };
   }
@@ -848,7 +917,7 @@ async function link(
   // In a group, only an admin may point the group at an account: anyone can be in a group, and
   // whoever links it decides whose alerts everyone there reads.
   if (isGroup && !(await isGroupAdmin(api, message))) {
-    if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
+    if (!(await mayReply(chatId, (opts.now ?? Date.now)(), "", isGroup))) return { action: "throttled" };
     await api.sendMessage(chatId, "Only a group admin can link this group to a TrenchScanner account.");
     return { action: "refused" };
   }
