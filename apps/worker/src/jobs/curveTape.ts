@@ -65,7 +65,8 @@ export const POOL_FOLLOW_MS = 15 * 60_000;
  */
 const PAIR_WAIT_MS = 400;
 
-type CurveStream = Pick<HeliusAccountStream, "watch" | "unwatch" | "coveredSince">;
+type CurveStream = Pick<HeliusAccountStream, "watch" | "unwatch" | "coveredSince"> &
+  Partial<Pick<HeliusAccountStream, "slotTime">>;
 /** The pool reads are optional: without them, a graduated coin is let go as before. */
 type CurveReader = Pick<HeliusClient, "getCurveStatesBatch"> &
   Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch" | "findLaunchLabPool">>;
@@ -179,7 +180,10 @@ interface PoolFollowed {
   /** The slot each vault's newest stream update was read at. */
   baseSlot: number | null;
   quoteSlot: number | null;
-  /** One side of a slot came alone at this time: recorded when the other comes, or PAIR_WAIT_MS on. */
+  /**
+   * One side of a slot came alone, stamped at this time (its slot's, slotAt): recorded when the
+   * other comes, or PAIR_WAIT_MS on.
+   */
   pendingAt: number | null;
   timer: ReturnType<typeof setTimeout> | null;
   /** Rounds that found no pool account yet: let go after POOL_MISS_LIMIT (the coin has no pool). */
@@ -266,15 +270,35 @@ export function startCurveTape(
   };
 }
 
-/** An account update the Helius stream delivered under a curve key. */
-export function onCurveStreamUpdate(key: string, data: string, bytes: number, now = Date.now()): void {
+/**
+ * When an update the stream delivered at `slot` happened, for `mint`'s tape on `on`: the slot
+ * feed's time for it where it has one, else `now`; never past `now`, and never before the tape's
+ * newest tick, which the tape would drop (CurveTape.record keeps it in order). Stamped on arrival,
+ * a reading sat a second or two after its block, while the API's stream (liveCurve.ts slotAt), the
+ * trade tape and the chain fill stamp by block: the same trade was saved as two 1-second bars a
+ * second or two apart, each reopening at the old price (chart audit 2026-10-29, D1).
+ */
+function slotAt(on: CurveTape, mint: string, slot: number | null, now: number): number {
+  const at = stream?.slotTime?.(slot) ?? null;
+  if (at === null || at > now) return now;
+  return Math.max(at, on.lastAt(mint) ?? at);
+}
+
+/** An account update the Helius stream delivered under a curve key, with the slot it was read at. */
+export function onCurveStreamUpdate(
+  key: string,
+  data: string,
+  bytes: number,
+  slot: number | null = null,
+  now = Date.now(),
+): void {
   const mint = key.slice(CURVE_STREAM_KEY_PREFIX.length);
   stats.updates += 1;
   stats.bytes += bytes;
   dayStreamBytes += bytes;
   const state = decodeCurve(data) ?? (followed.get(mint)?.launchLab ? decodeLaunchLab(data) : null);
   if (!state) return;
-  tape.record(mint, now, state, "stream");
+  tape.record(mint, slotAt(tape, mint, slot, now), state, "stream");
   if (state.complete) graduate(mint, state, now);
 }
 
@@ -299,11 +323,13 @@ export function onPoolStreamUpdate(
   dayStreamBytes += bytes;
   const p = pools.get(mint);
   if (!p || cut < 0) return;
+  // Stamped by its slot's time, as the curve's are (slotAt).
+  const at = slotAt(poolTape, mint, slot, now);
   if (part === "account") {
     const virtualQuote = decodePoolVirtualQuote(data);
     if (virtualQuote === p.virtualQuote) return;
     p.virtualQuote = virtualQuote;
-    recordPool(mint, p, now, "stream");
+    recordPool(mint, p, at, "stream");
     return;
   }
   const amount = decodeTokenAmount(data);
@@ -317,11 +343,11 @@ export function onPoolStreamUpdate(
   }
   // Both sides of the slot are in: the price is whole.
   if (slot !== null && p.baseSlot === slot && p.quoteSlot === slot) {
-    flushPair(mint, p, p.pendingAt ?? now);
+    flushPair(mint, p, p.pendingAt ?? at);
     return;
   }
   if (p.pendingAt === null) {
-    p.pendingAt = now;
+    p.pendingAt = at;
     p.timer = setTimeout(() => {
       if (pools.get(mint) === p) flushPair(mint, p, p.pendingAt ?? Date.now());
     }, PAIR_WAIT_MS);

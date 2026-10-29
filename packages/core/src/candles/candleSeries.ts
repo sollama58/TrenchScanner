@@ -17,6 +17,12 @@ export interface SeriesInput {
   bars: readonly StoredBar[];
   /** Of two sources' bars at the same width and start, the higher priority's stands. */
   priority: number;
+  /**
+   * The source the bars came from (a store chunk's): one source's chunks are read as one, so a
+   * stretch one of its chunks owns also takes its other chunks' bars there. Absent: the input is a
+   * source of its own.
+   */
+  source?: string;
 }
 
 /** A served bar: `tf` wide, or, marked coarse, wider (`w` seconds: its real width). */
@@ -70,6 +76,16 @@ export function baseSegments(
   to = Infinity,
   tfSec = Infinity,
 ): { res: number; from: number; to: number }[] {
+  return ownedSegments(inputs, from, to, tfSec).map(({ res, from: a, to: b }) => ({ res, from: a, to: b }));
+}
+
+/** baseSegments, each stretch with the input that claimed it. */
+function ownedSegments(
+  inputs: readonly SeriesInput[],
+  from: number,
+  to: number,
+  tfSec: number,
+): { res: number; from: number; to: number; owner: SeriesInput }[] {
   const order = [...inputs].sort((a, b) => {
     const fitA = a.res <= tfSec;
     const fitB = b.res <= tfSec;
@@ -78,10 +94,11 @@ export function baseSegments(
     return a.res - b.res || b.priority - a.priority;
   });
   let claimed: Span[] = [];
-  const out: { res: number; from: number; to: number }[] = [];
+  const out: { res: number; from: number; to: number; owner: SeriesInput }[] = [];
   for (const input of order) {
     const cover: Span[] = unionSpans([[Math.max(input.coverFrom, from), Math.min(input.coverTo, to)]]);
-    for (const [a, b] of subtractSpans(cover, claimed)) out.push({ res: input.res, from: a, to: b });
+    for (const [a, b] of subtractSpans(cover, claimed))
+      out.push({ res: input.res, from: a, to: b, owner: input });
     claimed = unionSpans([...claimed, ...cover]);
   }
   return out.sort((x, y) => x.from - y.from);
@@ -100,13 +117,22 @@ function fold(t: number, bars: readonly StoredBar[]): StoredBar {
   };
 }
 
+/** The bars of one width that are read together: one source's (SeriesInput.source), or one input's. */
+function groupOf(input: SeriesInput): SeriesInput | string {
+  return input.source === undefined ? input : `${input.res}:${input.source}`;
+}
+
 /**
  * The `tfSec`-wide bars over [from, to) (bar starts), oldest first. Each stretch is read from the
- * source baseSegments picks for it, and every source's bars of that width fill it (one source's
- * missing interval is another's bar); a width no wider than `tf` is folded into `tf` buckets
- * (every stored width divides the timeframes it is folded into), a wider one is passed through
- * marked coarse with its width. Where a coarse bar and a folded one would start together, the
- * folded one stands.
+ * source baseSegments picks for it, from that source's bars alone; where its cover breaks, the
+ * next source's cover takes the stretch (baseSegments). Every source's bars of the width used to
+ * fill a stretch, and two sources that stamp the same trade a second or two apart (the worker's
+ * curve tape on arrival, the API's stream by slot) both stood: each copy reopened at the old price,
+ * drawing phantom candles and fake wicks and counting the volume twice (chart audit 2026-10-29,
+ * D1). A missing bar inside the owner's cover is a second it saw no trade. A width no wider than
+ * `tf` is folded into `tf` buckets (every stored width divides the timeframes it is folded into),
+ * a wider one is passed through marked coarse with its width, cut to its stretch. Where a coarse
+ * bar and a folded one would start together, the folded one stands.
  */
 export function candleSeries(
   inputs: readonly SeriesInput[],
@@ -115,12 +141,14 @@ export function candleSeries(
   to = Infinity,
 ): SeriesBar[] {
   const tf = tfSec * 1_000;
-  // Per width, one bar per start: the highest priority's, with the cover of the input it came from.
+  // Per source (groupOf), one bar per start: the highest priority's, with the cover of the input
+  // it came from.
   type Held = { bar: StoredBar; priority: number; coverTo: number };
-  const byRes = new Map<number, Map<number, Held>>();
+  const byGroup = new Map<SeriesInput | string, Map<number, Held>>();
   for (const input of inputs) {
-    let slots = byRes.get(input.res);
-    if (!slots) byRes.set(input.res, (slots = new Map()));
+    const group = groupOf(input);
+    let slots = byGroup.get(group);
+    if (!slots) byGroup.set(group, (slots = new Map()));
     for (const bar of input.bars) {
       if (!isDrawableBar(bar)) continue;
       const held = slots.get(bar.t);
@@ -128,19 +156,21 @@ export function candleSeries(
         slots.set(bar.t, { bar, priority: input.priority, coverTo: input.coverTo });
     }
   }
-  // Each width's held bars by start, so a stretch reads only the bars it reaches (CE-4: walking
+  // Each source's held bars by start, so a stretch reads only the bars it reaches (CE-4: walking
   // every bar for every stretch was stretches x bars, about a second at 24 h of 1 s chunks).
-  const sorted = new Map<number, Held[]>();
-  for (const [res, slots] of byRes)
+  const sorted = new Map<SeriesInput | string, Held[]>();
+  for (const [group, slots] of byGroup)
     sorted.set(
-      res,
+      group,
       [...slots.values()].sort((a, b) => a.bar.t - b.bar.t),
     );
   const buckets = new Map<number, { bar: StoredBar; width: number; shadowTo: number }[]>();
   const coarse = new Map<number, SeriesBar>();
+  // Bars already folded, by width and start: one that reaches into two stretches is counted once,
+  // whichever source's copy came first.
   const taken = new Set<string>();
-  for (const seg of baseSegments(inputs, from, to, tfSec)) {
-    const held = sorted.get(seg.res);
+  for (const seg of ownedSegments(inputs, from, to, tfSec)) {
+    const held = sorted.get(groupOf(seg.owner));
     if (!held) continue;
     const width = seg.res * 1_000;
     // The first bar whose span can reach the stretch: it starts after seg.from - width.
@@ -175,7 +205,11 @@ export function candleSeries(
       // A wide bar the stretch starts inside of (a finer source's cover ended mid-bar) is served
       // from the stretch's start, the rest of its width: dropped, its minutes were drawn flat.
       const at = bar.t >= seg.from ? bar.t : Math.ceil(seg.from / tf) * tf;
-      const w = (bar.t + width - at) / 1_000;
+      // One the stretch ends inside of (a finer source takes over, or the page ends) is cut there,
+      // at the start of the timeframe bar the stretch ends in, as the start above leaves a part
+      // bar to the stretch before: whole, it was drawn over the finer bars after it, and a page's
+      // last one again on the next page (chart audit 2026-10-29, D7).
+      const w = (Math.min(bar.t + width, Math.floor(seg.to / tf) * tf) - at) / 1_000;
       if (w <= 0) continue;
       coarse.set(at, { ...bar, t: at, coarse: true, w });
     }
