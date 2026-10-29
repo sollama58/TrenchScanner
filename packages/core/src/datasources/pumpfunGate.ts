@@ -221,7 +221,9 @@ export function takePumpFunGateStats(): Record<string, number> {
     swapHeldBack: swap.heldBack,
     frontendRefused: frontend.refused,
     frontendHeldBackRefused: frontend.heldBackRefused,
+    frontendChallenged: frontend.challenged,
     swapRefused: swap.refused,
     swapHeldBackRefused: swap.heldBackRefused,
+    swapChallenged: swap.challenged,
   };
 }
