@@ -17,6 +17,7 @@ describe("PumpFunGate", () => {
       heldBack: 1,
       refused: 0,
       heldBackRefused: 0,
+      challenged: 0,
     });
   });
 
@@ -51,6 +52,15 @@ describe("PumpFunGate", () => {
     gate.answered(mintB);
     expect(gate.refusedRecently(mintA)).toBe(false);
     expect(gate.takeStats()).toMatchObject({ refused: 1, heldBackRefused: 2 });
+  });
+
+  it("counts the 403s Cloudflare marked as its managed challenge (check-in 2026-10-29)", () => {
+    const gate = new PumpFunGate("test", 600, 10);
+    const url = "https://frontend-api-v3.pump.fun/coins-v2/" + "A".repeat(44);
+    gate.refused(url, new Headers({ "cf-mitigated": "challenge" }));
+    gate.refused(url, new Headers());
+    gate.refused(url);
+    expect(gate.takeStats()).toMatchObject({ refused: 3, challenged: 1 });
   });
 
   it("names an endpoint by its path with the coin left out", () => {
