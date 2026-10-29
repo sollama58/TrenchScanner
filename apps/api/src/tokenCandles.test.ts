@@ -163,6 +163,33 @@ describe("readTokenCandles", () => {
     for (let i = 1; i < reads.length; i++) expect(reads[i]![1]).toBe(reads[i - 1]![0]);
   });
 
+  it("reports the stored sub-minute stretch on the newest page, whatever the timeframe", async () => {
+    // Chart audit 2026-10-29: read at 1m, the page held no 1-second bars, so the chart greyed out
+    // 1s to 30s on a coin with hours of them recorded.
+    const cover = { from: minutesFrom, to: NOW - 5_000 };
+    const asked: string[] = [];
+    const { d } = deps(rows);
+    const withFine: CandleReadDeps = {
+      ...d,
+      fineCover: async (mint) => {
+        asked.push(mint);
+        return cover;
+      },
+    };
+    expect((await readTokenCandles("X", "1m", null, 200, withFine, NOW)).fine).toEqual([
+      cover.from,
+      cover.to,
+    ]);
+    // An older page leaves it out (the chart reads it from the newest), and doesn't ask.
+    expect((await readTokenCandles("X", "1m", minutesFrom, 50, withFine, NOW)).fine).toBeUndefined();
+    expect(asked).toEqual(["X"]);
+    // None recorded, or a reader without the lookup: absent.
+    expect(
+      (await readTokenCandles("X", "1m", null, 200, { ...d, fineCover: async () => null }, NOW)).fine,
+    ).toBeUndefined();
+    expect((await readTokenCandles("X", "1m", null, 200, d, NOW)).fine).toBeUndefined();
+  });
+
   it("pages back with `before` until nothing older is stored", async () => {
     const { d } = deps(rows);
     const all: number[] = [];

@@ -5,6 +5,7 @@ import {
   slotGaps,
   candlePollMs,
   candleTfParam,
+  fineCover,
   newestHeld,
   storedCandles,
   withNewest,
@@ -198,5 +199,15 @@ describe("the chart's backfill waits", () => {
       { t0: M, t1: 3 * M, dead: false },
       { t0: 4 * M, t1: 5 * M, dead: true },
     ]);
+  });
+});
+
+describe("fineCover", () => {
+  it("reads the answer's sub-minute stretch, and nothing from an older API or a bad one", () => {
+    expect(fineCover([1_000, 9_000])).toEqual({ from: 1_000, to: 9_000 });
+    expect(fineCover(undefined)).toBeNull();
+    expect(fineCover([9_000, 1_000])).toBeNull();
+    expect(fineCover(["a", 2])).toBeNull();
+    expect(fineCover([1, 2, 3])).toBeNull();
   });
 });

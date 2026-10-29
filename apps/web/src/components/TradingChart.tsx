@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   BaselineSeries,
   createChart,
@@ -42,8 +42,11 @@ import {
   slotCandle,
   slotIndex,
   slotOfTime,
+  slotStartAt,
+  tailFrom,
   timeframeFits,
   timeframeOffered,
+  type SlotBar,
   type Slots,
 } from "../chartBars";
 import { Drawings, FIB_LEVELS, type DrawScale, type DrawTool } from "../chartDrawings";
@@ -77,7 +80,7 @@ import {
   type PlacedMark,
 } from "../chartMarkLayout";
 import { API_URL } from "../api";
-import { chartHistoryGrew, openingLogicalRange } from "../chartViewport";
+import { openingLogicalRange, retimeRange, type SlotFrame } from "../chartViewport";
 import { openWallet } from "../walletModal";
 import {
   ChartOverlay,
@@ -267,6 +270,7 @@ export function TradingChart({
   mint,
   candles,
   candlesMs,
+  recordedFine = null,
   ticks,
   holes = NO_HOLES,
   fill = null,
@@ -304,6 +308,11 @@ export function TradingChart({
    * elsewhere. Unlike the size wanted (onTimeframe), they are the last size's until its page lands.
    */
   candlesMs?: number;
+  /**
+   * The stretch the candle store holds bars finer than a minute for (GET /tokens/:mint/candles
+   * `fine`), whatever size `candles` were read at: the picker offers 1s to 30s by it too.
+   */
+  recordedFine?: { from: number; to: number } | null;
   /**
    * Readings from the newest candle's start on (the live curve's ticks, which move that forming
    * candle and run on past it), or all of them without candles.
@@ -373,6 +382,15 @@ export function TradingChart({
   const phone = useSyncExternalStore(subscribePhone, isPhone, () => false);
   const theme = useSyncExternalStore(subscribeTheme, themeKey, () => "");
   const [width, setWidth] = useState(640);
+  // The plot's width is read before the first paint, and the size wanted is reported only from
+  // then: Auto sized at the 640 px guess and then at the real width was two reads and two views on
+  // open (chart audit 2026-10-29).
+  const [measured, setMeasured] = useState(false);
+  useLayoutEffect(() => {
+    const w = plotRef.current?.getBoundingClientRect().width;
+    if (w) setWidth(Math.round(w));
+    setMeasured(true);
+  }, []);
   // The chart's own width, not the window's: a column beside it (Pro's bubble map) narrows it, and
   // the toolbar folds to fit rather than running off its edge (user ask 2026-10-19).
   const [boxW, setBoxW] = useState(1_000);
@@ -435,21 +453,34 @@ export function TradingChart({
     () => finestCoverMs(candles, extent.t0, extent.t1),
     [candles, extent.t0, extent.t1],
   );
-  const autoMs = autoTimeframe(viewMs, plotW, 6, finestMs);
-  // Where the candles finer than a minute reach: a sub-minute size is offered only where there is
-  // data that fine (timeframeOffered; user decision 2026-10-24).
-  const fineRecorded = useMemo(() => fineSpan(candles), [candles]);
+  // Auto's sizes, sticky (autoTimeframe `prevMs`): each is kept while it still roughly fits, so
+  // the coin ageing a few seconds or the width settling doesn't step it (chart audit 2026-10-29).
+  // The size read keeps, before the chart has chosen one, the size its candles were read at.
+  const autoPrev = useRef<{ mint: string; drawn: number | null; read: number | null }>({
+    mint,
+    drawn: null,
+    read: null,
+  });
+  if (autoPrev.current.mint !== mint) autoPrev.current = { mint, drawn: null, read: null };
+  const autoMs = autoTimeframe(viewMs, plotW, 6, finestMs, autoPrev.current.drawn);
+  const autoReadMs = autoTimeframe(viewMs, plotW, 6, 0, autoPrev.current.read ?? candlesMs ?? null);
+  if (measured) autoPrev.current = { mint, drawn: autoMs, read: autoReadMs };
+  // Where the candles finer than a minute reach, with what the store says it holds: a sub-minute
+  // size is offered only where there is data that fine (timeframeOffered; user decision 2026-10-24).
+  const fineRecorded = useMemo(() => fineSpan(candles, recordedFine), [candles, recordedFine]);
   const offered = (ms: number) =>
     timeframeFits(ms, viewMs) && timeframeOffered(ms, finestMs, fineRecorded, Date.now());
-  // A picked size the view can't take (wider than it allows, or finer than its data) draws as Auto.
-  const pickedMs = picked !== null && offered(picked) ? picked : null;
+  // A picked size the view can't take (wider than it allows) draws as Auto. The offer only greys
+  // the picker: a size picked stays while it fits (chart audit 2026-10-29: a picked 1s went back to
+  // Auto after two quiet minutes, and came back with the next trade).
+  const pickedMs = picked !== null && timeframeFits(picked, viewMs) ? picked : null;
   // The size picked, or Auto's: what the picker shows.
   const shownMs = pickedMs ?? autoMs;
   // The view reads its candles at the size the view alone would take, not only the one drawn: the
   // store answers each stretch at that size, or coarse where it holds only wider bars, so Auto
   // draws the finest size whose candles mostly aren't coarse (finestMs). Read at the size drawn,
   // a coin whose finer candles land later would stay on the wider size.
-  const wantMs = pickedMs ?? autoTimeframe(viewMs, plotW);
+  const wantMs = pickedMs ?? autoReadMs;
   // While a newly picked size's first page is on its way, the candles held stay at the size they
   // were drawn at (drawTimeframe); the chart draws the size picked once it has its candles.
   const drawnRef = useRef<number | null>(null);
@@ -460,8 +491,8 @@ export function TradingChart({
     [candles, ticks, tfMs, holes],
   );
   useEffect(() => {
-    onTimeframe?.(wantMs);
-  }, [wantMs, onTimeframe]);
+    if (measured) onTimeframe?.(wantMs);
+  }, [wantMs, onTimeframe, measured]);
   // Scrolled back near the oldest candle: the page before it (full history at any timeframe, charts
   // audit 2026-10-22). Not once the slots stop short of the oldest candle (MAX_SLOTS): what came
   // before them couldn't be drawn.
@@ -513,6 +544,10 @@ export function TradingChart({
     entryLine: IPriceLine | null;
   }>({ main: null, vol: null, lines: [], rsi: null, priceLines: [], entryLine: null });
   const overlayRef = useRef<ChartOverlay | null>(null);
+  /**
+   * The start (ms) of the slot under the crosshair: by time, not slot number, so a new size or a
+   * slot list that moved on keeps reading the candle at that moment (chart audit 2026-10-29).
+   */
   const [hover, setHover] = useState<number | null>(null);
   /** The mark under the mouse, or tapped (its stack: the mark and those folded into it). */
   const [pointed, setPointed] = useState<PlacedMark<MarkItem> | null>(null);
@@ -547,9 +582,17 @@ export function TradingChart({
   /** Bumped when the series are rebuilt, so the data is handed to the new ones. */
   const [built, setBuilt] = useState(0);
   const [mounted, setMounted] = useState(false);
-  const lastData = useRef<{ start: number; n: number; tf: number; scope: string; extentT0: number } | null>(
+  const lastData = useRef<{ start: number; n: number; tf: number; scope: string } | null>(null);
+  /**
+   * The view on screen when the series were last rebuilt, and the slots it was on: the new series
+   * open on the same moments (chart audit 2026-10-29: toggling an indicator, Log, the chart type or
+   * the theme snapped the view back to the newest candles).
+   */
+  const keptView = useRef<{ scope: string; range: { from: number; to: number }; frame: SlotFrame } | null>(
     null,
   );
+  /** The slots last handed to the series, and the series they went to (tailFrom). */
+  const fed = useRef<{ slots: Slots; main: ISeriesApi<SeriesType> } | null>(null);
 
   const [drawTick, setDrawTick] = useState(0);
   const drawings = useMemo(
@@ -651,6 +694,16 @@ export function TradingChart({
     const chart = chartRef.current;
     if (!chart || !colors) return;
     const s = series.current;
+    const was = lastData.current;
+    const shown = was ? chart.timeScale().getVisibleLogicalRange() : null;
+    keptView.current =
+      was && shown
+        ? {
+            scope: was.scope,
+            range: { from: shown.from, to: shown.to },
+            frame: { start: was.start, tfMs: was.tf, n: was.n },
+          }
+        : null;
     for (const x of [s.main, s.vol, s.rsi, ...s.lines]) if (x) chart.removeSeries(x);
     s.lines = [];
     s.vol = null;
@@ -808,56 +861,36 @@ export function TradingChart({
     const bars = slots.bars;
     // The line draws each close at the bucket end. Candles stay stamped at the open.
     const barTime = (t: number) => time(kind === "line" ? closeTimeMs(t, slots.tfMs) : t);
-    if (kind === "candles") {
-      (s.main as unknown as ISeriesApi<"Custom", Time, SlotCandleData>).setData(
-        bars.map((b) =>
-          b.unknown
-            ? // Nobody read it: blank (whitespace), not a flat candle.
-              ({ time: time(b.t) } as SlotCandleData)
-            : {
-                time: time(b.t),
-                o: b.o,
-                h: b.h,
-                l: b.l,
-                c: b.c,
-                ...(b.flat ? { flat: true } : {}),
-                ...(b.span ? { span: b.span } : {}),
-                ...(b.under ? { under: b.under } : {}),
-                ...(b.coarse ? { coarse: true } : {}),
-              },
-        ),
-      );
-      const last = bars[bars.length - 1];
-      if (last) s.main.applyOptions({ color: last.c >= last.o ? colors.up : colors.down });
-    } else {
-      // The line runs through each candle's close at the end of its bucket. A wider
-      // candle's close is at the end of its last slot. Plotting the close at the open put the next
-      // close under a mark that sits on the real trade time.
-      (s.main as ISeriesApi<"Baseline">).setData(
-        bars.map((b, i) => {
-          const parent = b.under ? bars[i - b.under] : b;
-          const last = !bars[i + 1]?.under;
-          // An unread slot breaks the line rather than drawing it flat.
-          return parent && (b.span ?? 1) === 1 && last && !b.unknown
-            ? { time: barTime(b.t), value: parent.c }
-            : { time: barTime(b.t) };
-        }),
-      );
-      s.main.applyOptions({ baseValue: { type: "price", price: base } });
-    }
-    s.vol?.setData(
-      bars.flatMap((b) =>
-        b.vol == null || b.unknown
-          ? []
-          : [
-              {
-                time: barTime(b.t),
-                value: b.vol,
-                color: hexA(b.c >= b.o ? colors.up : colors.down, 0.38),
-              },
-            ],
-      ),
-    );
+    const candleAt = (b: SlotBar): SlotCandleData =>
+      b.unknown
+        ? // Nobody read it: blank (whitespace), not a flat candle.
+          ({ time: time(b.t) } as SlotCandleData)
+        : {
+            time: time(b.t),
+            o: b.o,
+            h: b.h,
+            l: b.l,
+            c: b.c,
+            ...(b.flat ? { flat: true } : {}),
+            ...(b.span ? { span: b.span } : {}),
+            ...(b.under ? { under: b.under } : {}),
+            ...(b.coarse ? { coarse: true } : {}),
+          };
+    // The line runs through each candle's close at the end of its bucket. A wider candle's close is
+    // at the end of its last slot. Plotting the close at the open put the next close under a mark
+    // that sits on the real trade time.
+    const pointAt = (b: SlotBar, i: number) => {
+      const parent = b.under ? bars[i - b.under] : b;
+      const last = !bars[i + 1]?.under;
+      // An unread slot breaks the line rather than drawing it flat.
+      return parent && (b.span ?? 1) === 1 && last && !b.unknown
+        ? { time: barTime(b.t), value: parent.c }
+        : { time: barTime(b.t) };
+    };
+    const volAt = (b: SlotBar) =>
+      b.vol == null || b.unknown
+        ? null
+        : { time: barTime(b.t), value: b.vol, color: hexA(b.c >= b.o ? colors.up : colors.down, 0.38) };
     const closes = bars.map((b) => ({ time: Number(barTime(b.t)), close: b.c }));
     const asLine = (pts: { time: number; value: number }[]) =>
       pts.map((p) => ({ time: p.time as UTCTimestamp, value: p.value }));
@@ -868,8 +901,50 @@ export function TradingChart({
       ...(ind.has("ema50") ? [ema(closes, 50)] : []),
       ...(bb ? [bb.upper, bb.mid, bb.lower] : []),
     ];
-    lineData.forEach((d, i) => s.lines[i]?.setData(asLine(d)));
-    s.rsi?.setData(asLine(rsi(closes, 14)));
+    const rsiData = s.rsi ? rsi(closes, 14) : [];
+    const candleSeries = s.main as unknown as ISeriesApi<"Custom", Time, SlotCandleData>;
+    const lineSeries = s.main as ISeriesApi<"Baseline">;
+    const feedAll = () => {
+      if (kind === "candles") candleSeries.setData(bars.map(candleAt));
+      else lineSeries.setData(bars.map(pointAt));
+      s.vol?.setData(bars.flatMap((b) => volAt(b) ?? []));
+      lineData.forEach((d, i) => s.lines[i]?.setData(asLine(d)));
+      s.rsi?.setData(asLine(rsiData));
+    };
+    // A live tick moves only the forming candle (and now and then starts the next): those few go
+    // to the series one by one, not every slot again (chart audit 2026-10-29: every tick redrew
+    // the whole chart, which janked on busy coins). Anything else is a redraw.
+    const was = fed.current;
+    const tail = was && was.main === s.main ? tailFrom(was.slots, slots) : null;
+    let fedTail = false;
+    if (tail !== null) {
+      try {
+        const from = Number(barTime(bars[tail]!.t));
+        for (let i = tail; i < bars.length; i++) {
+          const b = bars[i]!;
+          if (kind === "candles") candleSeries.update(candleAt(b));
+          else lineSeries.update(pointAt(b, i));
+          const v = volAt(b);
+          if (v) s.vol?.update(v);
+        }
+        const fresh = (pts: { time: number; value: number }[]) => asLine(pts.filter((p) => p.time >= from));
+        lineData.forEach((d, i) => {
+          for (const p of fresh(d)) s.lines[i]?.update(p);
+        });
+        for (const p of fresh(rsiData)) s.rsi?.update(p);
+        fedTail = true;
+      } catch {
+        // A point the series wouldn't take as its newest: redrawn whole below.
+      }
+    }
+    if (!fedTail) feedAll();
+    fed.current = { slots, main: s.main };
+    if (kind === "candles") {
+      const last = bars[bars.length - 1];
+      if (last) s.main.applyOptions({ color: last.c >= last.o ? colors.up : colors.down });
+    } else {
+      s.main.applyOptions({ baseValue: { type: "price", price: base } });
+    }
 
     // Horizontal price flags: the same events as the vertical flags. A kind that is off is not
     // here. The earliest shown one takes the lead colour; the rest stay quiet. Labels follow
@@ -909,17 +984,25 @@ export function TradingChart({
       });
 
     // Which window to show: a new view opens with enough history before now on screen; later reads
-    // that reach further back keep the live end anchored instead of snapping to a short tail.
+    // keep the moments on screen, by time across a new candle size and a rebuild of the series
+    // (retimeRange, chart audit 2026-10-29: the old size's bar numbers on the new slots showed a
+    // blank or wrong-time view, and a size Auto changed to reset the reader's zoom and scroll).
     const scope = `${mint}|${opened}`;
     const n = bars.length;
-    const historyGrew = prev && chartHistoryGrew(prev.extentT0, extent.t0, slots.tfMs / 2);
-    const tfChanged = prev && prev.tf !== slots.tfMs;
-    const reset = !prev || prev.scope !== scope || !range || (tfChanged && !historyGrew);
-    if (reset) {
+    const frame: SlotFrame = { start: slots.start, tfMs: slots.tfMs, n };
+    const kept = keptView.current;
+    keptView.current = null;
+    if (!prev && kept && kept.scope === scope) {
+      const r = retimeRange(kept.range, kept.frame, frame, plotW);
+      ts.setVisibleLogicalRange(r);
+    } else if (!prev || prev.scope !== scope || !range) {
       const { from, to } = openingLogicalRange(n, plotW, slots.tfMs, extent);
       ts.setVisibleLogicalRange({ from, to });
       if (n <= Math.ceil(to - from))
         ts.applyOptions({ rightOffsetPixels: path.length > 1 ? RIGHT_PX + pathZoneW(plotW) : RIGHT_PX });
+    } else if (prev.tf !== slots.tfMs) {
+      const r = retimeRange(range, { start: prev.start, tfMs: prev.tf, n: prev.n }, frame, plotW);
+      ts.setVisibleLogicalRange(r);
     } else {
       const shift = (prev.start - slots.start) / slots.tfMs;
       let next: LogicalRange = {
@@ -935,7 +1018,7 @@ export function TradingChart({
       }
       if (shift !== 0 || n !== prev.n) ts.setVisibleLogicalRange(next);
     }
-    lastData.current = { start: slots.start, n, tf: slots.tfMs, scope, extentT0: extent.t0 };
+    lastData.current = { start: slots.start, n, tf: slots.tfMs, scope };
   }, [
     slots,
     built,
@@ -957,6 +1040,8 @@ export function TradingChart({
 
   // The overlay: the marks, events, path and drawings, placed through the chart's own scales.
   const closeAtEnd = kind === "line";
+  const hoverScale = useRef({ slots, closeAtEnd });
+  hoverScale.current = { slots, closeAtEnd };
   const dScale = useMemo<DrawScale | null>(() => {
     if (!slots) return null;
     return {
@@ -976,7 +1061,7 @@ export function TradingChart({
   const hot = useMemo(() => {
     if (pointedMarks.length > 0) return new Set(pointedMarks);
     if (hover === null || !slots) return new Set<WalletMark>();
-    const from = slots.start + hover * slots.tfMs;
+    const from = slots.start + Math.floor((hover - slots.start) / slots.tfMs) * slots.tfMs;
     return new Set(marks.filter((m) => m.t >= from && m.t < from + slots.tfMs));
   }, [hover, slots, marks, pointedMarks]);
   useEffect(() => {
@@ -1040,10 +1125,9 @@ export function TradingChart({
       drawScale: dScale,
       label: axisUsd,
       gaps,
-      edgeX: (t) => {
-        const sc = barScale(chartRef.current);
-        return sc ? sc.x0 + ((t - slots.start) / slots.tfMs - 0.5) * sc.dx : null;
-      },
+      // Where the series draws a slot edge: the line's at its close-at-end place, as the marks
+      // (chart audit 2026-10-29: the line's gap shading sat half a bar off its break).
+      edgeX: (t) => toX(chartRef.current, slots, t, closeAtEnd),
       colors: {
         ...colors.overlay,
         eventLead:
@@ -1062,9 +1146,12 @@ export function TradingChart({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+    // The slot under the pointer as the series draws it (slotStartAt): on the line, the one whose
+    // marks are there, not the nearest close.
     const onMove = (p: MouseEventParams<Time>) => {
-      const l = p.logical;
-      setHover(p.point && l !== undefined && l !== null ? Math.round(l) : null);
+      const { slots: sl, closeAtEnd: atEnd } = hoverScale.current;
+      const l = p.point && sl ? toLogical(chart, p.point.x) : null;
+      setHover(l !== null && sl ? slotStartAt(sl, l, atEnd) : null);
     };
     chart.subscribeCrosshairMove(onMove);
     return () => chart.unsubscribeCrosshairMove(onMove);
@@ -1186,7 +1273,8 @@ export function TradingChart({
 
   // ── The readout ────────────────────────────────────────────────────────
   const n = slots?.bars.length ?? 0;
-  const hi = hover !== null && hover >= 0 && hover < n ? hover : n - 1;
+  const hoverAt = hover !== null && slots ? Math.floor((hover - slots.start) / slots.tfMs) : null;
+  const hi = hoverAt !== null && hoverAt >= 0 && hoverAt < n ? hoverAt : n - 1;
   const cur = slots && hi >= 0 ? slotCandle(slots, hi) : null;
   const curFrom = cur && slots ? cur.t : 0;
   const curTo = cur && slots ? cur.t + (cur.span ?? 1) * slots.tfMs : 0;

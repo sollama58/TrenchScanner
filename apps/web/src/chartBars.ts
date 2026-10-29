@@ -164,6 +164,46 @@ export function markUnknown(
   }
 }
 
+/** Two slots drawn alike. */
+function sameBar(a: SlotBar, b: SlotBar): boolean {
+  return (
+    a.t === b.t &&
+    a.o === b.o &&
+    a.h === b.h &&
+    a.l === b.l &&
+    a.c === b.c &&
+    a.vol === b.vol &&
+    !!a.flat === !!b.flat &&
+    !!a.unknown === !!b.unknown &&
+    a.span === b.span &&
+    a.under === b.under &&
+    !!a.coarse === !!b.coarse
+  );
+}
+
+/** A slot drawn as one plain point: not blank, not part of a wider candle, with its volume. */
+function plainBar(b: SlotBar): boolean {
+  return !b.unknown && !b.span && !b.under && b.vol != null;
+}
+
+/**
+ * Exported for tests. When `next` is `prev` with only its newest slot moved (the forming candle,
+ * as a live tick lands) and at most one slot added after it: the index of the first slot that may
+ * differ, which the chart hands its series one by one (update) rather than redrawing every slot
+ * (setData) on every tick (chart audit 2026-10-29). Null for anything else, and when a slot at the
+ * end is drawn specially (blank, or part of a wider candle), which only a redraw places right.
+ */
+export function tailFrom(prev: Slots | null, next: Slots): number | null {
+  if (!prev || prev.tfMs !== next.tfMs || prev.start !== next.start) return null;
+  const n0 = prev.bars.length;
+  const n = next.bars.length;
+  if (n0 === 0 || (n !== n0 && n !== n0 + 1)) return null;
+  if (!plainBar(prev.bars[n0 - 1]!)) return null;
+  for (let i = n0 - 1; i < n; i++) if (!plainBar(next.bars[i]!)) return null;
+  for (let i = 0; i < n0 - 1; i++) if (!sameBar(prev.bars[i]!, next.bars[i]!)) return null;
+  return n0 - 1;
+}
+
 /** The candle a slot shows: its own, or the wider one it sits under. */
 export function slotCandle(slots: Slots, i: number): SlotBar | null {
   const b = slots.bars[i];
@@ -187,10 +227,27 @@ export function closeTimeMs(slotStart: number, tfMs: number): number {
   return slotStart + tfMs;
 }
 
+/**
+ * Exported for tests. The start (ms) of the slot under the chart's logical position `l`
+ * (fractional), as the series draws it: candles centre slot i on logical i; the line draws slot i's
+ * close at its end, on logical i, so there slot i runs from logical i - 1 to i (`closeAtEnd`), where
+ * slotOfTime puts the marks inside it (chart audit 2026-10-29: the line's readout was a slot off
+ * the marks under the pointer half the time).
+ */
+export function slotStartAt(slots: Slots, l: number, closeAtEnd = false): number {
+  return slots.start + Math.floor(l + (closeAtEnd ? 1 : 0.5)) * slots.tfMs;
+}
+
 /** The slot a time falls in, clamped to the slots there are. */
 export function slotIndex(slots: Slots, t: number): number {
   return Math.min(slots.bars.length - 1, Math.max(0, Math.floor((t - slots.start) / slots.tfMs)));
 }
+
+/**
+ * Auto keeps the size it last chose while its candles stay within this factor of the width it aims
+ * for, either way (autoTimeframe `prevMs`).
+ */
+export const AUTO_SLACK = 1.5;
 
 /**
  * Exported for tests. Auto's timeframe for a view `spanMs` long on a chart `plotW` px wide: the
@@ -198,11 +255,30 @@ export function slotIndex(slots: Slots, t: number): number {
  * never finer than `finestMs`, the finest candles that cover most of the view (finestCoverMs), as
  * priceChart.ts autoTimeframe does: a young coin with only minute candles gets 1m, not a 1-second
  * chart of shaded minute candles.
+ *
+ * With the size chosen before (`prevMs`) it is sticky, as priceChart.ts autoTimeframe is: kept
+ * while the view holds at most AUTO_SLACK times the candles that fit and the next finer size
+ * would hold more than 1 / AUTO_SLACK of them (chart audit 2026-10-29: Auto stepped as the coin
+ * aged by seconds and as the chart's width settled on open, and each step was a new read and a
+ * new view, up to three on open).
  */
-export function autoTimeframe(spanMs: number, plotW: number, candlePx = 6, finestMs = 0): number {
+export function autoTimeframe(
+  spanMs: number,
+  plotW: number,
+  candlePx = 6,
+  finestMs = 0,
+  prevMs: number | null = null,
+): number {
   const fit = Math.max(8, Math.floor(plotW / candlePx));
   const tf = TIMEFRAMES.find((f) => f.ms >= finestMs && spanMs / f.ms <= fit);
-  return (tf ?? TIMEFRAMES[TIMEFRAMES.length - 1]!).ms;
+  const fresh = (tf ?? TIMEFRAMES[TIMEFRAMES.length - 1]!).ms;
+  if (prevMs === null || prevMs === fresh || prevMs < finestMs) return fresh;
+  const i = TIMEFRAMES.findIndex((f) => f.ms === prevMs);
+  if (i < 0) return fresh;
+  const finer = TIMEFRAMES[i - 1];
+  const notTooMany = spanMs / prevMs <= fit * AUTO_SLACK;
+  const finerTooMany = !finer || finer.ms < finestMs || spanMs / finer.ms > fit / AUTO_SLACK;
+  return notTooMany && finerTooMany ? prevMs : fresh;
 }
 
 /**
@@ -261,11 +337,17 @@ export const FINE_LIVE_MS = 2 * 60_000;
 /**
  * Exported for tests. The stretch the candles finer than a minute cover, first start to last end
  * (ms), or null without any; live ticks don't count. The store holds 1-second bars only where the
- * worker's tape followed the coin (from its launch, an alert, a call or a chart's open).
+ * worker's tape followed the coin (from its launch, an alert, a call or a chart's open). `recorded`
+ * is the stretch the store reports holding them for (GET /tokens/:mint/candles `fine`), joined in:
+ * read at 1m or wider the candles hold none, though the store may hold hours of them (chart audit
+ * 2026-10-29: 1s to 30s were greyed out on every coin older than ~2.5 hours).
  */
-export function fineSpan(candles: readonly VolumeCandle[]): { from: number; to: number } | null {
-  let from = Infinity;
-  let to = -Infinity;
+export function fineSpan(
+  candles: readonly VolumeCandle[],
+  recorded: { from: number; to: number } | null = null,
+): { from: number; to: number } | null {
+  let from = recorded ? recorded.from : Infinity;
+  let to = recorded ? recorded.to : -Infinity;
   for (const k of candles) {
     const w = k.w ?? 60_000;
     if (k.tick || w >= 60_000) continue;
@@ -281,7 +363,9 @@ export function fineSpan(candles: readonly VolumeCandle[]): { from: number; to: 
  * is data that fine to draw, which is when candles no wider than it cover most of the view
  * (`finestMs`, as Auto reads it) or when the fine candles reach the live edge (`fine`, fineSpan,
  * within FINE_LIVE_MS of `now`). Otherwise a 1-second chart would be shaded minute candles 60
- * slots wide, which Auto never draws either.
+ * slots wide, which Auto never draws either. It only greys the picker: a size already picked stays
+ * while it fits the view (chart audit 2026-10-29: a picked 1s dropped to Auto after a 2-minute
+ * lull, then came back with the next trade).
  */
 export function timeframeOffered(
   ms: number,

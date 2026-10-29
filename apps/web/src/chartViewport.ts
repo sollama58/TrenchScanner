@@ -31,3 +31,51 @@ export function chartHistoryGrew(prevExtentT0: number, nextExtentT0: number, sla
 export function chartSeriesStart(extent: { t0: number; t1: number }): number {
   return extent.t0;
 }
+
+/** The slots a logical range is read against: slot i (logical i) starts at start + i * tfMs. */
+export interface SlotFrame {
+  start: number;
+  tfMs: number;
+  /** How many slots. */
+  n: number;
+}
+
+/**
+ * A retimed view's candles are kept at least this wide (px), so a much finer size doesn't open as
+ * a smear, and at most the chart's widest (TradingChart MAX_BAR_PX).
+ */
+const RETIME_MIN_BAR_PX = 2;
+const RETIME_MAX_BAR_PX = 48;
+
+/**
+ * Exported for tests. A visible logical range on `was`'s slots moved onto `now`'s, by time (chart
+ * audit 2026-10-29: a new candle size kept the old size's bar numbers, a blank or wrong-time view,
+ * or reset the reader's zoom and scroll). The moments at both edges stay on screen; a view on the
+ * newest bar stays on it, as far past it as before. Then at most `plotW / minPx` bars and at least
+ * `plotW / maxPx`, trimmed or widened on the left so the right edge holds.
+ */
+export function retimeRange(
+  range: { from: number; to: number },
+  was: SlotFrame,
+  now: SlotFrame,
+  plotW: number,
+  minPx = RETIME_MIN_BAR_PX,
+  maxPx = RETIME_MAX_BAR_PX,
+): { from: number; to: number } {
+  // Candles centre slot i on logical i: logical l is the moment start + (l + 0.5) * tfMs.
+  const timeOf = (l: number) => was.start + (l + 0.5) * was.tfMs;
+  const at = (t: number) => (t - now.start) / now.tfMs - 0.5;
+  let from = at(timeOf(range.from));
+  let to = at(timeOf(range.to));
+  if (range.to >= was.n - 1.5) {
+    const past = timeOf(range.to) - (was.start + was.n * was.tfMs);
+    const end = at(now.start + now.n * now.tfMs + past);
+    from += end - to;
+    to = end;
+  }
+  const most = Math.max(1, plotW / minPx);
+  const least = Math.min(most, Math.max(3, plotW / maxPx));
+  if (to - from > most) from = to - most;
+  else if (to - from < least) from = to - least;
+  return { from, to };
+}

@@ -5,6 +5,7 @@ import {
   BACKFILL_REDO_AFTER_MS,
   BACKFILL_TOP_UP_AFTER_MS,
   minuteCoversBefore,
+  fineCandleCover,
   oldestCandleCover,
   pruneCandleStore,
   queueBackfillsForRecentCalls,
@@ -51,6 +52,8 @@ describe.skipIf(!dbAvailable)("candle store", () => {
     expect(row!.bars).toHaveLength(60);
     expect(row!.coverFrom).toBe(hour);
     expect(await oldestCandleCover(KEPT)).toBe(hour);
+    // Minute bars alone: nothing finer recorded.
+    expect(await fineCandleCover(KEPT)).toBeNull();
     expect(await minuteCoversBefore(KEPT, hour + 3_600_000)).toEqual([{ from: hour, to: hour + 3_600_000 }]);
   });
 
@@ -65,6 +68,23 @@ describe.skipIf(!dbAvailable)("candle store", () => {
       expect(
         (await readCandleChunks(mint, hour, hour + 3_600_000)).map((r) => r.res).sort((a, b) => a - b),
       ).toEqual([1, 60]);
+  });
+
+  it("reports the stretch its sub-minute bars cover, from the first cover to the last", async () => {
+    const hour = Math.floor(NOW / 3_600_000) * 3_600_000 - 3 * 3_600_000;
+    await saveCandleChunks([
+      ...chunkBars(KEPT, 60, "gecko", minutes(hour - 3_600_000, 60), {
+        from: hour - 3_600_000,
+        to: hour,
+      }),
+      ...chunkBars(KEPT, 1, "curve", [bar(hour + 5_000, 5)], { from: hour, to: hour + 30 * M }),
+      ...chunkBars(KEPT, 15, "pumpfun", [bar(hour + 2 * 3_600_000, 6)], {
+        from: hour + 2 * 3_600_000,
+        to: hour + 2 * 3_600_000 + 15 * M,
+      }),
+    ]);
+    expect(await fineCandleCover(KEPT)).toEqual({ from: hour, to: hour + 2 * 3_600_000 + 15 * M });
+    expect(await fineCandleCover(GONE)).toBeNull();
   });
 
   it("merges two pages of the same chunk: both halves' bars stay and their covers join", async () => {
