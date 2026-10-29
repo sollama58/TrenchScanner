@@ -21,7 +21,10 @@ import {
   seedCurveStreamSpend,
   startCurveTape,
   takeCurveTapeStats,
+  VERIFY_EVERY_MS,
+  VERIFY_GRACE_MS,
 } from "./curveTape.js";
+import { curveCandleRows } from "./curveCandles.js";
 import { recordPricePath } from "./pricePathRecorder.js";
 
 vi.mock("./pricePathRecorder.js", () => ({ recordPricePath: vi.fn() }));
@@ -641,6 +644,154 @@ describe("curve tape", () => {
     expect(takeCurveTapeStats(NOW)?.streamCreditsToday).toBe(70_000);
   });
 
+  // A subscription gone silent on an open socket read as a quiet coin, and the chart's candle
+  // writer saved the silence as quiet for good (chart audit 2026-10-29, D3).
+  describe("checks the stream by RPC", () => {
+    /** Base58 of 32 bytes, for test mints whose curve address can be derived. */
+    const base58 = (bytes: Uint8Array) => {
+      const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+      let n = BigInt(`0x${Buffer.from(bytes).toString("hex")}`);
+      let out = "";
+      while (n > 0n) {
+        out = ALPHABET[Number(n % 58n)] + out;
+        n /= 58n;
+      }
+      for (const b of bytes) {
+        if (b !== 0) break;
+        out = `1${out}`;
+      }
+      return out;
+    };
+
+    /** A stream that can resubscribe (which, as the real one, undoes the cover), and a curve at `price`. */
+    function checked(opts: { pollMaxMints?: number; maxMints?: number } = {}) {
+      const s = setup(NOW - 1_000, opts);
+      const live = { since: (NOW - 1_000) as number | null, price: 1 };
+      s.stream.coveredSince.mockImplementation(() => live.since);
+      const resubscribe = vi.fn(() => {
+        live.since = null;
+      });
+      Object.assign(s.stream, { resubscribe });
+      s.reader.getCurveStatesBatch.mockImplementation(async (curves: string[]) => {
+        s.reads.push(curves);
+        return new Map(curves.map((c) => [c, state(live.price)] as const));
+      });
+      return { ...s, live, resubscribe };
+    }
+    const CURVE = pumpCurveAddressOf(MINT)!;
+
+    it("ends the stream's run at its last live moment, records the read and resubscribes, when it missed a change", async () => {
+      const s = checked();
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      await round(NOW + 60_000);
+      expect(s.reads).toEqual([[CURVE]]);
+      // The writer saves the stream's quiet minute as quiet: right, while the stream is live.
+      expect(curveCandleRows(MINT, curveTapeView.ticksAfter(MINT, -1), null, NOW + 60_000, 1)?.rows).toEqual([
+        expect.objectContaining({ coverFrom: NOW, coverTo: NOW + 60_000, bars: [] }),
+      ]);
+      // The coin trades; the subscription says nothing.
+      s.live.price = 2;
+      await round(NOW + VERIFY_EVERY_MS);
+      expect(s.reads).toEqual([[CURVE], [CURVE]]);
+      // Inside the grace a stream update could still explain it: not vouched on, not yet settled.
+      await round(NOW + VERIFY_EVERY_MS + VERIFY_GRACE_MS - 1_000);
+      expect(curveTapeView.ticksAfter(MINT, -1)?.confirmedAt).toBe(NOW + VERIFY_EVERY_MS);
+      expect(s.resubscribe).not.toHaveBeenCalled();
+      await round(NOW + VERIFY_EVERY_MS + 5_000);
+      expect(s.resubscribe).toHaveBeenCalledTimes(1);
+      expect(s.resubscribe).toHaveBeenCalledWith(`curve:${MINT}`);
+      // The check's read opens a new cover; nothing across the silence is vouched for, so the
+      // writer saves no quiet stretch over it and the label sees no cover there.
+      const after = curveTapeView.ticksAfter(MINT, -1)!;
+      expect(after).toMatchObject({ coveredFrom: NOW + VERIFY_EVERY_MS, streamFrom: null });
+      expect(after.ticks.map((t) => [t.at, t.price])).toEqual([[NOW + VERIFY_EVERY_MS, 2]]);
+      expect(curveCandleRows(MINT, after, NOW, NOW + VERIFY_EVERY_MS + 5_000, 1)).toBeNull();
+      expect(curveLabelPrices(MINT, NOW, NOW + VERIFY_EVERY_MS + 5_000).coveredMs).toBe(5_000);
+      // Off the stream until Helius confirms the new subscription: polled meanwhile.
+      expect(s.reads).toHaveLength(3);
+      expect(takeCurveTapeStats(NOW + VERIFY_EVERY_MS + 5_000)).toMatchObject({ checked: 1, mismatches: 1 });
+      // Confirmed again: seeded, and the stream's run starts over from the new subscription.
+      s.live.since = NOW + VERIFY_EVERY_MS + 6_000;
+      await round(NOW + VERIFY_EVERY_MS + 10_000);
+      expect(s.reads).toHaveLength(4);
+      expect(curveTapeView.ticksAfter(MINT, -1)?.streamFrom).toBe(NOW + VERIFY_EVERY_MS + 6_000);
+    });
+
+    it("changes nothing when the read matches, or when a stream update explains it within the grace", async () => {
+      const s = checked();
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      await round(NOW + VERIFY_EVERY_MS);
+      await round(NOW + VERIFY_EVERY_MS + 5_000);
+      expect(s.reads).toEqual([[CURVE], [CURVE]]);
+      expect(s.resubscribe).not.toHaveBeenCalled();
+      expect(curveTapeView.ticksAfter(MINT, -1)).toMatchObject({
+        coveredFrom: NOW,
+        confirmedAt: NOW + VERIFY_EVERY_MS + 5_000,
+        streamFrom: NOW,
+        ticks: [{ at: NOW, price: 1, realQuote: 0 }],
+      });
+      expect(takeCurveTapeStats(NOW + VERIFY_EVERY_MS + 5_000)).toMatchObject({ checked: 1, mismatches: 0 });
+      // The next check reads a change the stream delivers a moment later: it was in flight.
+      s.live.price = 2;
+      await round(NOW + 2 * VERIFY_EVERY_MS);
+      onCurveStreamUpdate(`curve:${MINT}`, curveData(2), 100, null, NOW + 2 * VERIFY_EVERY_MS + 1_000);
+      await round(NOW + 2 * VERIFY_EVERY_MS + 5_000);
+      expect(s.resubscribe).not.toHaveBeenCalled();
+      expect(curveTapeView.ticksAfter(MINT, -1)).toMatchObject({
+        streamFrom: NOW,
+        confirmedAt: NOW + 2 * VERIFY_EVERY_MS + 5_000,
+      });
+      expect(curveTapeView.ticksAfter(MINT, -1)?.ticks.map((t) => t.price)).toEqual([1, 2]);
+      expect(takeCurveTapeStats(NOW + 2 * VERIFY_EVERY_MS + 5_000)).toMatchObject({ mismatches: 0 });
+    });
+
+    it("checks at most every VERIFY_EVERY_MS, and not while the stream is paused for its pace", async () => {
+      const s = checked({ pollMaxMints: 0 });
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      for (let t = 0; t <= 5 * 60_000; t += 5_000) await round(NOW + t);
+      // The seed, then a check at 2 and at 4 minutes.
+      expect(s.reads).toEqual([[CURVE], [CURVE], [CURVE]]);
+      expect(VERIFY_EVERY_MS).toBe(2 * 60_000);
+      // Past the noon pace: the stream is let go, and nothing is read to check it.
+      seedCurveStreamSpend(70_000, new Date(NOW + 5 * 60_000), NOW + 5 * 60_000);
+      takeCurveTapeStats(NOW + 5 * 60_000);
+      await round(NOW + 7 * 60_000);
+      expect(s.reads).toHaveLength(3);
+      expect(takeCurveTapeStats(NOW + 7 * 60_000)).toMatchObject({ paused: 1, checked: 0 });
+    });
+
+    it("checks every streamed curve in one batched read, counted at 1 credit per 100", async () => {
+      const s = checked({ pollMaxMints: 0, maxMints: 500 });
+      stop = s.stop;
+      const mints = Array.from({ length: 250 }, (_, i) => {
+        const bytes = new Uint8Array(32);
+        bytes[0] = 1 + (i % 200);
+        bytes[1] = 1 + Math.floor(i / 200);
+        return base58(bytes);
+      });
+      followClearedLaunches(mints, NOW);
+      await round(NOW);
+      expect(s.reads).toHaveLength(1);
+      expect(s.reads[0]).toHaveLength(250);
+      takeCurveTapeStats(NOW);
+      await round(NOW + VERIFY_EVERY_MS);
+      // One call to the reader, which splits it into getMultipleAccounts of up to 100 keys each
+      // (HeliusClient.getMultipleAccounts, GMA_MAX_KEYS): three 1-credit calls.
+      expect(s.reads).toHaveLength(2);
+      expect(new Set(s.reads[1])).toEqual(new Set(mints.map((m) => pumpCurveAddressOf(m))));
+      expect(takeCurveTapeStats(NOW + VERIFY_EVERY_MS)).toMatchObject({
+        checked: 250,
+        readCalls: 3,
+        readCredits: 3,
+      });
+    });
+  });
+
   describe("after graduation", () => {
     const POOL = pumpSwapPoolOf(MINT)!;
     const VAULTS = {
@@ -734,6 +885,41 @@ describe("curve tape", () => {
       expect(tape.prior).toMatchObject({ at: NOW + 10_000, price: 2 });
       expect(tape.streamFrom).toBe(NOW + 10_000);
       expect(takeCurveTapeStats(NOW + 19_000)).toMatchObject({ pools: 1, poolsStreamed: 1, poolUpdates: 4 });
+    });
+
+    it("checks a streamed pool by RPC and resubscribes the vault the stream went silent on", async () => {
+      const s = graduated(NOW + 1_000);
+      stop = s.stop;
+      // As the real stream's, a resubscription undoes the cover until Helius confirms it again.
+      const resubscribe = vi.fn(() => s.stream.coveredSince.mockImplementation(() => null));
+      Object.assign(s.stream, { resubscribe });
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      s.complete();
+      await round(NOW + 5_000);
+      await round(NOW + 10_000);
+      await round(NOW + 15_000);
+      expect(s.getTokenAmountsBatch).toHaveBeenCalledTimes(1);
+      expect(curveTapeView.ticksAfter(MINT, -1)?.streamFrom).toBe(NOW + 10_000);
+      // The first sweep after the seed: the read matches what the stream left, nothing changes.
+      await round(NOW + VERIFY_EVERY_MS);
+      await round(NOW + VERIFY_EVERY_MS + 5_000);
+      expect(s.getTokenAmountsBatch).toHaveBeenCalledTimes(2);
+      expect(resubscribe).not.toHaveBeenCalled();
+      expect(curveTapeView.ticksAfter(MINT, -1)?.streamFrom).toBe(NOW + 10_000);
+      // The SOL vault moved and its subscription said nothing.
+      Object.assign(s.reader, {
+        getTokenAmountsBatch: async (accounts: string[]) =>
+          new Map(accounts.map((a) => [a, a === VAULTS.base ? 1e15 : 3e15] as const)),
+      });
+      await round(NOW + 2 * VERIFY_EVERY_MS + 5_000);
+      await round(NOW + 2 * VERIFY_EVERY_MS + 10_000);
+      expect(resubscribe).toHaveBeenCalledTimes(1);
+      expect(resubscribe).toHaveBeenCalledWith(`curve-pool:quote:${MINT}`);
+      const after = curveTapeView.ticksAfter(MINT, -1)!;
+      expect(after).toMatchObject({ streamFrom: null, coveredFrom: NOW + 2 * VERIFY_EVERY_MS + 5_000 });
+      expect(after.ticks.map((t) => t.price)).toEqual([3]);
+      expect(takeCurveTapeStats(NOW + 2 * VERIFY_EVERY_MS + 10_000)).toMatchObject({ mismatches: 1 });
     });
 
     it("lets the pools go before the curves when the stream nears its pace", async () => {

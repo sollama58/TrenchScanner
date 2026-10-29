@@ -248,6 +248,22 @@ export class CurveTape {
     tape.streamFrom ??= Math.max(since, tape.coveredFrom);
   }
 
+  /**
+   * A check by RPC found the stream had missed a change of `mint`'s account: its word holds only up
+   * to `at`, the last moment it was shown live (a delivery, or a read that matched). The tape is
+   * known current no later than then, and the stream's run ends, so nothing after `at` is vouched
+   * for: a reading more than CURVE_GAP_MS later opens a new cover, as after any hole. Until
+   * 2026-10-29 the worker confirmed a silent subscription every round, and the chart's candle writer
+   * saved the silence as a quiet stretch (chart audit D3).
+   */
+  endStreamRun(mint: string, at: number): void {
+    const tape = this.tapes.get(mint);
+    if (!tape) return;
+    const newest = tape.ticks[tape.ticks.length - 1]?.at ?? tape.coveredFrom;
+    tape.confirmedAt = Math.min(tape.confirmedAt, Math.max(at, newest, tape.coveredFrom));
+    tape.streamFrom = null;
+  }
+
   /** The path features as of `now`; all null when the tape is not current. */
   features(mint: string, now: number): CurvePathFeatures {
     const tape = this.tapes.get(mint);

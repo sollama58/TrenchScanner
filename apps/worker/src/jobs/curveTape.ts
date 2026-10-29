@@ -36,6 +36,11 @@ const logger = createLogger("curve-tape");
  * read every CURVE_TAPE_POLL_SECONDS instead, the CURVE_TAPE_POLL_MAX_MINTS nearest the band
  * first. Nothing is written to the database: the features ride on the decision's row.
  *
+ * The stream is checked, not trusted (chart audit 2026-10-29, D3): every VERIFY_EVERY_MS the
+ * streamed curves and pools are read again by RPC (verifyDue). A read that differs from the tape,
+ * with no stream update for that account within VERIFY_GRACE_MS to explain it, ends the stream's
+ * run at the last time it was shown live, records the read and resubscribes the account.
+ *
  * Graduation doesn't end the chart's record (user report 2026-10-23: a coin that bonded at 14:22
  * had no candles from then until a chart opened at 14:30, drawn flat across a 2x). When a followed
  * curve completes, the coin's PumpSwap pool is followed in its place on the same socket (its two
@@ -65,8 +70,31 @@ export const POOL_FOLLOW_MS = 15 * 60_000;
  */
 const PAIR_WAIT_MS = 400;
 
+/**
+ * How often the streamed curves and pools are read again by RPC to check the stream still delivers
+ * them (chart audit 2026-10-29, D3). The stream only speaks on a change, so one account whose
+ * subscription went silent while the socket stayed open read as a quiet coin: the round confirmed
+ * it every few seconds, and the chart's candle writer (curveCandles.ts) saved the silence as a quiet
+ * stretch that outranks GeckoTerminal's candles for good. The API checks its own stream every 10 s
+ * (liveCurve.ts VERIFY_EVERY_MS); here, for up to CURVE_TAPE_MAX_MINTS accounts, the owner approved
+ * the spend at 2 minutes (2026-10-29): one sweep, batched 100 accounts to a 1-credit call, so a
+ * silence is saved as quiet for about this long at most. A constant, not an env key.
+ */
+export const VERIFY_EVERY_MS = 2 * 60_000;
+/**
+ * How long a check that differed waits for a stream update to explain it before the stream is taken
+ * to have missed the change. The read and the stream both answer at `confirmed`, and a notification
+ * for the slot the read saw can still be on its way (Helius sends it within a second or so of the
+ * slot confirming; the API waits 2 s, liveCurve.ts VERIFY_GRACE_MS). 3 s leaves room for a busy
+ * socket, and the round that settles it comes a CURVE_TAPE_POLL_SECONDS (5 s) round later anyway,
+ * well inside CURVE_GAP_MS, so a live stream's tape is never broken by the wait.
+ */
+export const VERIFY_GRACE_MS = 3_000;
+/** When the last sweep of checks went out (ms epoch). */
+let verifiedSweepAt = -Infinity;
+
 type CurveStream = Pick<HeliusAccountStream, "watch" | "unwatch" | "coveredSince"> &
-  Partial<Pick<HeliusAccountStream, "slotTime">>;
+  Partial<Pick<HeliusAccountStream, "slotTime" | "resubscribe">>;
 /** The pool reads are optional: without them, a graduated coin is let go as before. */
 type CurveReader = Pick<HeliusClient, "getCurveStatesBatch"> &
   Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch" | "findLaunchLabPool">>;
@@ -139,6 +167,12 @@ interface Followed {
   misses?: number;
   /** `curve` is a Stonks coin's LaunchLab pool: followed for the chart's candles only. */
   launchLab?: boolean;
+  /** When the stream last delivered an update for it (ms epoch). */
+  deliveredAt?: number;
+  /** When a check by RPC last matched the tape (ms epoch). */
+  verifiedAt?: number;
+  /** A check that differed, waiting VERIFY_GRACE_MS for a stream update to explain it. */
+  suspect?: { at: number; state: CurveState };
 }
 
 /**
@@ -188,6 +222,12 @@ interface PoolFollowed {
   timer: ReturnType<typeof setTimeout> | null;
   /** Rounds that found no pool account yet: let go after POOL_MISS_LIMIT (the coin has no pool). */
   misses: number;
+  /** When the stream last delivered an update for each of its three accounts (ms epoch). */
+  deliveredAt: Partial<Record<PoolPart, number>>;
+  /** When a check by RPC last matched it (ms epoch), null before one. */
+  verifiedAt: number | null;
+  /** A check that differed on `parts`, waiting VERIFY_GRACE_MS for their updates to explain it. */
+  suspect: { at: number; base: number; quote: number; virtualQuote: number; parts: PoolPart[] } | null;
 }
 
 /**
@@ -242,7 +282,18 @@ export const POOL_PACE_SHARE = 0.6;
 let day = "";
 /** The stream's bytes today: credits are figured on the total, as a single update rounds to none. */
 let dayStreamBytes = 0;
-let stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };
+const emptyStats = () => ({
+  updates: 0,
+  bytes: 0,
+  readCalls: 0,
+  curvesRead: 0,
+  polled: 0,
+  seeded: 0,
+  poolUpdates: 0,
+  checked: 0,
+  mismatches: 0,
+});
+let stats = emptyStats();
 
 const keyOf = (mint: string) => `${CURVE_STREAM_KEY_PREFIX}${mint}`;
 const poolKeyOf = (part: PoolPart, mint: string) => `${POOL_STREAM_KEY_PREFIX}${part}:${mint}`;
@@ -296,7 +347,9 @@ export function onCurveStreamUpdate(
   stats.updates += 1;
   stats.bytes += bytes;
   dayStreamBytes += bytes;
-  const state = decodeCurve(data) ?? (followed.get(mint)?.launchLab ? decodeLaunchLab(data) : null);
+  const f = followed.get(mint);
+  if (f) f.deliveredAt = now;
+  const state = decodeCurve(data) ?? (f?.launchLab ? decodeLaunchLab(data) : null);
   if (!state) return;
   tape.record(mint, slotAt(tape, mint, slot, now), state, "stream");
   if (state.complete) graduate(mint, state, now);
@@ -323,6 +376,7 @@ export function onPoolStreamUpdate(
   dayStreamBytes += bytes;
   const p = pools.get(mint);
   if (!p || cut < 0) return;
+  p.deliveredAt[part] = now;
   // Stamped by its slot's time, as the curve's are (slotAt).
   const at = slotAt(poolTape, mint, slot, now);
   if (part === "account") {
@@ -437,6 +491,9 @@ function followPool(mint: string, until: number): void {
     pendingAt: null,
     timer: null,
     misses: 0,
+    deliveredAt: {},
+    verifiedAt: null,
+    suspect: null,
   });
 }
 
@@ -783,7 +840,7 @@ export function takeCurveTapeStats(now = Date.now()) {
     paused: paused ? 1 : 0,
     poolsPaused: poolsPaused ? 1 : 0,
   };
-  stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };
+  stats = emptyStats();
   return out;
 }
 
@@ -902,16 +959,24 @@ export async function round(now = Date.now()): Promise<void> {
         else stream?.watch(keyOf(mint), [f.curve], now, "account");
       }
     }
+    settleSuspects(now);
+    // The sweep of checks (VERIFY_EVERY_MS): never while the stream is paused for its pace (the
+    // paused pools are checked by nothing either: poolCoveredSince), nor without a way to
+    // resubscribe what a check finds silent.
+    const verifyDue = !paused && !!stream?.resubscribe && now - verifiedSweepAt >= VERIFY_EVERY_MS;
+    if (verifyDue) verifiedSweepAt = now;
     const unseen = (cfg.newLaunches?.() ?? []).filter((m) => !followed.has(m) && !done.has(m));
     followNewLaunches(
       cfg.screenLaunches && unseen.length > 0 ? await cfg.screenLaunches(unseen) : unseen,
       now,
     );
-    await poolRound(now, clock);
+    await poolRound(now, clock, verifyDue);
     await launchLabRound(now);
     const toRead: string[] = [];
     /** The seeds' stream covers: confirmed as soon as the read lands, not a round later. */
     const seeding = new Map<string, number>();
+    /** The streamed curves this round checks (verifyDue), read in the same batch. */
+    const checking = new Set<string>();
     let polls = 0;
     let seeds = 0;
     for (const [mint, f] of followed) {
@@ -922,7 +987,14 @@ export async function round(now = Date.now()): Promise<void> {
           toRead.push(mint);
           seeding.set(mint, since);
           seeds += 1;
-        } else tape.confirmStreamed(mint, since, clock());
+        } else {
+          // A check that differed is not vouched on until it is settled (settleSuspects).
+          if (!f.suspect) tape.confirmStreamed(mint, since, clock());
+          if (verifyDue && !f.suspect) {
+            toRead.push(mint);
+            checking.add(mint);
+          }
+        }
       } else if (f.rank < cfg.pollMaxMints) {
         toRead.push(mint);
         polls += 1;
@@ -935,10 +1007,15 @@ export async function round(now = Date.now()): Promise<void> {
     stats.curvesRead += curves.length;
     stats.polled += polls;
     stats.seeded += seeds;
+    stats.checked += checking.size;
     toRead.forEach((mint, i) => {
       const f = followed.get(mint);
       const state = states.get(curves[i]!);
       if (!f || state === undefined || state === "failed") return;
+      if (checking.has(mint)) {
+        if (state !== null) checkCurve(mint, f, state, now);
+        return;
+      }
       if (state === null) {
         // No curve account (closed, or not yet confirmed): a brand-new coin's is read again next
         // round for a few rounds before the coin is let go for good.
@@ -974,24 +1051,128 @@ export async function round(now = Date.now()): Promise<void> {
 }
 
 /**
+ * A streamed curve's check (verifyDue), read at `now`: a match shows the stream live then; a
+ * difference is held VERIFY_GRACE_MS for a stream update to explain it (settleSuspects). The stream
+ * speaking while the read was out says it is alive, and its word is the newer one.
+ */
+function checkCurve(mint: string, f: Followed, state: CurveState, now: number): void {
+  if (f.deliveredAt !== undefined && f.deliveredAt > now) {
+    f.verifiedAt = now;
+    return;
+  }
+  const last = tape.ticksAfter(mint, Infinity)?.prior;
+  const priced = state.virtualToken > 0 && state.virtualQuote > 0;
+  const same =
+    state.complete === tape.isComplete(mint) &&
+    (!priced ||
+      (!!last &&
+        last.price === state.virtualQuote / state.virtualToken &&
+        last.realQuote === state.realQuote));
+  if (same) f.verifiedAt = now;
+  else f.suspect = { at: now, state };
+}
+
+/** A pool's check (verifyDue), read at `now`, as a curve's (checkCurve): on all three of its accounts. */
+function checkPool(p: PoolFollowed, base: number, quote: number, virtualQuote: number, now: number): void {
+  if (p.timer !== null || Object.values(p.deliveredAt).some((at) => at > now)) {
+    p.verifiedAt = now;
+    return;
+  }
+  const parts: PoolPart[] = [];
+  if (base !== p.base) parts.push("base");
+  if (quote !== p.quote) parts.push("quote");
+  if (virtualQuote !== p.virtualQuote) parts.push("account");
+  if (parts.length === 0) p.verifiedAt = now;
+  else p.suspect = { at: now, base, quote, virtualQuote, parts };
+}
+
+/**
+ * Checks that differed VERIFY_GRACE_MS ago. A stream update since says the change was in flight
+ * and the stream is alive. None says the stream missed it: the stream's run ends at the last moment
+ * the account was shown live (a delivery, the seed or poll, or a check that matched), so the
+ * candle writer claims no quiet cover past it; the check's read goes on the tape (a new cover, from
+ * the read); and the account is resubscribed, its cover starting over (seeded again) once Helius
+ * confirms the new subscription. Until then the curve is polled like any the stream doesn't cover
+ * (chart audit 2026-10-29, D3).
+ */
+function settleSuspects(now: number): void {
+  for (const [mint, f] of followed) {
+    const s = f.suspect;
+    if (!s || now - s.at < VERIFY_GRACE_MS) continue;
+    f.suspect = undefined;
+    if (f.deliveredAt !== undefined && f.deliveredAt > s.at) {
+      f.verifiedAt = s.at;
+      continue;
+    }
+    stats.mismatches += 1;
+    logger.warn("curve stream missed a change; resubscribing", { mint });
+    tape.endStreamRun(
+      mint,
+      Math.max(f.readAt ?? -Infinity, f.verifiedAt ?? -Infinity, f.deliveredAt ?? -Infinity),
+    );
+    tape.record(mint, s.at, s.state, "read");
+    f.readAt = s.at;
+    stream?.resubscribe?.(keyOf(mint));
+    if (s.state.complete) graduate(mint, s.state, now);
+  }
+  for (const [mint, p] of pools) {
+    const s = p.suspect;
+    if (!s || now - s.at < VERIFY_GRACE_MS) continue;
+    p.suspect = null;
+    if (s.parts.every((part) => (p.deliveredAt[part] ?? -Infinity) > s.at)) {
+      p.verifiedAt = s.at;
+      continue;
+    }
+    stats.mismatches += 1;
+    logger.warn("pool stream missed a change; resubscribing", { mint, parts: s.parts });
+    const live = Math.max(
+      p.readAt ?? -Infinity,
+      p.verifiedAt ?? -Infinity,
+      ...s.parts.map((part) => p.deliveredAt[part] ?? -Infinity),
+    );
+    poolTape.endStreamRun(mint, live);
+    Object.assign(p, {
+      base: s.base,
+      quote: s.quote,
+      virtualQuote: s.virtualQuote,
+      baseSlot: null,
+      quoteSlot: null,
+    });
+    recordPool(mint, p, s.at, "read");
+    p.readAt = s.at;
+    for (const part of s.parts) stream?.resubscribe?.(poolKeyOf(part, mint));
+  }
+}
+
+/**
  * The pools' part of a round: the expired let go, the new ones' accounts read for their vaults
  * (the pool appears at migration, a moment after the curve completes, so it is asked each round
- * until it does), and one batched read of the vaults to seed the streamed pools and poll the rest.
+ * until it does), and one batched read of the vaults to seed the streamed pools, poll the rest and,
+ * when `verifyDue`, check the streamed ones (checkPool).
  */
-async function poolRound(now: number, clock: () => number = () => now): Promise<void> {
+async function poolRound(now: number, clock: () => number = () => now, verifyDue = false): Promise<void> {
   if (pools.size === 0 || !reader?.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
   for (const [mint, p] of pools) if (now > p.until) dropPool(mint);
   const toRead = new Map<string, { mint: string; quoteMint: string }>();
+  /** The streamed pools checked this round, and the virtual quote reserve their account read gave. */
+  const checking = new Map<string, number | null>();
   for (const [mint, p] of pools) {
     if (p.vaults === null) toRead.set(p.address, { mint, quoteMint: WRAPPED_SOL_MINT });
     else {
       const since = poolCoveredSince(mint, p, now);
       // Streamed and read since its subscriptions began: the stream carries it.
-      if (since !== null && p.readAt !== null && p.readAt >= since)
-        poolTape.confirmStreamed(mint, since, clock());
-      else toRead.set(p.address, { mint, quoteMint: WRAPPED_SOL_MINT });
+      if (since !== null && p.readAt !== null && p.readAt >= since) {
+        // A check that differed is not vouched on until it is settled (settleSuspects).
+        if (!p.suspect) poolTape.confirmStreamed(mint, since, clock());
+        // Half a slot in (a vault's update waiting for its pair) it would read as differing.
+        if (verifyDue && !p.suspect && p.timer === null) {
+          toRead.set(p.address, { mint, quoteMint: WRAPPED_SOL_MINT });
+          checking.set(mint, null);
+        }
+      } else toRead.set(p.address, { mint, quoteMint: WRAPPED_SOL_MINT });
     }
   }
+  stats.checked += checking.size;
   if (toRead.size === 0) return;
   // The pool accounts first (their vaults and virtual reserve), then the vaults' balances.
   const accounts = await reader.getPoolVaultsBatch(toRead);
@@ -1012,6 +1193,11 @@ async function poolRound(now: number, clock: () => number = () => now): Promise<
       continue;
     }
     if (!vaults || vaults === "failed") continue;
+    if (checking.has(mint)) {
+      checking.set(mint, vaults.virtualQuote);
+      vaultsOf.set(mint, p.vaults!);
+      continue;
+    }
     if (p.vaults === null) {
       p.vaults = vaults;
       watchPool(mint, p, now);
@@ -1027,6 +1213,11 @@ async function poolRound(now: number, clock: () => number = () => now): Promise<
     const base = amounts.get(vaults.base);
     const quote = amounts.get(vaults.quote);
     if (!p || typeof base !== "number" || typeof quote !== "number") continue;
+    const checkedQuote = checking.get(mint);
+    if (checkedQuote != null) {
+      checkPool(p, base, quote, checkedQuote, now);
+      continue;
+    }
     p.base = base;
     p.quote = quote;
     // Stamped with when the read went out, as the curves' reads are.
@@ -1064,9 +1255,10 @@ export function resetCurveTape(): void {
   launchLabWanted = new Map();
   quoteNoted.clear();
   launchLabFailedAt.clear();
+  verifiedSweepAt = -Infinity;
   paused = false;
   poolsPaused = false;
   day = "";
   dayStreamBytes = 0;
-  stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0, poolUpdates: 0 };
+  stats = emptyStats();
 }
