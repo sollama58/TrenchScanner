@@ -33,6 +33,8 @@ import {
   WATCHED_JOBS,
   type FlowCheck,
   type TrainerJobCheck,
+  findTelegramHoldProblems,
+  TELEGRAM_HOLD_ALERT_MS,
 } from "./pipelineWatchJob.js";
 
 const MIN = 60_000;
@@ -464,6 +466,44 @@ describe("pipeline watch: warning before a run-out (audit 2026-10-27, T3)", () =
     expect(findProblems([], [], NOW, new Date(NOW - 6 * MIN))).toEqual([
       { key: "telegram", text: "Telegram alerts: a linked chat is 6 min behind" },
     ]);
+  });
+
+  it("tells a chat behind for Telegram's hold apart from a stall, so the scanner isn't restarted for it", () => {
+    expect(findProblems([], [], NOW, new Date(NOW - 6 * MIN), true)).toEqual([
+      {
+        key: "telegram",
+        text: "Telegram alerts: a linked chat is 6 min behind (Telegram's rate limit on it)",
+        side: true,
+      },
+    ]);
+  });
+
+  it("warns as soon as Telegram holds a chat for minutes, before its alerts age out", () => {
+    expect(TELEGRAM_HOLD_ALERT_MS).toBe(2 * MIN);
+    expect(findTelegramHoldProblems([], NOW)).toEqual([]);
+    // A few seconds' wait is Telegram's normal pacing.
+    expect(
+      findTelegramHoldProblems([{ kind: "supergroup", holdUntil: new Date(NOW + 30_000) }], NOW),
+    ).toEqual([]);
+    expect(
+      findTelegramHoldProblems([{ kind: "supergroup", holdUntil: new Date(NOW + 12.6 * MIN) }], NOW),
+    ).toEqual([
+      {
+        key: "telegram-held",
+        text:
+          "Telegram alerts: Telegram is holding a linked supergroup for 13 more min (rate limit, until " +
+          "13:42 UTC); alerts over 15 min old by then are dropped",
+        side: true,
+      },
+    ]);
+    const two = findTelegramHoldProblems(
+      [
+        { kind: "supergroup", holdUntil: new Date(NOW + 3 * MIN) },
+        { kind: "group", holdUntil: new Date(NOW + 5 * MIN) },
+      ],
+      NOW,
+    );
+    expect(two[0]!.text).toContain("holding 2 linked chats for 5 more min");
   });
 
   it("tells alerts dropped unsent once per episode, and clears after a quiet half hour (WB-12)", () => {
