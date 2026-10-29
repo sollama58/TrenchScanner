@@ -2,6 +2,7 @@ import {
   createLogger,
   fetchLaunchMetadata,
   forEachWithConcurrency,
+  HttpError,
   prisma,
   type DiscoveredCoin,
   type HeliusClient,
@@ -116,6 +117,7 @@ export async function fillLaunchDetails(
   pumpFun: Pick<PumpFunClient, "coinDetails">,
   save: (coins: DiscoveredCoin[]) => Promise<unknown>,
   fetchMetadata: typeof fetchLaunchMetadata = fetchLaunchMetadata,
+  onPumpRefused?: (mint: string) => void,
 ): Promise<void> {
   const byMint = new Map<string, StreamEvent>();
   for (const e of launches)
@@ -146,7 +148,7 @@ export async function fillLaunchDetails(
   try {
     await forEachWithConcurrency(todo, CONCURRENCY, async (launch) => {
       try {
-        const coin = await lookUp(launch, pumpFun, fetchMetadata);
+        const coin = await lookUp(launch, pumpFun, fetchMetadata, onPumpRefused);
         if (coin) {
           found.push(coin);
           missStreak = 0;
@@ -184,6 +186,7 @@ async function lookUp(
   launch: StreamEvent,
   pumpFun: Pick<PumpFunClient, "coinDetails">,
   fetchMetadata: typeof fetchLaunchMetadata,
+  onPumpRefused?: (mint: string) => void,
 ): Promise<DiscoveredCoin | null | undefined> {
   try {
     const coin = await pumpFun.coinDetails(launch.mintAddress);
@@ -192,6 +195,7 @@ async function lookUp(
       return coin;
     }
   } catch (err) {
+    if (err instanceof HttpError && err.status === 403) onPumpRefused?.(launch.mintAddress);
     logger.debug("pump.fun coin read failed - trying the launch metadata", {
       mint: launch.mintAddress,
       error: String(err),

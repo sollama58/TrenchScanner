@@ -14,6 +14,12 @@ export interface PumpFunGateStats {
   refused: number;
   /** Requests failed as that 403 without being sent, while their endpoint was refusing. */
   heldBackRefused: number;
+  /**
+   * Of the 403s, those Cloudflare marked `cf-mitigated: challenge`: its managed challenge (a bot
+   * check on how we ask), not an access rule. Every refusal since 2026-10-22 was meant to be
+   * one (check-in 2026-10-29); this shows it.
+   */
+  challenged: number;
 }
 
 /**
@@ -115,8 +121,9 @@ export class PumpFunGate {
   }
 
   /** The endpoint answered 403: hold its requests back for REFUSED_PAUSE_MS. */
-  refused(url: string): void {
+  refused(url: string, headers?: Pick<Headers, "get">): void {
     const key = endpointOf(url);
+    if (headers?.get("cf-mitigated") === "challenge") this.stats.challenged += 1;
     if (!this.refusedUntil.has(key)) {
       logger.warn("Pump.fun refused us (403) - holding that endpoint back", {
         host: this.name,
@@ -145,7 +152,7 @@ export class PumpFunGate {
 }
 
 function emptyStats(): PumpFunGateStats {
-  return { requests: 0, throttled: 0, heldBack: 0, refused: 0, heldBackRefused: 0 };
+  return { requests: 0, throttled: 0, heldBack: 0, refused: 0, heldBackRefused: 0, challenged: 0 };
 }
 
 /**

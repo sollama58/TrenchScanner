@@ -41,8 +41,8 @@ export interface FetchJsonOptions extends RequestInit {
      * and the request then fails as that same 403 without being sent.
      */
     refusedRecently?(url: string): boolean;
-    /** The provider answered this URL 403. */
-    refused?(url: string): void;
+    /** The provider answered this URL 403, with these response headers. */
+    refused?(url: string, headers: Headers): void;
     /** The provider answered this URL with anything but a 403 (a probe got through). */
     answered?(url: string): void;
   };
@@ -143,7 +143,7 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       // The timer stays armed through the body read: clearing it once headers arrived left
       // res.json() with no deadline, so a provider stalling mid-body hung the calling job forever
       // (and the scheduler's overlap guard then skipped every later tick of it).
-      if (res.status === 403) gate?.refused?.(url);
+      if (res.status === 403) gate?.refused?.(url, res.headers);
       else gate?.answered?.(url);
       if (res.ok) {
         onHeaders?.(res.headers);

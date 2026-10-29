@@ -618,6 +618,30 @@ export const TOKENSAGE_BATCH_MIN_TIMEOUT_MS = 20_000;
 /** Summary/referent text is clipped to this before it is stored. */
 const MAX_TEXT = 500;
 
+/** GET /v1/pumpfun/coins/{ca}: how Pump.fun answered TokenSage for one coin. Untrusted text. */
+export interface TokenSagePumpCoinAnswer {
+  ca: string;
+  status: "ok" | "not_found" | "refused" | "unavailable" | "busy";
+  upstream_status?: number | null;
+  /** Cloudflare's cf-mitigated header on a refusal ("challenge"). */
+  cf_mitigated?: string | null;
+  cached?: boolean;
+  coin?: {
+    mint: string;
+    name?: string | null;
+    symbol?: string | null;
+    description?: string | null;
+    image_uri?: string | null;
+    twitter?: string | null;
+    telegram?: string | null;
+    website?: string | null;
+    creator?: string | null;
+    mayhem_state?: string | null;
+    created_timestamp?: number | null;
+    complete?: boolean | null;
+  } | null;
+}
+
 export interface TokenSageClientOptions {
   baseUrl: string;
   apiKey: string;
@@ -700,6 +724,18 @@ export class TokenSageClient {
       timeoutMs: Math.max(this.timeoutMs, TOKENSAGE_BATCH_MIN_TIMEOUT_MS),
       retries: 0,
     });
+  }
+
+  /**
+   * Pump.fun's single-coin read, asked from TokenSage (GET /v1/pumpfun/coins/{ca}, TokenSage
+   * #99): for coins Pump.fun's Cloudflare refuses us. Always a status, never a throw for a
+   * Pump.fun outcome; `busy` is TokenSage's shared cap and normal. Throws on a transport failure.
+   */
+  async pumpCoin(mint: string): Promise<TokenSagePumpCoinAnswer> {
+    return fetchJson<TokenSagePumpCoinAnswer>(
+      `${this.baseUrl}/v1/pumpfun/coins/${encodeURIComponent(mint)}`,
+      { headers: this.headers(), timeoutMs: this.timeoutMs, retries: 0 },
+    );
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
