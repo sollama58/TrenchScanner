@@ -79,7 +79,10 @@ export function poolsOf(mint: string, token: BackfillToken, now = Date.now()): s
  * one quiet minute before the next page's start left its covers apart). The newest page vouches to
  * its newest bar's end or GECKO_SETTLE_MS ago, whichever is later, so a minute GeckoTerminal is
  * late with is asked again by the next top-up rather than stored as quiet. Each chunk's cover runs
- * on to the next one's start (runCoversOn).
+ * on to the next one's start (runCoversOn). `otherPool`: the cursor is where another pool's history
+ * began, so the page vouches only to its newest bar's end: a curve's silence after graduation is not
+ * the coin's (chart audit 2026-10-29, D2: graduation to the pool's oldest page was drawn flat over
+ * the pool's trading).
  */
 export function geckoPageRows(
   mint: string,
@@ -87,12 +90,13 @@ export function geckoPageRows(
   cursor: number,
   now: number,
   fromNow: boolean,
+  otherPool = false,
 ): CandleChunkRow[] {
   if (bars.length === 0) return [];
   const closed = bars.filter((b) => b.t + MINUTE_MS <= now);
   const newestEnd = closed.length > 0 ? closed[closed.length - 1]!.t + MINUTE_MS : bars[0]!.t;
   const settled = Math.floor((now - GECKO_SETTLE_MS) / MINUTE_MS) * MINUTE_MS;
-  const quietTo = fromNow ? Math.max(newestEnd, settled) : cursor;
+  const quietTo = fromNow ? Math.max(newestEnd, settled) : otherPool ? newestEnd : cursor;
   const to = Math.min(cursor, Math.floor(now / MINUTE_MS) * MINUTE_MS, quietTo);
   return runCoversOn(chunkBars(mint, 60, "gecko", closed, { from: bars[0]!.t, to }), to);
 }

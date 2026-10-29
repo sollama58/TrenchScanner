@@ -37,6 +37,15 @@ const state = (price: number): CurveState => ({
   quoteIsSol: true,
 });
 
+/** A bonding curve account's data (base64) priced at `price` lamports a raw unit, quoted in SOL. */
+function curveData(price: number): string {
+  const data = Buffer.alloc(115);
+  Buffer.from([23, 183, 248, 55, 96, 216, 172, 96]).copy(data, 0);
+  data.writeBigUInt64LE(10n ** 15n, 8);
+  data.writeBigUInt64LE(BigInt(price * 1e15), 16);
+  return data.toString("base64");
+}
+
 function setup(
   coveredSince: number | null,
   ages: {
@@ -187,6 +196,36 @@ describe("curve tape", () => {
       onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 7_000);
     }
     expect(takeCurveTapeStats(NOW + 7_000)!.streamCreditsToday).toBe(10);
+  });
+
+  it("confirms a streamed curve when a slow round gets to it, so the next update carries the tape on", async () => {
+    // A round awaits the launch screen, the pools and LaunchLab before it confirms the streamed
+    // curves: one 20 s slow confirmed with its start time, and the next update past CURVE_GAP_MS of
+    // that wiped the tape (chart audit 2026-10-29, D4).
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    try {
+      let slow = false;
+      const s = setup(NOW - 1_000, {
+        newLaunches: () => ["Unscreened111111111111111111111111111111111"],
+        screenLaunches: async () => {
+          if (slow) vi.setSystemTime(Date.now() + 20_000);
+          return [];
+        },
+      });
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      onCurveStreamUpdate(`curve:${MINT}`, curveData(2), 100, NOW + 3_000);
+      vi.setSystemTime(NOW + 5_000);
+      slow = true;
+      await round(NOW + 5_000);
+      onCurveStreamUpdate(`curve:${MINT}`, curveData(3), 100, NOW + 26_000);
+      // One unbroken tape from the seed read, with every change the stream delivered.
+      expect(curvePathOf(MINT, NOW + 26_000).curveCoveredSec).toBe(26);
+      expect(curveTapeView.ticksAfter(MINT, -1)?.ticks.map((t) => t.price)).toEqual([1, 2, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("follows a Stonks coin on its LaunchLab pool, for the chart's candles only", async () => {

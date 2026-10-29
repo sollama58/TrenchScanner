@@ -3949,6 +3949,8 @@ model CandleBackfill {
   pumpDone    Boolean   @default(false)
   /// Which of the coin's pools (candleBackfill.ts poolsOf) is being paged, and the page's end.
   poolIndex   Int       @default(0)
+  /// Pages read on that pool: on its first, the quiet up to the cursor is another pool's to vouch for.
+  poolPages   Int       @default(0)
   cursor      DateTime?
   pages       Int       @default(0)
   failures    Int       @default(0)

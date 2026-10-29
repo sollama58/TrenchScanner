@@ -358,6 +358,7 @@ export async function requestCandleBackfill(
       "nextAt" = CASE WHEN "CandleBackfill"."doneAt" IS NULL THEN "CandleBackfill"."nextAt" ELSE EXCLUDED."nextAt" END,
       "doneAt" = NULL, "pumpDone" = CASE WHEN "CandleBackfill"."doneAt" IS NULL THEN "CandleBackfill"."pumpDone" ELSE false END,
       "poolIndex" = CASE WHEN "CandleBackfill"."doneAt" IS NULL THEN "CandleBackfill"."poolIndex" ELSE 0 END,
+      "poolPages" = CASE WHEN "CandleBackfill"."doneAt" IS NULL THEN "CandleBackfill"."poolPages" ELSE 0 END,
       "cursor" = CASE WHEN "CandleBackfill"."doneAt" IS NULL THEN "CandleBackfill"."cursor" ELSE NULL END,
       "pages" = CASE WHEN "CandleBackfill"."doneAt" IS NULL THEN "CandleBackfill"."pages" ELSE 0 END,
       "failures" = CASE WHEN "CandleBackfill"."doneAt" IS NULL THEN "CandleBackfill"."failures" ELSE 0 END,

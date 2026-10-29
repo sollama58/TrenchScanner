@@ -91,6 +91,19 @@ describe("CurveTape", () => {
     expect(f.curveRet10sPct).toBeNull();
   });
 
+  it("carries a tape the unbroken stream confirms however long after the last confirmation", () => {
+    // A slow worker round confirmed past CURVE_GAP_MS and was refused, so the next stream update
+    // wiped the tape (chart audit 2026-10-29, D4). The stream since 0 vouches for every moment.
+    const tape = new CurveTape();
+    tape.record("m", 0, state(1), "read");
+    tape.confirmStreamed("m", 0, CURVE_GAP_MS + 5_000);
+    tape.record("m", CURVE_GAP_MS + 6_000, state(2), "stream");
+    expect(tape.features("m", CURVE_GAP_MS + 6_000).curveCoveredSec).toBe((CURVE_GAP_MS + 6_000) / 1_000);
+    // A stream whose run began after the tape was last current vouches for nothing.
+    tape.confirmStreamed("m", CURVE_GAP_MS + 7_000, CURVE_GAP_MS + 30_000);
+    expect(tape.features("m", 2 * CURVE_GAP_MS + 7_000).curveCoveredSec).toBeNull();
+  });
+
   it("ignores a read older than the newest change, and leaves changes unknown on a polled minute", () => {
     const tape = new CurveTape();
     tape.record("m", 0, state(1), "read");

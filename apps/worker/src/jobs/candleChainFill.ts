@@ -7,6 +7,7 @@ import {
   subtractSpans,
   tradesFromChainTransactions,
   withOwnApiFeature,
+  type ChainTx,
   type HeliusClient,
 } from "@trenchscanner/core";
 import { saveChainCandles, type TapeCandleSink } from "./chainCandles.js";
@@ -54,6 +55,11 @@ const QUIET_COVER_MAX_MS = 4 * 3_600_000;
  * minute (10 credits) to confirm dead.
  */
 const QUIET_RETRY_MS = 30 * 60_000;
+/**
+ * Pages a hole's start may take when every transaction a page holds is in the hole's first second
+ * (a launch's bundle): the next page from the same second is asked rather than parking the hole.
+ */
+const SAME_SECOND_PAGES = 5;
 
 export interface ChainFillDeps {
   helius: Pick<HeliusClient, "getMintTransactionsPage" | "gtfaUsable"> &
@@ -184,12 +190,17 @@ async function run(deps: ChainFillDeps, opts: ChainFillOptions): Promise<void> {
           if ((coinPages.get(coin.mint) ?? 0) >= opts.maxPagesPerCoin) break;
           // A hole a page couldn't move waits a day; the coin's later holes are still read.
           if (stuck.has(`${coin.mint}:${from}`)) continue;
-          const page = await fillPage(deps, coin.mint, from, to);
+          const room = Math.min(
+            opts.pagesPerRun - pages,
+            Math.floor((opts.creditsPerDay - spent) / PAGE_CREDITS),
+            opts.maxPagesPerCoin - (coinPages.get(coin.mint) ?? 0),
+          );
+          const page = await fillPage(deps, coin.mint, from, to, room);
           moved = page.moved;
-          pages += 1;
+          pages += page.pages;
           // Helius bills no failed answer.
-          if (page.billed) spent += PAGE_CREDITS;
-          coinPages.set(coin.mint, (coinPages.get(coin.mint) ?? 0) + 1);
+          spent += page.billed * PAGE_CREDITS;
+          coinPages.set(coin.mint, (coinPages.get(coin.mint) ?? 0) + page.pages);
           if (moved !== "failed" && page.trades === 0) quietUntil.set(coin.mint, now + QUIET_RETRY_MS);
           filled = true;
           // A hole closed whole costs the coin nothing: its next hole is read in the same run.
@@ -217,28 +228,50 @@ interface PageOutcome {
   moved: "closed" | "moved" | "failed" | "stuck";
   /** Trades of the coin the page held (0 on a quiet stretch, or a failed read). */
   trades: number;
-  /** Helius answered the page, so its credits were spent. */
-  billed: boolean;
+  /** Pages asked, and how many of them Helius answered, so their credits were spent. */
+  pages: number;
+  billed: number;
 }
 
 /**
  * Reads one page of the coin's trades from `from` and saves them over what it read: to the hole's
- * end when the page held the rest, else to the newest second it reached. A stretch with no trade
+ * end when the page held the rest, else to the newest second it reached. A page whose every
+ * transaction is in the hole's first second covers nothing (that second may hold more), so the next
+ * page is asked, up to SAME_SECOND_PAGES and `room`: until 2026-10-29 such a hole (a launch's
+ * bundle of 100+ transactions in one second) was parked for the day (chart audit D8). A stretch with no trade
  * (before the first bar it saved, or the whole page) is vouched for by the first chunk it saved,
  * its cover run back to the hole's start, else by the chunk the hole starts after, its cover run on
  * over it, else by a chunk of its own with no bar (quietChunk).
  */
-async function fillPage(deps: ChainFillDeps, mint: string, from: number, to: number): Promise<PageOutcome> {
-  const page = await deps.helius.getMintTransactionsPage(mint, {
-    fromBlockTime: Math.floor(from / 1_000),
-    untilBlockTime: Math.ceil(to / 1_000),
-  });
-  if (page.status !== "ok") return { moved: "failed", trades: 0, billed: false };
-  const txs = page.txs.filter((t) => typeof t.blockTime === "number");
-  const newest = Math.max(0, ...txs.map((t) => t.blockTime! * 1_000));
-  const whole = page.paginationToken === null || newest >= to;
+async function fillPage(
+  deps: ChainFillDeps,
+  mint: string,
+  from: number,
+  to: number,
+  room = 1,
+): Promise<PageOutcome> {
+  const txs: ChainTx[] = [];
+  let asked = 0;
+  let paginationToken: string | null = null;
+  let newest: number;
+  let whole: boolean;
+  do {
+    const page = await deps.helius.getMintTransactionsPage(mint, {
+      fromBlockTime: Math.floor(from / 1_000),
+      untilBlockTime: Math.ceil(to / 1_000),
+      ...(paginationToken ? { paginationToken } : {}),
+    });
+    asked += 1;
+    // A later page that failed: what the earlier ones read still covers nothing, so it is asked again.
+    if (page.status !== "ok") return { moved: "failed", trades: 0, pages: asked, billed: asked - 1 };
+    txs.push(...page.txs.filter((t) => typeof t.blockTime === "number"));
+    newest = Math.max(0, ...txs.map((t) => t.blockTime! * 1_000));
+    paginationToken = page.paginationToken;
+    whole = paginationToken === null || newest >= to;
+  } while (!whole && newest <= from && asked < Math.min(room, SAME_SECOND_PAGES));
   const coverTo = whole ? to : newest;
-  if (!(coverTo > from)) return { moved: "stuck", trades: txs.length, billed: true };
+  const billed = asked;
+  if (!(coverTo > from)) return { moved: "stuck", trades: txs.length, pages: asked, billed };
   const { trades } = tradesFromChainTransactions(mint, txs);
   markTapeTrades(mint, txs, trades);
   const rows = await saveChainCandles(mint, trades, { from, to: coverTo }, deps.sink, deps.helius);
@@ -246,7 +279,8 @@ async function fillPage(deps: ChainFillDeps, mint: string, from: number, to: num
   const outcome = (moved: PageOutcome["moved"]): PageOutcome => ({
     moved,
     trades: trades.length,
-    billed: true,
+    pages: asked,
+    billed,
   });
   if (rows.length === 0 && trades.length > 0) {
     // The page held trades and saved no bar: they are not a quiet stretch, so nothing may vouch
