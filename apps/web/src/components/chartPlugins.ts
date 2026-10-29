@@ -365,6 +365,8 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
     // be off; the line stays. Size is the reader's (medium is today's).
     const factor = s.eventScale > 0 && Number.isFinite(s.eventScale) ? s.eventScale : 1;
     const rows: number[] = [];
+    // The lowest flag's bottom edge drawn this frame (px), so a bubble stack folds before it.
+    let flagBottom = 0;
     ctx.font = `600 ${Math.round(10.5 * factor * vr)}px ${c.font}`;
     const events = s.events
       .map((e) => ({ e, x: s.x(e.t) }))
@@ -393,6 +395,7 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
         if (row < 0) row = rows.length < 3 ? rows.length : rows.indexOf(Math.min(...rows));
         rows[row] = left + w;
         const y = s.flagTop + row * rowH;
+        flagBottom = Math.max(flagBottom, y + pillH);
         ctx.fillStyle = e.lead ? c.eventLead : c.labelBg;
         roundRect(ctx, left * hr, y * vr, w * hr, pillH * vr, 8 * factor * hr);
         ctx.fill();
@@ -478,7 +481,14 @@ export class ChartOverlay implements ISeriesPrimitive<Time> {
       spot({ mark: m }, m.t, m.side, (s.pic(m) ? picRadius(m.sol) : markRadius(m.sol)) * scale);
     // One bubble per KOL (with that KOL's side wallets) on a bar. The detail still lists every wallet.
     const bubbles = collapseBubbleSpots(spots, (item) => item.mark?.bubble ?? null);
-    const placed = layoutMarks(bubbles, MARK_PITCH * scale, height, 1, undefined, { steps, toY: s.y });
+    // A stacked bubble that would leave the top of the pane, or run into the event flags, folds
+    // into the "+N" of the one below it (chart audit 2026-10-29). The headroom in chartMargins
+    // keeps the first bubble on the highest candle in view.
+    const placed = layoutMarks(bubbles, MARK_PITCH * scale, height, 1, undefined, {
+      steps,
+      toY: s.y,
+      ceilingY: flagBottom > 0 ? flagBottom + 2 : 0,
+    });
     // The signed-in trader's own trades: a triangle just under that candle's low, in price
     // space, not in the bubble band (placeOwnTrades).
     const ownSpots: OwnTradeSpot<MarkItem>[] = [];

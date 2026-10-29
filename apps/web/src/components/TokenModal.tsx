@@ -99,7 +99,7 @@ import { TokenPairBalances } from "./HeaderBalances";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { useTradeFill } from "../tradeLink";
 import { PRO_MODE_PERKS } from "./ProModeCard";
-import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
+import { candleEntryMcap, summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { spendBalancesShown, useWalletBalance } from "../walletBalance";
 import { autoTimeframe, candleReadings } from "../chartBars";
 import { LIVE_POLL_MS, candlePollMs, useLiveTail, useStoredCandles, type LiveTail } from "./chartFeeds";
@@ -2403,7 +2403,14 @@ export function ChartCard({
       return [{ t: tr.t, side: tr.side, text: `${what} ${tokensText(tokens)} for ${solText(sol)}` }];
     });
   }, [pro, position.data]);
-  const entry = summary && summary.held > 0 ? summary.entryMcap : null;
+  // The entry line reads each buy's own candle (chart audit 2026-10-29); the SOL-cost figure at
+  // today's SOL price is the fallback for a buy the candles don't cover.
+  const viewCandles = view?.candles;
+  const candleEntry = useMemo(
+    () => (position.data && viewCandles ? candleEntryMcap(position.data, viewCandles) : null),
+    [position.data, viewCandles],
+  );
+  const entry = summary && summary.held > 0 ? (candleEntry ?? summary.entryMcap) : null;
 
   const tradePanel =
     trading && pro ? (
