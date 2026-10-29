@@ -531,8 +531,8 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
         buckets read thin. Rates count graded calls only; the base is the event moments that pass today's
         wallet screen.
         {r.truncated && " The read hit its row cap, so the window is cut short."} Curve tape: the coin's
-        bonding curve was being followed when it was decided. Only Pump.fun curves under 15 minutes old are,
-        so older, graduated and other launchpads' coins read as off the tape by design.
+        bonding curve was being followed when it was decided, out of the coins the tape follows: Pump.fun
+        curves under 15 minutes old. Older, graduated, Stonks and other launchpads' coins are left out of it.
       </p>
     </div>
   );
