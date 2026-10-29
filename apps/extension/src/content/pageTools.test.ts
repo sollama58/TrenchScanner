@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { holderTags } from "../shared/holders";
 import { HolderMarks, holderNamed } from "./holderMarks";
+import { MapTab } from "./mapTab";
 import { Toasts } from "./toasts";
 import { findTabStrip, isTokenPage, pageMint } from "./tokenPage";
 import { DEFAULT_SETTINGS } from "../shared/settings";
@@ -150,6 +151,72 @@ describe("holder markers", () => {
     expect(document.querySelectorAll("trench-overlay-holder")).toHaveLength(0);
     marks.stop();
     expect(openMap).not.toHaveBeenCalled();
+    history.pushState({}, "", "/");
+    vi.useRealTimers();
+  });
+
+  it("reads the next coin's map at once when the page changes coin during a read", async () => {
+    // Chart audit 2026-10-29: the first coin's late answer held the next coin's markers back 60 s.
+    vi.useFakeTimers();
+    history.pushState({}, "", `/sol/token/${A}`);
+    document.body.innerHTML = `<div class="holders"><a id="w1" href="https://solscan.io/account/${W1}">2Q3j…PryF</a></div>`;
+    const answers: ((m: typeof map) => void)[] = [];
+    const reads: string[] = [];
+    const holders = (mint: string) => {
+      reads.push(mint);
+      return new Promise<typeof map>((resolve) => answers.push(resolve));
+    };
+    const marks = new HolderMarks("gmgn", cleanTooltip({}), { holders, openMap: vi.fn() });
+    marks.start();
+    await vi.advanceTimersByTimeAsync(700);
+    expect(reads).toEqual([A]);
+    // The page moves to coin B while A's map is still being read.
+    history.pushState({}, "", `/sol/token/${B}`);
+    await vi.advanceTimersByTimeAsync(1_100);
+    answers[0]!(map);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(reads).toEqual([A, B]);
+    answers[1]!({ ...map, mint: B });
+    await vi.advanceTimersByTimeAsync(700);
+    expect(document.getElementById("w1")!.nextElementSibling?.tagName).toBe("TRENCH-OVERLAY-HOLDER");
+    marks.stop();
+    history.pushState({}, "", "/");
+    vi.useRealTimers();
+  });
+});
+
+describe("the bubble map tab", () => {
+  it("stays open while the site redraws for the next coin, and closes off the coin pages", async () => {
+    // Chart audit 2026-10-29: one look that found no coin mid-navigation closed the map.
+    vi.useFakeTimers();
+    const chromeBefore = (globalThis as { chrome?: unknown }).chrome;
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: { getURL: (path: string) => `chrome-extension://x/${path}` },
+    };
+    const header = (mint: string) =>
+      `<a href="https://solscan.io/token/${mint}">s</a><a href="https://pump.fun/coin/${mint}">p</a>`;
+    const frame = () => document.querySelector("trench-overlay-map") !== null;
+    history.pushState({}, "", `/meme/${B}`);
+    document.body.innerHTML = header(A);
+    const tab = new MapTab("axiom", cleanTooltip({}));
+    tab.start();
+    await vi.advanceTimersByTimeAsync(1_100);
+    tab.show();
+    expect(frame()).toBe(true);
+    // The site takes the old coin's page down before it draws the next one.
+    history.pushState({}, "", `/meme/${A}`);
+    document.body.innerHTML = "<div>Loading…</div>";
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(frame()).toBe(true);
+    document.body.innerHTML = header(B);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(frame()).toBe(true);
+    // Off the coin pages the map closes.
+    history.pushState({}, "", "/pulse");
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(frame()).toBe(false);
+    tab.stop();
+    (globalThis as { chrome?: unknown }).chrome = chromeBefore;
     history.pushState({}, "", "/");
     vi.useRealTimers();
   });
