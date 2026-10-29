@@ -90,8 +90,10 @@ function setup(
 describe("curve tape", () => {
   let stop: (() => void) | undefined;
   afterEach(() => {
-    stop?.();
+    // Forget the tapes first: stopping clears the followed coins, and resetting forgets only the
+    // tapes of followed coins, so one test's ticks leaked into the next on the same mint.
     resetCurveTape();
+    stop?.();
     vi.mocked(recordPricePath).mockClear();
   });
 
@@ -197,6 +199,36 @@ describe("curve tape", () => {
       onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, null, NOW + 7_000);
     }
     expect(takeCurveTapeStats(NOW + 7_000)!.streamCreditsToday).toBe(10);
+  });
+
+  it("confirms a streamed curve when a slow round gets to it, so the next update carries the tape on", async () => {
+    // A round awaits the launch screen, the pools and LaunchLab before it confirms the streamed
+    // curves: one 20 s slow confirmed with its start time, and the next update past CURVE_GAP_MS of
+    // that wiped the tape (chart audit 2026-10-29, D4).
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    try {
+      let slow = false;
+      const s = setup(NOW - 1_000, {
+        newLaunches: () => ["Unscreened111111111111111111111111111111111"],
+        screenLaunches: async () => {
+          if (slow) vi.setSystemTime(Date.now() + 20_000);
+          return [];
+        },
+      });
+      stop = s.stop;
+      followYoungCurves([young], NOW);
+      await round(NOW);
+      onCurveStreamUpdate(`curve:${MINT}`, curveData(2), 100, null, NOW + 3_000);
+      vi.setSystemTime(NOW + 5_000);
+      slow = true;
+      await round(NOW + 5_000);
+      onCurveStreamUpdate(`curve:${MINT}`, curveData(3), 100, null, NOW + 26_000);
+      // One unbroken tape from the seed read, with every change the stream delivered.
+      expect(curvePathOf(MINT, NOW + 26_000).curveCoveredSec).toBe(26);
+      expect(curveTapeView.ticksAfter(MINT, -1)?.ticks.map((t) => t.price)).toEqual([1, 2, 3]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stamps a streamed change by its slot's time, never past arrival or before the newest tick", async () => {
