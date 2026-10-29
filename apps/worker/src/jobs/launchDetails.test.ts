@@ -1,4 +1,4 @@
-import type { DiscoveredCoin } from "@trenchscanner/core";
+import { HttpError, type DiscoveredCoin } from "@trenchscanner/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
@@ -69,6 +69,23 @@ describe("fillLaunchDetails", () => {
       dropped: 0,
       deferred: 0,
     });
+  });
+
+  it("reports each launch Pump.fun refused (403), and only those", async () => {
+    const coinDetails = vi.fn(async (mint: string) => {
+      if (mint === "r") throw new HttpError(403, "https://frontend-api-v3.pump.fun/coins-v2/r");
+      if (mint === "t") throw new HttpError(408, "https://frontend-api-v3.pump.fun/coins-v2/t");
+      return null;
+    });
+    const refused = vi.fn();
+    await fillLaunchDetails(
+      [launch("r"), launch("t"), launch("n")],
+      { coinDetails },
+      vi.fn(),
+      undefined,
+      refused,
+    );
+    expect(refused.mock.calls).toEqual([["r"]]);
   });
 
   it("reads each mint once", async () => {
