@@ -75,6 +75,8 @@ export interface BackfillJob {
   mint: string;
   pumpDone: boolean;
   poolIndex: number;
+  /** Pages read on that pool so far. */
+  poolPages: number;
   cursor: Date | null;
   pages: number;
   failures: number;
@@ -84,6 +86,7 @@ export interface BackfillJob {
 export interface BackfillPatch {
   pumpDone?: boolean;
   poolIndex?: number;
+  poolPages?: number;
   cursor?: Date | null;
   pages?: number;
   failures?: number;
@@ -112,6 +115,13 @@ export interface BackfillDeps {
 }
 
 export { GECKO_SETTLE_MS, isPumpCoin, poolsOf, type BackfillToken };
+
+/** Rows a GeckoTerminal OHLCV body lists, read or not: a full page has GECKO_CANDLE_PAGE. */
+function geckoListed(body: unknown): number {
+  const list = (body as { data?: { attributes?: { ohlcv_list?: unknown } } } | null)?.data?.attributes
+    ?.ohlcv_list;
+  return Array.isArray(list) ? list.length : 0;
+}
 
 /**
  * Exported for tests. How far back from `cursor` the store already covers without a break, given
@@ -192,7 +202,13 @@ export async function stepBackfill(
   // of being given up with nothing. Until 2026-10-24 a call minutes after a launch marked the coin
   // done with no pages, and its chart stayed empty until the six-hour redo (chart audit 2026-10-24).
   if (job.poolIndex >= pools.length && job.pages === 0 && cursor > stopAt && isYoung(token, now)) {
-    return { cursor: at(cursor), poolIndex: 0, nextAt: at(now + YOUNG_RETRY_WAIT_MS), error: null };
+    return {
+      cursor: at(cursor),
+      poolIndex: 0,
+      poolPages: 0,
+      nextAt: at(now + YOUNG_RETRY_WAIT_MS),
+      error: null,
+    };
   }
   if (cursor <= stopAt || job.pages >= deps.maxPages || job.poolIndex >= pools.length)
     return { cursor: at(cursor), nextAt: at(now), done: true, error: null };
@@ -215,19 +231,28 @@ export async function stepBackfill(
   }
   const bars = body === null ? [] : parseGeckoOhlcv(body).filter((b) => b.t < cursor);
   // An unknown pool, or one with nothing older: the next pool from the same place.
-  if (bars.length === 0) return { cursor: at(cursor), poolIndex: job.poolIndex + 1, nextAt: at(now) };
+  if (bars.length === 0)
+    return { cursor: at(cursor), poolIndex: job.poolIndex + 1, poolPages: 0, nextAt: at(now) };
   try {
     // From now back, the coin's newest page vouches for its quiet minutes to GECKO_SETTLE_MS ago.
-    const rows = geckoPageRows(job.mint, bars, cursor, now, job.cursor === null);
+    // A later pool's first page vouches for none up to the cursor when an earlier pool's pages set
+    // it: that is where the pool before it began, and the stretch between (a curve's silence after
+    // graduation) was not quiet.
+    const otherPool = job.poolIndex > 0 && job.poolPages === 0 && job.pages > 0;
+    const rows = geckoPageRows(job.mint, bars, cursor, now, job.cursor === null, otherPool);
     if (rows.length > 0) await deps.save(rows);
   } catch (err) {
     return { cursor: at(cursor), ...failed(err) };
   }
+  // A short page is the pool's whole history before the cursor: older is on the next pool. Judged
+  // on the rows GeckoTerminal listed, not the ones kept: a page asked before a minute often lists
+  // that minute too (its forming bar), and the 999 left counted as short, so a pool's paging ended
+  // after one page (chart audit 2026-10-29, D2).
+  const short = geckoListed(body) < GECKO_CANDLE_PAGE;
   return {
     cursor: at(bars[0]!.t),
     pages: job.pages + 1,
-    // A short page is the pool's whole history before the cursor: older is on the next pool.
-    ...(bars.length < GECKO_CANDLE_PAGE ? { poolIndex: job.poolIndex + 1 } : {}),
+    ...(short ? { poolIndex: job.poolIndex + 1, poolPages: 0 } : { poolPages: job.poolPages + 1 }),
     failures: 0,
     nextAt: at(now),
   };
@@ -264,7 +289,7 @@ async function claimJob(now: number): Promise<BackfillJob | null> {
       ORDER BY ("reason" = 'call') DESC, "requestedAt"
       LIMIT 1
       FOR UPDATE SKIP LOCKED)
-    RETURNING "mint", "pumpDone", "poolIndex", "cursor", "pages", "failures"`;
+    RETURNING "mint", "pumpDone", "poolIndex", "poolPages", "cursor", "pages", "failures"`;
   return rows[0] ?? null;
 }
 

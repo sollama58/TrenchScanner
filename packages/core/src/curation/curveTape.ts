@@ -235,12 +235,15 @@ export class CurveTape {
   /**
    * The stream says it has followed `mint`'s curve without a break since `since`: every change in
    * that span was delivered, so the state is known current at `at`. Starts the stream's run when
-   * the tape was already current at `since`.
+   * the tape was already current at `since`. A tape current at or after `since` is carried however
+   * long ago that was: the unbroken stream vouches for every moment between. Until 2026-10-29 a
+   * confirmation more than CURVE_GAP_MS after the last was refused, so a worker round slower than
+   * that left the tape stale and the next stream update wiped it, a hole where the stream had
+   * delivered everything (chart audit D4).
    */
   confirmStreamed(mint: string, since: number, at: number): void {
     const tape = this.tapes.get(mint);
-    if (!tape || at - tape.confirmedAt > CURVE_GAP_MS) return;
-    if (since > tape.confirmedAt) return;
+    if (!tape || since > tape.confirmedAt) return;
     tape.confirmedAt = Math.max(tape.confirmedAt, at);
     tape.streamFrom ??= Math.max(since, tape.coveredFrom);
   }

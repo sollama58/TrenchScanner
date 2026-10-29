@@ -25,8 +25,11 @@ const LAUNCH = NOW - 3 * 60 * MIN;
 const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const BUYER = "4WPT9wLwQWYS5zyX36ZgoY3ESxxLgDmE12upKXDAyYbL";
 
-/** A curve buy of the coin at `atMs`, logging virtual reserves of `vSol` lamports over a billion tokens. */
-function buy(atMs: number, vSol: number): ChainTx {
+/**
+ * A curve buy of the coin at `atMs`, logging virtual reserves of `vSol` lamports over a billion
+ * tokens; `n` tells apart buys in one second.
+ */
+function buy(atMs: number, vSol: number, n = 0): ChainTx {
   const b = Buffer.alloc(113);
   Buffer.from([189, 219, 127, 211, 78, 230, 97, 238]).copy(b, 0);
   Buffer.alloc(32, 8).copy(b, 8);
@@ -38,7 +41,7 @@ function buy(atMs: number, vSol: number): ChainTx {
   b.writeBigUInt64LE(1_000_000_000_000_000n, 105);
   return {
     blockTime: atMs / 1000,
-    transaction: { signatures: [`sig-${atMs}`], message: { accountKeys: [BUYER, "ata"] } },
+    transaction: { signatures: [`sig-${atMs}-${n}`], message: { accountKeys: [BUYER, "ata"] } },
     meta: {
       err: null,
       preTokenBalances: [],
@@ -88,11 +91,11 @@ describe.skipIf(!dbAvailable)("chart chain fill", () => {
   });
 
   const stub = (pages: ChainTx[][]) => {
-    const asked: { from?: number; until?: number }[] = [];
+    const asked: { from?: number; until?: number; token?: string }[] = [];
     const helius: ChainFillDeps["helius"] = {
       gtfaUsable: true,
       getMintTransactionsPage: async (_mint, opts) => {
-        asked.push({ from: opts?.fromBlockTime, until: opts?.untilBlockTime });
+        asked.push({ from: opts?.fromBlockTime, until: opts?.untilBlockTime, token: opts?.paginationToken });
         const txs = pages[asked.length - 1] ?? [];
         return { status: "ok", txs, paginationToken: txs.length >= 2 ? "more" : null };
       },
@@ -156,6 +159,32 @@ describe.skipIf(!dbAvailable)("chart chain fill", () => {
       { ...opts, burstPages: 3, pagesPerRun: 1 },
     );
     expect(asked).toHaveLength(4);
+  });
+
+  it("pages on through a first second holding a full page, rather than parking the hole", async () => {
+    // A launch bundle: the whole first page is in the hole's first second, which may hold more.
+    // Until 2026-10-29 the hole was parked for the day (chart audit D8).
+    const first = LAUNCH + MIN;
+    const { helius, asked } = stub([
+      [buy(first, 30e9, 1), buy(first, 30e9, 2)],
+      [buy(first, 30e9, 3), buy(LAUNCH + 2 * MIN, 31e9)],
+      [buy(LAUNCH + 3 * MIN, 32e9)],
+    ]);
+    await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, opts);
+    // The second page is the first's next, from the same second, in the same step.
+    expect(asked.slice(0, 2)).toEqual([
+      { from: first / 1000, until: (LAUNCH + 120 * MIN) / 1000 },
+      { from: first / 1000, until: (LAUNCH + 120 * MIN) / 1000, token: "more" },
+    ]);
+    expect(await oneSecondHoles(MINT, LAUNCH, LAUNCH + 120 * MIN)).toEqual([
+      [LAUNCH + 2 * MIN, LAUNCH + 120 * MIN],
+    ]);
+    const tape = await prisma.candleChunk.findMany({ where: { mint: MINT, source: "tape" } });
+    expect(tape.map((r) => [r.startAt.getTime(), r.bars])).toEqual([[first, 1]]);
+    // The next run reads on from there.
+    await runCandleChainFill({ helius, sink: { solUsd: async () => 200 } }, opts);
+    expect(asked[2]).toMatchObject({ from: (LAUNCH + 2 * MIN) / 1000 });
+    expect(await oneSecondHoles(MINT, LAUNCH, LAUNCH + 120 * MIN)).toEqual([]);
   });
 
   it("fills a hole no chunk ends exactly at, vouching for the quiet lead-in with the chunk it saved", async () => {

@@ -867,6 +867,12 @@ export function overStreamPace(creditsToday: number, capPerDay: number, now: num
 export async function round(now = Date.now()): Promise<void> {
   if (!cfg || !reader || busy) return;
   busy = true;
+  // A stream's confirmation is stamped with when it is made, not when the round began: the round
+  // awaits the launch screen, the pools and LaunchLab first, and a slow one confirmed with a stale
+  // time, so the next stream update found the tape past CURVE_GAP_MS and wiped it (chart audit
+  // 2026-10-29, D4).
+  const startedAt = Date.now();
+  const clock = () => now + Math.max(0, Date.now() - startedAt);
   try {
     rollDay(now);
     const credits = streamCredits(dayStreamBytes);
@@ -901,7 +907,7 @@ export async function round(now = Date.now()): Promise<void> {
       cfg.screenLaunches && unseen.length > 0 ? await cfg.screenLaunches(unseen) : unseen,
       now,
     );
-    await poolRound(now);
+    await poolRound(now, clock);
     await launchLabRound(now);
     const toRead: string[] = [];
     /** The seeds' stream covers: confirmed as soon as the read lands, not a round later. */
@@ -916,7 +922,7 @@ export async function round(now = Date.now()): Promise<void> {
           toRead.push(mint);
           seeding.set(mint, since);
           seeds += 1;
-        } else tape.confirmStreamed(mint, since, now);
+        } else tape.confirmStreamed(mint, since, clock());
       } else if (f.rank < cfg.pollMaxMints) {
         toRead.push(mint);
         polls += 1;
@@ -972,7 +978,7 @@ export async function round(now = Date.now()): Promise<void> {
  * (the pool appears at migration, a moment after the curve completes, so it is asked each round
  * until it does), and one batched read of the vaults to seed the streamed pools and poll the rest.
  */
-async function poolRound(now: number): Promise<void> {
+async function poolRound(now: number, clock: () => number = () => now): Promise<void> {
   if (pools.size === 0 || !reader?.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
   for (const [mint, p] of pools) if (now > p.until) dropPool(mint);
   const toRead = new Map<string, { mint: string; quoteMint: string }>();
@@ -982,7 +988,7 @@ async function poolRound(now: number): Promise<void> {
       const since = poolCoveredSince(mint, p, now);
       // Streamed and read since its subscriptions began: the stream carries it.
       if (since !== null && p.readAt !== null && p.readAt >= since)
-        poolTape.confirmStreamed(mint, since, now);
+        poolTape.confirmStreamed(mint, since, clock());
       else toRead.set(p.address, { mint, quoteMint: WRAPPED_SOL_MINT });
     }
   }

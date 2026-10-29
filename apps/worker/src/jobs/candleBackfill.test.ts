@@ -34,6 +34,7 @@ const job = (over: Partial<BackfillJob> = {}): BackfillJob => ({
   mint: PUMP_MINT,
   pumpDone: true,
   poolIndex: 0,
+  poolPages: 0,
   cursor: null,
   pages: 0,
   failures: 0,
@@ -173,6 +174,57 @@ describe("stepBackfill", () => {
     );
     expect(patch.poolIndex).toBe(1);
     expect(patch.cursor!.getTime()).toBe(HOUR_START - 5 * M);
+  });
+
+  it("stays on a pool whose full page also listed the bar at the cursor", async () => {
+    // GeckoTerminal's page before a minute often lists that minute too: 1,000 rows, 999 kept. Until
+    // 2026-10-29 the 999 counted as short and the pool's paging ended after one page (chart audit D2).
+    const cursor = HOUR_START - 5 * M;
+    const { d } = deps({ geckoPage: vi.fn(async (_p, _m, before) => geckoBody(before + M, 1_000)) });
+    const patch = await stepBackfill(
+      job({ cursor: new Date(cursor), pages: 1, poolPages: 1 }),
+      pumpToken,
+      d,
+      NOW,
+    );
+    expect(patch.poolIndex).toBeUndefined();
+    expect(patch.poolPages).toBe(2);
+    expect(patch.cursor!.getTime()).toBe(cursor - 999 * M);
+    // A page that listed fewer than 1,000 rows still ends the pool.
+    const short = deps({ geckoPage: vi.fn(async (_p, _m, before) => geckoBody(before + M, 999)) });
+    const ended = await stepBackfill(
+      job({ cursor: new Date(cursor), pages: 1, poolPages: 1 }),
+      pumpToken,
+      short.d,
+      NOW,
+    );
+    expect(ended).toMatchObject({ poolIndex: 1, poolPages: 0 });
+  });
+
+  it("vouches for no quiet minutes up to where the pool before began on a later pool's first page", async () => {
+    // A graduated coin: its pool's history begins at the cursor; the curve's last bar is an hour
+    // before (graduation, as far as these pages go). The stretch between is the pool's to draw,
+    // not the curve's silence (chart audit 2026-10-29, D2).
+    const cursor = HOUR_START - 5 * M;
+    const curve = (before: number) => geckoBody(before - 60 * M, 100);
+    const first = deps({ geckoPage: vi.fn(async (_p, _m, before) => curve(before)) });
+    const patch = await stepBackfill(
+      job({ cursor: new Date(cursor), poolIndex: 2, poolPages: 0, pages: 3 }),
+      pumpToken,
+      first.d,
+      NOW,
+    );
+    expect(patch).toMatchObject({ poolIndex: 3, poolPages: 0 });
+    expect(Math.max(...first.saved.map((r) => r.coverTo))).toBe(cursor - 60 * M);
+    // Its later pages vouch for the quiet up to the cursor its own page set, as before.
+    const later = deps({ geckoPage: vi.fn(async (_p, _m, before) => curve(before)) });
+    await stepBackfill(
+      job({ cursor: new Date(cursor), poolIndex: 2, poolPages: 1, pages: 4 }),
+      pumpToken,
+      later.d,
+      NOW,
+    );
+    expect(Math.max(...later.saved.map((r) => r.coverTo))).toBe(cursor);
   });
 
   it("ends at the launch, when the pools run out, or at the page cap", async () => {
@@ -355,6 +407,7 @@ describe.skipIf(!dbAvailable)("tick", () => {
     await tick(d, NOW);
     row = await prisma.candleBackfill.findUniqueOrThrow({ where: { mint: MINT } });
     expect(row.pages).toBe(1);
+    expect(row.poolPages).toBe(1);
     expect(row.cursor!.getTime()).toBe(NOW - 1_000 * M);
     expect(saved.length).toBeGreaterThan(0);
   });
