@@ -169,7 +169,11 @@ export class MapTab {
   /** Puts the tab where it belongs, or takes it away off a coin's page. */
   private sync(): void {
     const onPage = this.prefs.mapTab.enabled && isTokenPage(this.site, location.pathname);
-    const mint = onPage ? pageMint(document, this.site, location.pathname) : null;
+    // Axiom and Terminal name the coin only in the page's links, which are gone for a moment while
+    // the site draws the next coin's page. On a coin's page the last coin stands until another is
+    // found, and only leaving the coin pages closes the map (chart audit 2026-10-29: one empty look
+    // mid-navigation closed it).
+    const mint = onPage ? (pageMint(document, this.site, location.pathname) ?? this.mint) : null;
     if (mint !== this.mint) {
       this.mint = mint;
       if (this.open) this.load();
