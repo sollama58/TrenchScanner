@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pumpCurveAddressOf, pumpSwapPoolOf, type CurveState } from "@trenchscanner/core";
 import {
   followClearedLaunches,
@@ -647,6 +647,16 @@ describe("curve tape", () => {
   // A subscription gone silent on an open socket read as a quiet coin, and the chart's candle
   // writer saved the silence as quiet for good (chart audit 2026-10-29, D3).
   describe("checks the stream by RPC", () => {
+    // A round stamps a confirmation with its start plus the wall time it has taken, so with a live
+    // clock a slow CI round confirmed a millisecond past the time these tests assert (main CI,
+    // 2026-10-29). Freeze Date: the rounds take no time, and each `now` is exactly what is stamped.
+    beforeEach(() => {
+      vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     /** Base58 of 32 bytes, for test mints whose curve address can be derived. */
     const base58 = (bytes: Uint8Array) => {
       const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
