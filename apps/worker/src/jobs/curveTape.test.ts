@@ -29,6 +29,16 @@ vi.mock("./pricePathRecorder.js", () => ({ recordPricePath: vi.fn() }));
 const MINT = "So11111111111111111111111111111111111111112";
 const NOW = Date.UTC(2026, 9, 17, 12, 0, 0);
 
+/** A Pump.fun curve's account data at `price` (lamports per raw unit), base64, as the stream delivers it. */
+function curveData(price: number): string {
+  const data = new Uint8Array(115);
+  data.set([23, 183, 248, 55, 96, 216, 172, 96], 0);
+  const view = new DataView(data.buffer);
+  view.setBigUint64(8, 1_000_000_000_000_000n, true);
+  view.setBigUint64(16, BigInt(price * 1e15), true);
+  return Buffer.from(data).toString("base64");
+}
+
 const state = (price: number): CurveState => ({
   virtualToken: 1e15,
   virtualQuote: price * 1e15,
@@ -36,15 +46,6 @@ const state = (price: number): CurveState => ({
   complete: false,
   quoteIsSol: true,
 });
-
-/** A bonding curve account's data (base64) priced at `price` lamports a raw unit, quoted in SOL. */
-function curveData(price: number): string {
-  const data = Buffer.alloc(115);
-  Buffer.from([23, 183, 248, 55, 96, 216, 172, 96]).copy(data, 0);
-  data.writeBigUInt64LE(10n ** 15n, 8);
-  data.writeBigUInt64LE(BigInt(price * 1e15), 16);
-  return data.toString("base64");
-}
 
 function setup(
   coveredSince: number | null,
@@ -89,8 +90,10 @@ function setup(
 describe("curve tape", () => {
   let stop: (() => void) | undefined;
   afterEach(() => {
-    stop?.();
+    // Forget the tapes first: stopping clears the followed coins, and resetting forgets only the
+    // tapes of followed coins, so one test's ticks leaked into the next on the same mint.
     resetCurveTape();
+    stop?.();
     vi.mocked(recordPricePath).mockClear();
   });
 
@@ -186,14 +189,14 @@ describe("curve tape", () => {
     expect(curveTapeView.ticksAfter(MINT, -1)).toMatchObject({ streamFrom: NOW });
     await round(NOW + 5_000);
     expect(s.reads).toHaveLength(1);
-    onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 6_000);
+    onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, null, NOW + 6_000);
     const stats = takeCurveTapeStats(NOW + 6_000)!;
     expect(stats).toMatchObject({ following: 1, streamed: 1, seeded: 1, updates: 1, readCredits: 1 });
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBe(6);
     // The day's spend is figured on its bytes: one 500-byte update rounds to no credit, a
     // thousand of them are 10.
     for (let i = 0; i < 1_000; i += 1) {
-      onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 7_000);
+      onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, null, NOW + 7_000);
     }
     expect(takeCurveTapeStats(NOW + 7_000)!.streamCreditsToday).toBe(10);
   });
@@ -215,17 +218,52 @@ describe("curve tape", () => {
       stop = s.stop;
       followYoungCurves([young], NOW);
       await round(NOW);
-      onCurveStreamUpdate(`curve:${MINT}`, curveData(2), 100, NOW + 3_000);
+      onCurveStreamUpdate(`curve:${MINT}`, curveData(2), 100, null, NOW + 3_000);
       vi.setSystemTime(NOW + 5_000);
       slow = true;
       await round(NOW + 5_000);
-      onCurveStreamUpdate(`curve:${MINT}`, curveData(3), 100, NOW + 26_000);
+      onCurveStreamUpdate(`curve:${MINT}`, curveData(3), 100, null, NOW + 26_000);
       // One unbroken tape from the seed read, with every change the stream delivered.
       expect(curvePathOf(MINT, NOW + 26_000).curveCoveredSec).toBe(26);
       expect(curveTapeView.ticksAfter(MINT, -1)?.ticks.map((t) => t.price)).toEqual([1, 2, 3]);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("stamps a streamed change by its slot's time, never past arrival or before the newest tick", async () => {
+    // Stamped on arrival, the worker's 1-second bars sat a second or two after the API stream's and
+    // the trade tape's for the same trade, and the chart drew both (chart audit 2026-10-29, D1).
+    const s = setup(NOW - 1_000);
+    stop = s.stop;
+    const slotTimes = new Map<number, number>([
+      [7, NOW + 4_100],
+      [8, NOW + 9_000],
+      [9, NOW + 3_000],
+    ]);
+    Object.assign(s.stream, {
+      slotTime: (slot: number | null) => (slot === null ? null : (slotTimes.get(slot) ?? null)),
+    });
+    followYoungCurves([young], NOW);
+    await round(NOW);
+    const at = (price: number, slot: number | null, now: number) =>
+      onCurveStreamUpdate(`curve:${MINT}`, curveData(price), 500, slot, now);
+    // Its slot's time, not the arrival 1.5 s later.
+    at(2, 7, NOW + 5_600);
+    // A slot time past the arrival (clocks apart): the arrival.
+    at(3, 8, NOW + 6_000);
+    // A slot older than the newest tick: the newest tick's time, so the change is kept.
+    at(4, 9, NOW + 6_500);
+    // A slot the feed has no time for, or none: the arrival.
+    at(5, 10, NOW + 7_000);
+    at(6, null, NOW + 8_000);
+    expect(curveTapeView.ticksAfter(MINT, NOW)?.ticks.map((t) => [t.at - NOW, t.price])).toEqual([
+      [4_100, 2],
+      [6_000, 3],
+      [6_000, 4],
+      [7_000, 5],
+      [8_000, 6],
+    ]);
   });
 
   it("follows a Stonks coin on its LaunchLab pool, for the chart's candles only", async () => {
@@ -422,7 +460,7 @@ describe("curve tape", () => {
     stop = s.stop;
     followYoungCurves([{ ...young, launchedAt: new Date(NOW - 20 * 60_000) }], NOW);
     expect(s.stream.watch).toHaveBeenCalledTimes(1);
-    onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 6_000);
+    onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, null, NOW + 6_000);
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
   });
 
@@ -686,9 +724,16 @@ describe("curve tape", () => {
       onPoolStreamUpdate(`curve-pool:quote:${MINT}`, tokenAccount(4e15), 300, 7, NOW + 16_200);
       const tape = curveTapeView.ticksAfter(MINT, NOW + 15_000)!;
       expect(tape.ticks).toEqual([{ at: NOW + 16_000, price: 8, realQuote: 4e15 }]);
+      // With the slot feed's time for the slot, the pair is stamped by it, not by its arrival.
+      Object.assign(s.stream, { slotTime: (slot: number | null) => (slot === 8 ? NOW + 16_800 : null) });
+      onPoolStreamUpdate(`curve-pool:base:${MINT}`, tokenAccount(0.4e15), 300, 8, NOW + 18_000);
+      onPoolStreamUpdate(`curve-pool:quote:${MINT}`, tokenAccount(4e15), 300, 8, NOW + 18_100);
+      expect(curveTapeView.ticksAfter(MINT, NOW + 16_000)!.ticks).toEqual([
+        { at: NOW + 16_800, price: 10, realQuote: 4e15 },
+      ]);
       expect(tape.prior).toMatchObject({ at: NOW + 10_000, price: 2 });
       expect(tape.streamFrom).toBe(NOW + 10_000);
-      expect(takeCurveTapeStats(NOW + 17_000)).toMatchObject({ pools: 1, poolsStreamed: 1, poolUpdates: 2 });
+      expect(takeCurveTapeStats(NOW + 19_000)).toMatchObject({ pools: 1, poolsStreamed: 1, poolUpdates: 4 });
     });
 
     it("lets the pools go before the curves when the stream nears its pace", async () => {
