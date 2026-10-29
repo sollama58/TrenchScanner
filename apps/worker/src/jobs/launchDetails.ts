@@ -21,6 +21,8 @@ export interface LaunchDetailStats {
   /** Streamed launches the coin list didn't carry, looked up. */
   asked: number;
   fromPumpFun: number;
+  /** Pump.fun refused us; its read through TokenSage's relay answered (pumpRelay.ts). */
+  fromRelay: number;
   /** Pump.fun's single-coin read failed or had no such coin; the launch's metadata JSON answered. */
   fromMetadata: number;
   /**
@@ -42,6 +44,7 @@ export interface LaunchDetailStats {
 const emptyStats = (): LaunchDetailStats => ({
   asked: 0,
   fromPumpFun: 0,
+  fromRelay: 0,
   fromMetadata: 0,
   fromDas: 0,
   missing: 0,
@@ -107,8 +110,9 @@ export function takeLaunchDetailStats(): LaunchDetailStats {
  * a Cloudflare challenge on every page) every new launch reached the models without them, and
  * calls fell to about a fifth over the next hours as older coins aged out.
  *
- * Pump.fun's single-coin endpoint first (the same fields the list gives), the launch's IPFS
- * metadata JSON when that fails. Not awaited by the scan: a row the cycle creates bare is filled
+ * Pump.fun's single-coin endpoint first (the same fields the list gives), the same read through
+ * TokenSage's relay when Pump.fun refuses us (`viaRelay`, pumpRelay.ts), the launch's IPFS
+ * metadata JSON when those fail. Not awaited by the scan: a row the cycle creates bare is filled
  * in when the answer lands (addNewMintsToWatchlist backfills a missing description). On a healthy
  * list this is only the launches of the last few seconds before the cycle read it.
  */
@@ -117,7 +121,7 @@ export async function fillLaunchDetails(
   pumpFun: Pick<PumpFunClient, "coinDetails">,
   save: (coins: DiscoveredCoin[]) => Promise<unknown>,
   fetchMetadata: typeof fetchLaunchMetadata = fetchLaunchMetadata,
-  onPumpRefused?: (mint: string) => void,
+  viaRelay?: (mint: string) => Promise<DiscoveredCoin | null>,
 ): Promise<void> {
   const byMint = new Map<string, StreamEvent>();
   for (const e of launches)
@@ -148,7 +152,7 @@ export async function fillLaunchDetails(
   try {
     await forEachWithConcurrency(todo, CONCURRENCY, async (launch) => {
       try {
-        const coin = await lookUp(launch, pumpFun, fetchMetadata, onPumpRefused);
+        const coin = await lookUp(launch, pumpFun, fetchMetadata, viaRelay);
         if (coin) {
           found.push(coin);
           missStreak = 0;
@@ -186,7 +190,7 @@ async function lookUp(
   launch: StreamEvent,
   pumpFun: Pick<PumpFunClient, "coinDetails">,
   fetchMetadata: typeof fetchLaunchMetadata,
-  onPumpRefused?: (mint: string) => void,
+  viaRelay?: (mint: string) => Promise<DiscoveredCoin | null>,
 ): Promise<DiscoveredCoin | null | undefined> {
   try {
     const coin = await pumpFun.coinDetails(launch.mintAddress);
@@ -195,11 +199,17 @@ async function lookUp(
       return coin;
     }
   } catch (err) {
-    if (err instanceof HttpError && err.status === 403) onPumpRefused?.(launch.mintAddress);
     logger.debug("pump.fun coin read failed - trying the launch metadata", {
       mint: launch.mintAddress,
       error: String(err),
     });
+    if (viaRelay && err instanceof HttpError && err.status === 403) {
+      const coin = await viaRelay(launch.mintAddress);
+      if (coin) {
+        stats.fromRelay += 1;
+        return coin;
+      }
+    }
   }
   if (!launch.metadataUri) return undefined;
   try {

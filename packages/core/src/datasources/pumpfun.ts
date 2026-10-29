@@ -7,7 +7,7 @@ import {
 } from "./pumpfunGate.js";
 import { createLogger } from "../logger.js";
 import { mintSupplies, onCurrentSupply } from "../mintSupply.js";
-import { normalizeSocialUrl } from "./tokensage.js";
+import { normalizeSocialUrl, type TokenSagePumpCoinAnswer } from "./tokensage.js";
 import { looksLikeSolanaAddress } from "../solana.js";
 import type { MinuteCandle } from "../curation/regrade.js";
 import { tradesFromPumpFun, type PumpFunTradesPage } from "../wallets/tradeTape.js";
@@ -922,6 +922,31 @@ function launchDate(ms: unknown, now = Date.now()): Date | undefined {
   if (typeof ms !== "number" || !Number.isFinite(ms) || ms <= 0 || ms > now + 60_000) return undefined;
   const date = new Date(ms);
   return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+/**
+ * A coin TokenSage's Pump.fun relay passed on (GET /v1/pumpfun/coins/{ca}), read as Pump.fun's own
+ * single-coin read is: the relay sends the same coins-v2 fields, whitelisted and clipped there.
+ * Pump.fun's Cloudflare has refused this service since 2026-10-22 and answers TokenSage (check-in
+ * 2026-10-29), so launch details go through the relay when Pump.fun refuses us.
+ */
+export function discoveredCoinFromRelay(coin: NonNullable<TokenSagePumpCoinAnswer["coin"]>): DiscoveredCoin {
+  return toDiscoveredCoin({
+    mint: coin.mint,
+    name: coin.name ?? undefined,
+    symbol: coin.symbol ?? undefined,
+    description: coin.description ?? undefined,
+    image_uri: coin.image_uri ?? undefined,
+    created_timestamp: coin.created_timestamp ?? undefined,
+    complete: coin.complete ?? undefined,
+    usd_market_cap: coin.usd_market_cap ?? undefined,
+    market_cap_usd: coin.market_cap_usd ?? undefined,
+    twitter: coin.twitter ?? undefined,
+    telegram: coin.telegram ?? undefined,
+    website: coin.website ?? undefined,
+    mayhem_state: coin.mayhem_state,
+    creator: coin.creator ?? undefined,
+  });
 }
 
 function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {

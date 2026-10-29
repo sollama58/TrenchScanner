@@ -63,6 +63,7 @@ describe("fillLaunchDetails", () => {
     expect(takeLaunchDetailStats()).toEqual({
       asked: 3,
       fromPumpFun: 1,
+      fromRelay: 0,
       fromMetadata: 1,
       fromDas: 0,
       missing: 1,
@@ -71,21 +72,34 @@ describe("fillLaunchDetails", () => {
     });
   });
 
-  it("reports each launch Pump.fun refused (403), and only those", async () => {
+  it("asks TokenSage's relay for each launch Pump.fun refused (403), and only those", async () => {
     const coinDetails = vi.fn(async (mint: string) => {
-      if (mint === "r") throw new HttpError(403, "https://frontend-api-v3.pump.fun/coins-v2/r");
+      if (mint === "r" || mint === "s")
+        throw new HttpError(403, `https://frontend-api-v3.pump.fun/coins-v2/${mint}`);
       if (mint === "t") throw new HttpError(408, "https://frontend-api-v3.pump.fun/coins-v2/t");
       return null;
     });
-    const refused = vi.fn();
-    await fillLaunchDetails(
-      [launch("r"), launch("t"), launch("n")],
-      { coinDetails },
-      vi.fn(),
-      undefined,
-      refused,
+    const viaRelay = vi.fn(async (mint: string) =>
+      mint === "r" ? coin("r", { description: "via relay" }) : null,
     );
-    expect(refused.mock.calls).toEqual([["r"]]);
+    const fetchMetadata = vi.fn(async (mint: string) => coin(mint, { description: "from ipfs" }));
+    const save = vi.fn(async () => {});
+    await fillLaunchDetails(
+      [launch("r"), launch("s", { metadataUri: "https://ipfs.io/ipfs/s" }), launch("t"), launch("n")],
+      { coinDetails },
+      save,
+      fetchMetadata,
+      viaRelay,
+    );
+    expect(viaRelay.mock.calls.map((c) => c[0]).sort()).toEqual(["r", "s"]);
+    // The relay answered r; s fell through to its metadata.
+    expect(fetchMetadata.mock.calls.map((c) => c[0])).toEqual(["s"]);
+    const saved = (save.mock.calls[0] as unknown as [DiscoveredCoin[]])[0];
+    expect(saved.map((c) => [c.mintAddress, c.description]).sort()).toEqual([
+      ["r", "via relay"],
+      ["s", "from ipfs"],
+    ]);
+    expect(takeLaunchDetailStats()).toMatchObject({ asked: 4, fromRelay: 1, fromMetadata: 1, missing: 2 });
   });
 
   it("reads each mint once", async () => {

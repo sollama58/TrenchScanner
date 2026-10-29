@@ -638,6 +638,8 @@ export interface TokenSagePumpCoinAnswer {
     creator?: string | null;
     mayhem_state?: string | null;
     created_timestamp?: number | null;
+    usd_market_cap?: number | null;
+    market_cap_usd?: number | null;
     complete?: boolean | null;
   } | null;
 }

@@ -254,7 +254,7 @@ describe("public worker health: live launch prices and the entry fast path", () 
 
 /** Pump.fun's coin list and the one-coin fallback reach it, with the list's last failure. */
 describe("public worker health: Pump.fun list and launch details", () => {
-  it("carries pumpfunList with its last error, launchDetails, launchPoller and pumpRelayProbe", () => {
+  it("carries pumpfunList with its last error, launchDetails, launchPoller and pumpRelay", () => {
     const pumpfunList = {
       pages: 9,
       failed: 9,
@@ -262,7 +262,7 @@ describe("public worker health: Pump.fun list and launch details", () => {
     };
     const launchDetails = { asked: 12, fromPumpFun: 11, fromMetadata: 1, missing: 0, dropped: 0 };
     const launchPoller = { polls: 4, failed: 0, found: 41 };
-    const pumpRelayProbe = {
+    const pumpRelay = {
       asked: 1,
       ok: 1,
       notFound: 0,
@@ -277,10 +277,10 @@ describe("public worker health: Pump.fun list and launch details", () => {
       lastRunAt: new Date(1_000),
       lastSuccessAt: null,
       lastError: null,
-      meta: { durationMs: 900, pumpfunList, launchDetails, launchPoller, pumpRelayProbe },
+      meta: { durationMs: 900, pumpfunList, launchDetails, launchPoller, pumpRelay },
     };
     const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
-    expect(s.lastRun).toMatchObject({ pumpfunList, launchDetails, launchPoller, pumpRelayProbe });
+    expect(s.lastRun).toMatchObject({ pumpfunList, launchDetails, launchPoller, pumpRelay });
   });
 });
 
