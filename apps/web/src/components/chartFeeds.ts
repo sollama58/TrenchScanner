@@ -172,6 +172,20 @@ export interface StoredCandles {
   holes?: [number, number][];
   /** With holes: where the browser reads them itself (browserFill.ts). */
   fill?: FillSource;
+  /**
+   * The newest page: the stretch the coin's stored sub-minute bars cover, [from, to] in ms; absent
+   * with none and from older API builds. The picker offers 1s to 30s by it (chartBars.ts).
+   */
+  fine?: [number, number];
+}
+
+/** Exported for tests. An answer's `fine` stretch, checked; null when absent or malformed. */
+export function fineCover(fine: unknown): { from: number; to: number } | null {
+  if (!Array.isArray(fine) || fine.length !== 2) return null;
+  const [from, to] = fine as unknown[];
+  return typeof from === "number" && typeof to === "number" && Number.isFinite(from) && to > from
+    ? { from, to }
+    : null;
 }
 
 /** A stretch nobody read: [from, to) in ms. */
@@ -341,6 +355,11 @@ export interface CandleHistory {
   holes: Hole[];
   /** Where the browser reads the holes itself (browserFill.ts); null when the answer had none. */
   fill: FillSource | null;
+  /**
+   * The stretch the store holds bars finer than a minute for, whatever size was read (the newest
+   * page's `fine`); null with none reported.
+   */
+  fine: { from: number; to: number } | null;
 }
 
 /** An older page that came back empty is asked again after this, on a scroll back to it (a backfill may land). */
@@ -408,7 +427,8 @@ export function useStoredCandles(
               const held = newestHeld(joined, pagedBack ? mine.next : (a.next ?? null));
               const holes = holesWithNewest(mine?.holes ?? [], a.holes ?? [], page[0]?.t ?? null);
               const fill = a.fill ?? mine?.fill ?? null;
-              return { base, history: { tfMs: tf.ms, ...held, holes, fill } };
+              const fine = fineCover(a.fine) ?? mine?.fine ?? null;
+              return { base, history: { tfMs: tf.ms, ...held, holes, fill, fine } };
             });
             setError(null);
             setAt(Date.now());
@@ -476,6 +496,7 @@ export function useStoredCandles(
               next: page.length > 0 ? (a.next ?? null) : null,
               holes: holesWithOlder(prev.history.holes, a.holes ?? [], prev.history.candles[0]?.t ?? null),
               fill: prev.history.fill ?? a.fill ?? null,
+              fine: prev.history.fine,
             },
           };
         });

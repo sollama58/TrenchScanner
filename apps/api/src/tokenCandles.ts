@@ -76,6 +76,13 @@ export interface TokenCandlesAnswer {
    * holes' GeckoTerminal minutes itself (the chart's fill, apps/web browserFill.ts).
    */
   fill?: { pools: string[]; scale: number };
+  /**
+   * The newest page only: the stretch the coin's stored bars finer than a minute cover, [from, to]
+   * in ms (core's fineCandleCover); absent with none. The chart offers its sub-minute sizes by it
+   * whatever size it read (chart audit 2026-10-29: read at 1m, the answer held no finer bars, so
+   * 1s to 30s were greyed out on coins with hours of 1-second bars recorded).
+   */
+  fine?: [number, number];
 }
 
 /** A trailing hole shorter than this is the live edge between reads, not a stretch nobody read. */
@@ -132,6 +139,8 @@ export interface CandleReadDeps {
    * reach back further than the store until their closed hours are saved.
    */
   live(mint: string, tfSec: number, factor: number, newest: boolean): Promise<SeriesInput[]>;
+  /** The stretch the coin's stored sub-minute bars cover (core's fineCandleCover); absent: not reported. */
+  fineCover?(mint: string): Promise<{ from: number; to: number } | null>;
 }
 
 /** Bars on the launch billion put on the supply now (as onSupply does for the chart's candles). */
@@ -167,7 +176,11 @@ export async function readTokenCandles(
   const tfSec = CANDLE_TIMEFRAMES[tf];
   const tfMs = tfSec * 1_000;
   const end = before ?? Math.floor(now / tfMs) * tfMs + tfMs;
-  const [factorRaw, oldest] = await Promise.all([deps.factor(mint), deps.oldestCover(mint)]);
+  const [factorRaw, oldest, fine] = await Promise.all([
+    deps.factor(mint),
+    deps.oldestCover(mint),
+    before === null && deps.fineCover ? deps.fineCover(mint) : Promise.resolve(null),
+  ]);
   const factor = factorRaw !== undefined && factorRaw > 0 ? factorRaw : 1;
   const live = await deps.live(mint, tfSec, factor, before === null);
   const liveOldest = Math.min(...live.map((i) => i.coverFrom));
@@ -212,6 +225,7 @@ export async function readTokenCandles(
     bars,
     next: first !== undefined && floor < first ? first : null,
     ...(holes.length > 0 ? { holes } : {}),
+    ...(fine ? { fine: [fine.from, fine.to] as [number, number] } : {}),
   };
 }
 

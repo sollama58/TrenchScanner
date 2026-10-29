@@ -10,8 +10,11 @@ import {
   slotIndex,
   closeTimeMs,
   slotOfTime,
+  slotStartAt,
+  tailFrom,
   timeframeFits,
   timeframeOffered,
+  type Slots,
 } from "./chartBars";
 
 const k = (t: number, o: number, c: number, w = 60_000, vol = 10) => ({
@@ -204,6 +207,28 @@ describe("autoTimeframe", () => {
     // Live ticks don't count.
     expect(finestCoverMs([{ ...k(0, 1, 1, 1_000), tick: true }, k(0, 1, 1)], 0, 60_000)).toBe(60_000);
   });
+  // Chart audit 2026-10-29: Auto stepped as the coin aged by seconds and as the width settled on
+  // open, each step a new read and a new view.
+  it("keeps the size it chose while it roughly fits, either way", () => {
+    // 24 minutes at 15s is 96 candles, the most a 576-px plot fits at 6 px: one second more and the
+    // size alone steps to 30s, but the size held stays.
+    expect(autoTimeframe(24 * 60_000 + 15_000, 576)).toBe(30_000);
+    expect(autoTimeframe(24 * 60_000 + 15_000, 576, 6, 0, 15_000)).toBe(15_000);
+    // Up to half again as many candles; past that it steps.
+    expect(autoTimeframe(36 * 60_000, 576, 6, 0, 15_000)).toBe(15_000);
+    expect(autoTimeframe(36 * 60_000 + 15_000, 576, 6, 0, 15_000)).toBe(30_000);
+    // The opening read sized at 600 px and the chart at 536: the same size, not a second read.
+    const span = 95 * 60_000;
+    const opening = autoTimeframe(span, 600);
+    expect(opening).toBe(60_000);
+    expect(autoTimeframe(span, 536)).toBe(5 * 60_000);
+    expect(autoTimeframe(span, 536, 6, 0, opening)).toBe(opening);
+    // A much finer size that fits easily is taken: minute candles read before the launch was known,
+    // on a five-minute-old coin.
+    expect(autoTimeframe(5 * 60_000, 576, 6, 0, 60_000)).toBe(5_000);
+    // Never finer than the candles there are, and not a size held from coarser data.
+    expect(autoTimeframe(20 * 60_000, 576, 6, 60_000, 15_000)).toBe(60_000);
+  });
   it("fits a timeframe three times or not at all", () => {
     expect(timeframeFits(60_000, 180_000)).toBe(true);
     expect(timeframeFits(60_000, 179_999)).toBe(false);
@@ -218,6 +243,19 @@ describe("timeframeOffered", () => {
     const seconds = [k(100 * M, 1, 1, 1_000), k(110 * M + 30_000, 1, 1, 1_000)];
     expect(fineSpan([...minutes, ...seconds])).toEqual({ from: 100 * M, to: 110 * M + 31_000 });
     expect(fineSpan([{ ...k(0, 1, 1, 1_000), tick: true }])).toBeNull();
+  });
+  // Chart audit 2026-10-29: read at 1m, the candles held no 1-second bars, so a coin past ~2.5
+  // hours had 1s to 30s greyed out though the store held hours of them up to now.
+  it("joins in the stretch the store reports holding sub-minute bars for", () => {
+    const recorded = { from: 20 * M, to: 120 * M - 10_000 };
+    expect(fineSpan(minutes, recorded)).toEqual(recorded);
+    expect(timeframeOffered(1_000, M, fineSpan(minutes), 120 * M)).toBe(false);
+    expect(timeframeOffered(1_000, M, fineSpan(minutes, recorded), 120 * M)).toBe(true);
+    const seconds = [k(119 * M, 1, 1, 1_000)];
+    expect(fineSpan([...minutes, ...seconds], { from: 20 * M, to: 60 * M })).toEqual({
+      from: 20 * M,
+      to: 119 * M + 1_000,
+    });
   });
   it("offers a minute or wider always, and a sub-minute size only where there is data that fine", () => {
     // Only minute candles: nothing recorded this fine.
@@ -251,5 +289,45 @@ describe("drawTimeframe", () => {
     expect(drawTimeframe(M, M, 5 * M, 5 * M)).toBe(5 * M);
     // Nothing drawn yet: the wider of the two, never the old candles cut finer.
     expect(drawTimeframe(M, M, 5 * M, null)).toBe(5 * M);
+  });
+});
+
+describe("tailFrom", () => {
+  const bar = (t: number, c: number, extra: object = {}) => ({ t, o: c, h: c, l: c, c, vol: 1, ...extra });
+  const slots = (bars: ReturnType<typeof bar>[]): Slots => ({ tfMs: 1_000, start: 0, bars });
+  const base = [bar(0, 1), bar(1_000, 2), bar(2_000, 3)];
+  it("finds a tick that moved only the forming slot, or started the next", () => {
+    expect(tailFrom(slots(base), slots([bar(0, 1), bar(1_000, 2), bar(2_000, 4)]))).toBe(2);
+    expect(tailFrom(slots(base), slots([...base, bar(3_000, 5)]))).toBe(2);
+    expect(tailFrom(slots(base), slots(base))).toBe(2);
+  });
+  it("redraws anything else", () => {
+    expect(tailFrom(null, slots(base))).toBeNull();
+    // A closed slot changed (a page landed), or the slots moved, or more than one was added.
+    expect(tailFrom(slots(base), slots([bar(0, 1), bar(1_000, 9), bar(2_000, 3)]))).toBeNull();
+    expect(tailFrom(slots(base), { ...slots(base), start: 1_000 })).toBeNull();
+    expect(tailFrom(slots(base), { ...slots(base), tfMs: 5_000 })).toBeNull();
+    expect(tailFrom(slots(base), slots([...base, bar(3_000, 5), bar(4_000, 6)]))).toBeNull();
+    expect(tailFrom(slots(base), slots(base.slice(0, 2)))).toBeNull();
+    // A slot at the end drawn specially: blank, or under a wider candle.
+    expect(tailFrom(slots(base), slots([...base, bar(3_000, 3, { unknown: true, flat: true })]))).toBeNull();
+    expect(tailFrom(slots(base), slots([...base, bar(3_000, 3, { under: 1 })]))).toBeNull();
+    expect(tailFrom(slots(base), slots([bar(0, 1), bar(1_000, 2), bar(2_000, 3, { vol: null })]))).toBeNull();
+  });
+});
+
+describe("slotStartAt", () => {
+  const s: Slots = { tfMs: 60_000, start: 600_000, bars: [] };
+  it("reads the slot under the pointer as the series draws it", () => {
+    // Candles: slot i is centred on logical i.
+    expect(slotStartAt(s, 2.4)).toBe(600_000 + 2 * 60_000);
+    expect(slotStartAt(s, 2.6)).toBe(600_000 + 3 * 60_000);
+    // The line: slot i runs from logical i - 1 to i, its close at the end (chart audit 2026-10-29:
+    // the readout was the slot before the marks under the pointer on the left half of each step).
+    expect(slotStartAt(s, 1.4, true)).toBe(600_000 + 2 * 60_000);
+    expect(slotStartAt(s, 1.6, true)).toBe(600_000 + 2 * 60_000);
+    // A mark in that slot sits in the same stretch of the line.
+    const mark = 600_000 + 2 * 60_000 + 20_000;
+    expect(Math.floor(slotOfTime(s, mark, true) + 1)).toBe(2);
   });
 });

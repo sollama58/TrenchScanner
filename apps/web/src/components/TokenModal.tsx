@@ -16,6 +16,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -2019,6 +2020,15 @@ export function ChartCard({
     [card.token.mintAddress],
   );
   const launchAt = served?.launchAt ?? null;
+  // The chart's box, measured before the first candle read, so that read is at the size the chart
+  // will want at its real width rather than at a guess (chart audit 2026-10-29: up to three reads,
+  // and three views, on open).
+  const chartBoxRef = useRef<HTMLElement>(null);
+  const [chartBoxW, setChartBoxW] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const w = chartBoxRef.current?.getBoundingClientRect().width;
+    if (w) setChartBoxW(Math.round(w));
+  }, []);
   // A failed chart answer that is the API's to give (a lookup to pay for, access ended, no such
   // coin) reads no candles either; one that failed on the way (the API down) still tries.
   const reachable = !!served || (!!error && !(error instanceof ApiError && error.status < 500));
@@ -2026,7 +2036,7 @@ export function ChartCard({
     ? null
     : chartTf?.mint === card.token.mintAddress
       ? chartTf.ms
-      : openingTimeframe(launchAt);
+      : openingTimeframe(launchAt, chartBoxW);
   // The coin's candles from the server's candle store (GET /tokens/:mint/candles, charts audit
   // 2026-10-22 target design): one timeframe's bars over the coin's whole history, backfilled to its
   // launch, read newest page first and older pages as the reader scrolls back. A lookup's coin is
@@ -2360,6 +2370,15 @@ export function ChartCard({
     mint,
   ]);
   const view = built.view;
+  // The view's span, the same object while its ends are: a rebuild of the view that moved neither
+  // (a poll that brought nothing new) doesn't have the chart redo what hangs on it (chart audit
+  // 2026-10-29).
+  const extentT0 = view?.extent.t0;
+  const extentT1 = view?.extent.t1;
+  const viewExtent = useMemo(
+    () => (extentT0 === undefined || extentT1 === undefined ? null : { t0: extentT0, t1: extentT1 }),
+    [extentT0, extentT1],
+  );
   // The header's "Now" follows this tail only while it is the line (usesTail) and still streaming.
   const chartNowReported = useRef<string | null>(null);
   useEffect(() => {
@@ -2429,7 +2448,7 @@ export function ChartCard({
   const locked = error && !served ? lockedText(error, "chart") : null;
   return (
     <>
-      <section className="sage-card tm-chart">
+      <section className="sage-card tm-chart" ref={chartBoxRef}>
         <h4>
           <ChartIcon size={14} /> Market cap
           {view && !view.fromCandles && (
@@ -2490,6 +2509,7 @@ export function ChartCard({
                 mint={mint}
                 candles={view.candles}
                 candlesMs={candleSource === "store" ? stored.history?.tfMs : undefined}
+                recordedFine={candleSource === "store" ? (stored.history?.fine ?? null) : null}
                 ticks={view.ticks}
                 holes={candleSource === "store" ? openHoles : undefined}
                 fill={candleSource === "store" ? fill : null}
@@ -2506,7 +2526,7 @@ export function ChartCard({
                 height={height}
                 trades={chartTrades}
                 entry={entry}
-                extent={view.extent}
+                extent={viewExtent ?? view.extent}
                 kind={kind}
                 onKind={setKind}
                 onTimeframe={onTimeframe}
@@ -2607,15 +2627,19 @@ function StaleBadge({ at }: { at: number | null }) {
   );
 }
 
-/** The chart opens this wide (px) as far as the first read's candle size goes; the chart then says its own. */
+/** The chart opens this wide (px) as far as the first read's candle size goes, until its box is measured. */
 const OPENING_PLOT_PX = 600;
+/** About what the chart's box spends outside its plot: padding, the drawing rail and the price axis. */
+const OPENING_INSET_PX = 120;
 
 /**
  * The candle size read before the chart has said which it wants: Auto's for the coin's whole life
- * (TradingChart sizes Auto by it too), minute candles while the launch isn't known.
+ * at the chart box's width `boxW` (TradingChart sizes Auto by both, and keeps this size while it
+ * roughly fits), minute candles while the launch isn't known.
  */
-function openingTimeframe(launchAt: number | null): number {
-  return launchAt === null ? 60_000 : autoTimeframe(Math.max(1_000, Date.now() - launchAt), OPENING_PLOT_PX);
+function openingTimeframe(launchAt: number | null, boxW: number | null): number {
+  const plotW = boxW === null ? OPENING_PLOT_PX : Math.max(200, boxW - OPENING_INSET_PX);
+  return launchAt === null ? 60_000 : autoTimeframe(Math.max(1_000, Date.now() - launchAt), plotW);
 }
 
 /**

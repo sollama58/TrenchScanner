@@ -184,6 +184,24 @@ export async function oldestCandleCover(mint: string): Promise<number | null> {
 }
 
 /**
+ * The stretch the coin's stored bars finer than a minute (the tapes' 1-second bars, Pump.fun's
+ * 15-second pages) cover, first cover start to last cover end (ms); null with none. The chart
+ * offers its sub-minute sizes by it (chart audit 2026-10-29: a coin read at 1m or wider never saw
+ * its 1-second bars, so 1s to 30s were greyed out on any coin past ~2.5 hours, though the worker
+ * records them for 6 hours from a call).
+ */
+export async function fineCandleCover(mint: string): Promise<{ from: number; to: number } | null> {
+  const row = await prisma.candleChunk.aggregate({
+    where: { mint, res: { lt: 60 } },
+    _min: { coverFrom: true },
+    _max: { coverTo: true },
+  });
+  const from = row._min.coverFrom?.getTime();
+  const to = row._max.coverTo?.getTime();
+  return from === undefined || to === undefined ? null : { from, to };
+}
+
+/**
  * The covers of the coin's minute-or-finer chunks that start before `before` (ms), newest first,
  * `limit` at most: what the backfill walks back over instead of asking for it again.
  */

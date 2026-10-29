@@ -7,6 +7,7 @@ import {
   launchSupplyFactors,
   poolsOf,
   PUMP_SUPPLY_TOKENS,
+  fineCandleCover,
   oldestCandleCover,
   prisma,
   PUMPFUN_LAUNCHPAD,
@@ -149,6 +150,7 @@ async function liveInputs(
 const deps: CandleReadDeps = {
   readChunks: readCandleChunks,
   oldestCover: oldestCandleCover,
+  fineCover: fineCandleCover,
   factor: async (mint) =>
     (await launchSupplyFactors([mint]).catch(() => new Map<string, number>())).get(mint),
   live: liveInputs,
