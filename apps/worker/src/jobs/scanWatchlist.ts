@@ -25,6 +25,7 @@ import {
 import { rememberLaunchTimes } from "./launchTimes.js";
 import { ignoreMayhemMints } from "./mayhemMode.js";
 import { fillLaunchDetails } from "./launchDetails.js";
+import { relayCoin } from "./pumpRelay.js";
 import { recordSocialLinks } from "./socialsFill.js";
 import { withinBudget } from "./scanJob.js";
 
@@ -322,6 +323,8 @@ export async function saveMovingLaunches(
         await addNewMintsToWatchlist(found.map((c) => toWatchlistCandidate(c, "jupiter")));
         await ignoreMayhemMints(found.filter((c) => c.mayhemMode).map((c) => c.mintAddress));
       },
+      undefined,
+      (mint) => relayCoin(mint, env),
     ).catch((err: unknown) => logger.warn("launch details failed to save", { error: String(err) }));
   }
 }

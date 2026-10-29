@@ -617,9 +617,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "heliusStageCredits",
     "pumpfunList",
     "launchDetails",
-    // The Pump.fun routing test: how TokenSage's relay answered for one refused launch a minute
-    // (worker pumpRelayProbe.ts; check-in 2026-10-29).
-    "pumpRelayProbe",
+    // Launch details read through TokenSage's Pump.fun relay while Pump.fun refuses us
+    // (worker pumpRelay.ts; check-in 2026-10-29).
+    "pumpRelay",
     "launchPoller",
     "curveCandles",
     "candleBackfill",

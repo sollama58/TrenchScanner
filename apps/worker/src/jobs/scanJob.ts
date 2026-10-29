@@ -166,7 +166,7 @@ import {
 } from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
 import { fillBandMetadata, fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
-import { probePumpRelay, takePumpRelayProbeStats } from "./pumpRelayProbe.js";
+import { relayCoin, takePumpRelayStats } from "./pumpRelay.js";
 import { fillMissingSocials, takeSocialsFillStats } from "./socialsFill.js";
 import {
   launchSnipersFromCache,
@@ -1397,8 +1397,8 @@ async function scanCycle(
       rememberLaunchTimes(coins);
     },
     undefined,
-    // The routing test (pumpRelayProbe.ts): one refused launch a minute is asked of TokenSage.
-    (mint) => void probePumpRelay(mint, env),
+    // Pump.fun refusing us: the coin through TokenSage's relay (pumpRelay.ts).
+    (mint) => relayCoin(mint, env),
   ).catch((err: unknown) => logger.warn("launch details failed to save", { error: String(err) }));
 
   const discovered: WatchlistCandidate[] = [
@@ -3078,7 +3078,7 @@ function discoveryMeta(pumpFun: Partial<Pick<PumpFunClient, "takeListStats">>): 
   return {
     ...(list ? { pumpfunList: { ...list } } : {}),
     launchDetails: { ...takeLaunchDetailStats() },
-    pumpRelayProbe: { ...takePumpRelayProbeStats() },
+    pumpRelay: { ...takePumpRelayStats() },
     socialsFill: { ...takeSocialsFillStats() },
   };
 }
