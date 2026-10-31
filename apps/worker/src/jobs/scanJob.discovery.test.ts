@@ -11,6 +11,7 @@ import {
 } from "@trenchscanner/core";
 import {
   addNewMintsToWatchlist,
+  attachStoredCreators,
   saveMovingLaunches,
   buildOnChainProfile,
   needsStonksPoolLockRead,
@@ -312,6 +313,58 @@ describe("buildOnChainProfile without a RugCheck report", () => {
     expect(runRugScreen({ ...profile!, isMayhemMode: false }).passed).toBe(false);
   });
 
+  it("carries the chain's holder shares and the launch source's creator (RugCheck down, 2026-10-31)", () => {
+    const shares = [
+      { owner: "dev", pct: 6 },
+      { owner: "w1", pct: 5 },
+      { owner: "w2", pct: 4 },
+    ];
+    const holders = new Map([
+      [
+        "Pre",
+        {
+          top10HolderPct: 15,
+          largestHolderPct: 6,
+          top10HolderAddresses: ["dev", "w1", "w2"],
+          topHolderShares: shares,
+        },
+      ],
+    ]);
+    const profile = buildOnChainProfile(
+      { mintAddress: "Pre", dexId: "pumpfun", creator: "dev" },
+      none,
+      authorities,
+      holders,
+    );
+    expect(profile).toMatchObject({ topHolderShares: shares, creator: "dev", devWalletPct: 6 });
+    // No creator named: the shares still come, the dev's holding stays unknown.
+    const anon = buildOnChainProfile({ mintAddress: "Pre", dexId: "pumpfun" }, none, authorities, holders);
+    expect(anon).toMatchObject({ topHolderShares: shares });
+    expect(anon).not.toHaveProperty("creator");
+    expect(anon).not.toHaveProperty("devWalletPct");
+    // A RugCheck report's creator is the report's, whatever the candidate carries.
+    const report = new Map<string, RugCheckProfile>([
+      [
+        "Pre",
+        {
+          mintAddress: "Pre",
+          mintAuthorityActive: false,
+          freezeAuthorityActive: false,
+          lpBurned: true,
+          riskFlags: [],
+          creator: "reportDev",
+        },
+      ],
+    ]);
+    const reported = buildOnChainProfile(
+      { mintAddress: "Pre", dexId: "pumpfun", creator: "dev" },
+      report,
+      authorities,
+      holders,
+    );
+    expect(reported).toMatchObject({ creator: "reportDev" });
+  });
+
   it("takes the Pump.fun venue's LP answer when the RugCheck report lists no market yet", () => {
     const early = new Map<string, RugCheckProfile>([
       [
@@ -346,6 +399,24 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
   afterAll(async () => {
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: `Disc${RUN}` } } });
+  });
+
+  it("puts a token's stored creator on a candidate that has none, and keeps one it has", async () => {
+    const storedDev = mint(84);
+    await addNewMintsToWatchlist([
+      { mintAddress: mint(81), discoverySource: "pumpportal", creator: storedDev },
+      { mintAddress: mint(82), discoverySource: "pumpportal", creator: storedDev },
+      { mintAddress: mint(83), discoverySource: "pumpportal" },
+    ]);
+    const candidate = (mintAddress: string, creator?: string) =>
+      ({ mintAddress, ...(creator ? { creator } : {}) }) as CandidateToken;
+    const unnamed = candidate(mint(81));
+    const named = candidate(mint(82), "OwnDev");
+    const unknown = candidate(mint(83));
+    await attachStoredCreators([unnamed, named, unknown]);
+    expect(unnamed.creator).toBe(storedDev);
+    expect(named.creator).toBe("OwnDev");
+    expect(unknown.creator).toBeUndefined();
   });
 
   it("records the description, the first source to report a mint, and a sticky boost flag", async () => {

@@ -29,6 +29,7 @@ import {
   type CandidateToken,
   type ScoredToken,
   LINKED_TOP_N,
+  CEX_FUNDED_TOP_N,
 } from "@trenchscanner/core";
 import { computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
 import { walletRiskLookup, walletRiskScale } from "./walletRiskBook.js";
@@ -74,7 +75,8 @@ export function secondLookDue(
  * is a real rug vector, so its LP stays unverified (lpBurned: false, failing closed) until RugCheck
  * reports it. With the holder list in, the concentration cut and the wallet checks run as on a
  * RugCheck profile, so curated calls (CURATED_REQUIRE_WALLET_CHECKS) no longer wait for RugCheck;
- * the creator, holder count and risk score stay unknown.
+ * the holder shares and the launch source's creator (candidate.creator) are carried too, while the
+ * holder count and risk score stay unknown.
  *
  * A coin proven on chain to be a Pump.fun launch (pumpLaunches, see core's pumpLaunch.ts) has its
  * LP locked and its authorities revoked whatever either source says: its venue is its curve and
@@ -88,7 +90,7 @@ export function secondLookDue(
  * (stonksPoolLock.ts), the reading RugCheck has none of for a pool it doesn't list.
  */
 export function buildOnChainProfile(
-  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
+  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad" | "creator">,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
   onChainHolders: Map<string, OnChainHolders> = new Map(),
@@ -133,7 +135,7 @@ export function provenPumpLaunch(pumpLaunches: Map<string, PumpLaunchResult>, mi
 }
 
 function profileFromSources(
-  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
+  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad" | "creator">,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
   onChainHolders: Map<string, OnChainHolders>,
@@ -173,7 +175,16 @@ function profileFromSources(
   if (!read && !provenPump) return null;
 
   const holders = onChainHolders.get(mintAddress);
-  return {
+  // The shares behind the top ten and the creator, as a RugCheck profile carries them: the KOL
+  // share, the wallet-risk and wallet-win supply shares and the creator-linked share all read
+  // them, so a fallback profile without them left all four unknown (linkedCreatorPct 0) whenever
+  // RugCheck had no report. Unnoticed until RugCheck stopped writing reports for twelve hours on
+  // 2026-10-31 and every row lost them. The creator is the one the launch source named
+  // (Token.creator, put on the candidate by the scan); its share is the dev's holding as
+  // withChainHolders reads it on a report.
+  const shares = holders?.topHolderShares?.length ? holders.topHolderShares : undefined;
+  const creator = candidate.creator || undefined;
+  const profile: OnChainProfile & { topHolderShares?: { owner: string; pct: number }[]; creator?: string } = {
     mintAddress,
     mintAuthorityActive: read?.mintAuthorityActive ?? false,
     freezeAuthorityActive: read?.freezeAuthorityActive ?? false,
@@ -185,8 +196,19 @@ function profileFromSources(
           top10HolderAddresses: holders.top10HolderAddresses,
         }
       : {}),
+    ...(shares
+      ? {
+          topHolderShares: shares.slice(0, Math.max(TOP_N_FOR_CONCENTRATION + 1, CEX_FUNDED_TOP_N)),
+          ...(creator ? { devWalletPct: shares.find((h) => h.owner === creator)?.pct } : {}),
+        }
+      : {}),
+    ...(creator ? { creator } : {}),
   };
+  return profile;
 }
+
+/** The top-ten cut a holder list is summed over (core's rugcheck.ts uses the same ten). */
+const TOP_N_FOR_CONCENTRATION = 10;
 
 /** Whether the profile's holder figures fail the screen's top-10 or largest-holder cut. */
 export function failsHolderConcentration(profile: OnChainProfile | null): boolean {

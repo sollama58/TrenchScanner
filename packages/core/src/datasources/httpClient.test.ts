@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { backoffDelay, fetchJson, MAX_RESPONSE_BYTES, networkFailure, redactUrl } from "./httpClient.js";
+import {
+  backoffDelay,
+  ERROR_BODY_MAX_CHARS,
+  fetchJson,
+  HttpError,
+  MAX_RESPONSE_BYTES,
+  networkFailure,
+  redactUrl,
+} from "./httpClient.js";
 
 describe("redactUrl", () => {
   it("redacts Helius's own api-key query param", () => {
@@ -216,6 +224,42 @@ describe("fetchJson refusal breaker", () => {
     } finally {
       server.closeAllConnections();
       server.close();
+    }
+  });
+});
+
+describe("fetchJson error bodies", () => {
+  it("keeps a 4xx body on the error only when asked", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () => new Response('{"error":"unable to generate report"}', { status: 400 }),
+    );
+    try {
+      await expect(fetchJson("https://example.com/x", { retries: 0, errorBody: true })).rejects.toMatchObject(
+        {
+          status: 400,
+          body: '{"error":"unable to generate report"}',
+        },
+      );
+      await expect(fetchJson("https://example.com/x", { retries: 0 })).rejects.toMatchObject({
+        status: 400,
+        body: undefined,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("caps the kept body", async () => {
+    vi.stubGlobal("fetch", async () => new Response("x".repeat(ERROR_BODY_MAX_CHARS * 2), { status: 404 }));
+    try {
+      const err = (await fetchJson("https://example.com/x", { retries: 0, errorBody: true }).catch(
+        (e: unknown) => e,
+      )) as HttpError;
+      expect(err).toBeInstanceOf(HttpError);
+      expect(err.body).toHaveLength(ERROR_BODY_MAX_CHARS);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

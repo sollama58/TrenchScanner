@@ -93,6 +93,12 @@ export interface CandidateToken {
    */
   launchpad?: string;
   /**
+   * The wallet that launched the coin as its launch source named it (Token.creator), put on by
+   * the scan where RugCheck names none: the chain fallback profile's creator (the worker's
+   * buildOnChainProfile). Undefined when unknown.
+   */
+  creator?: string;
+  /**
    * When a graduated Pump.fun mint's PumpSwap pool was created, i.e. when it left its bonding
    * curve (pumpSwapPoolCreatedAt in dexscreener.ts). Undefined while on the curve, or when no
    * PumpSwap pool is listed.
