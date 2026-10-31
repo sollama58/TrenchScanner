@@ -336,6 +336,18 @@ describe("RugCheckClient.getProfileResult", () => {
     await expect(new RugCheckClient().getProfileResult(MINT)).resolves.toEqual({ status: "absent" });
   });
 
+  it("reads RugCheck's 400 'unable to generate report' as a failure, never cached (2026-10-31)", async () => {
+    answer(400, { error: "unable to generate report" });
+    await expect(new RugCheckClient().getProfileResult(MINT)).resolves.toEqual({ status: "failed" });
+  });
+
+  it("stands down when every report fails to generate", async () => {
+    answer(400, { error: "unable to generate report" });
+    const client = new RugCheckClient();
+    for (let i = 0; i < RUGCHECK_BREAKER_FAILURES; i++) await client.getProfileResult(MINT);
+    expect(client.standingDown).toBe(true);
+  });
+
   it("keeps a 429 a failure, never cached", async () => {
     answer(429, { error: "rate limited" });
     const client = new RugCheckClient();

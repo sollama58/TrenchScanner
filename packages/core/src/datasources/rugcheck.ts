@@ -180,6 +180,20 @@ const RAYDIUM_LAUNCHLAB_MARKET_TYPES = new Set(["raydium_launchlab", "raydium_cp
 /** A non-Pump.fun token's pools holding less than this share of its pooled liquidity don't count for the LP check. */
 const SIDE_POOL_MAX_SHARE = 0.05;
 
+/**
+ * Whether a RugCheck error is its report service failing rather than "no report for this mint".
+ * From about 01:50 UTC on 2026-10-31 RugCheck answered every report it had not already cached,
+ * old coins and new, with a 400 {"error":"unable to generate report"}. Read as "absent", like its
+ * 400 "not found", every lookup was cached as a coin with no report, the breaker never tripped, and
+ * the scan ran on the chain's fallback profile for twelve hours with nothing saying RugCheck was
+ * down: holder counts, risk scores and every share-based holder reading went missing. A failure is
+ * never cached (RugCheckProfileResult), counts toward the breaker and shows as failed lookups.
+ * Exported for tests.
+ */
+export function rugCheckOutage(err: HttpError): boolean {
+  return err.status === 400 && /unable to generate report/i.test(err.body ?? "");
+}
+
 export class RugCheckClient {
   private readonly baseUrl: string;
   private readonly gate: RateGate;
@@ -271,6 +285,8 @@ export class RugCheckClient {
         // At least a second's pause on a 429: the default half-second backoff sent the retry and
         // the queued lookups straight back into the same window.
         retryDelayMs: 1_000,
+        // A 400 is either answer (rugCheckOutage): the body tells them apart.
+        errorBody: true,
       });
       return { status: "found", profile: toProfile(mintAddress, report) };
     } catch (err) {
@@ -279,6 +295,10 @@ export class RugCheckClient {
       // newest Pump.fun mints), not the 404 it used to. A 400 is the same answer every time for
       // the same mint, so it counts as absent too: read as a failure it was never cached, and
       // every unindexed in-band mint went back to RugCheck on every 30-second cycle.
+      if (err instanceof HttpError && rugCheckOutage(err)) {
+        logger.warn("rugcheck could not generate a report", { mintAddress, status: err.status });
+        return { status: "failed" };
+      }
       if (err instanceof HttpError && (err.status === 404 || err.status === 400)) {
         logger.debug("no rugcheck report yet", { mintAddress, status: err.status });
         return { status: "absent" };

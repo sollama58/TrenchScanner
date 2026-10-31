@@ -7,6 +7,11 @@ export class HttpError extends Error {
     public readonly status: number,
     public readonly url: string,
     message?: string,
+    /**
+     * The start of the error response's body (ERROR_BODY_MAX_CHARS), only when the caller asked
+     * for it (FetchJsonOptions.errorBody). Provider text: untrusted, compared, never executed.
+     */
+    public readonly body?: string,
   ) {
     super(message ?? `HTTP ${status} for ${url}`);
     this.name = "HttpError";
@@ -26,6 +31,13 @@ export interface FetchJsonOptions extends RequestInit {
   onRetry?: () => void;
   /** Base delay for exponential backoff on 429/5xx, in ms. */
   retryDelayMs?: number;
+  /**
+   * Keep the start of a final 4xx answer's body on the HttpError (HttpError.body), for a caller
+   * that tells two answers with one status apart: RugCheck answers both "no report for this mint"
+   * and "the report service is failing" with a 400 (rugcheck.ts). Off by default: the body is
+   * otherwise discarded unread.
+   */
+  errorBody?: boolean;
   /** Called with the headers of the successful response, before its body is read. */
   onHeaders?: (headers: Headers) => void;
   /**
@@ -106,6 +118,7 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
     onRetry,
     onHeaders,
     gate,
+    errorBody = false,
     ...init
   } = options;
   const safeUrl = redactUrl(url);
@@ -148,6 +161,9 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       if (res.ok) {
         onHeaders?.(res.headers);
         return JSON.parse(await readCappedText(res, safeUrl)) as T;
+      }
+      if (errorBody && res.status >= 400 && res.status < 500 && res.status !== 429) {
+        throw new HttpError(res.status, safeUrl, undefined, await readErrorBody(res));
       }
       void res.body?.cancel().catch(() => {});
 
@@ -194,6 +210,19 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
  * Pump.fun, RugCheck) are outside our control, and res.json() would buffer whatever they stream
  * until the timeout - enough, at line rate, to take the worker down.
  */
+/** How much of an error response's body HttpError.body keeps. */
+export const ERROR_BODY_MAX_CHARS = 512;
+
+/** The start of an error response's body, or undefined when it can't be read. Never throws. */
+async function readErrorBody(res: Response): Promise<string | undefined> {
+  try {
+    const text = await readCappedText(res, "");
+    return text.slice(0, ERROR_BODY_MAX_CHARS);
+  } catch {
+    return undefined;
+  }
+}
+
 async function readCappedText(res: Response, safeUrl: string): Promise<string> {
   const declared = Number(res.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {

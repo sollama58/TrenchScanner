@@ -1096,6 +1096,23 @@ export function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
   return withApiStages("scan", (apiStage) => scanCycle(deps, env, apiStage));
 }
 
+/**
+ * Puts each candidate's stored creator (Token.creator: the launch source's, never overwritten) on
+ * it where the candidate has none, in one read. Exported for tests.
+ */
+export async function attachStoredCreators(candidates: CandidateToken[]): Promise<void> {
+  if (candidates.length === 0) return;
+  const rows = await prisma.token.findMany({
+    where: { mintAddress: { in: candidates.map((c) => c.mintAddress) }, creator: { not: null } },
+    select: { mintAddress: true, creator: true },
+  });
+  const byMint = new Map(rows.map((r) => [r.mintAddress, r.creator] as const));
+  for (const c of candidates) {
+    const creator = byMint.get(c.mintAddress);
+    if (creator && !c.creator) c.creator = creator;
+  }
+}
+
 /** A watchlist row as the band refresh and the stages after it read it (selectWatchlist). */
 type TrackedToken = Awaited<ReturnType<typeof selectWatchlist>>["tracked"][number];
 
@@ -1940,6 +1957,13 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     for (const [mint, profile] of recheck.profiles) rugProfiles.set(mint, profile);
     lap("rugCheckRecheck");
   }
+  // The creator the launch source named (Token.creator) for a coin RugCheck names none for, on the
+  // candidate, where the chain fallback profile takes it (buildOnChainProfile): the creator-linked
+  // share and the dev's holding read it. Without it they read nothing whenever RugCheck had no
+  // report, as on 2026-10-31 when it stopped writing any.
+  await attachStoredCreators(
+    candidates.filter((c) => !c.creator && !rugProfiles.get(c.mintAddress)?.creator),
+  ).catch((err: unknown) => logger.warn("stored creators failed", { error: String(err) }));
   // RugCheck names the creator of most coins it has a report for: kept on the token for its Dev
   // card. Behind the cycle; settles to one read once every such coin has one.
   void recordCreators(
@@ -2025,12 +2049,13 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
   );
   if (staleLists.length > 0) {
+    const sourceCreators = new Map(candidates.map((c) => [c.mintAddress, c.creator] as const));
     const readBefore = new Map(staleLists.map((m) => [m, topHolderListReadAt(m)] as const));
     await readTopHolders(
       staleLists.map((mint) => ({
         mintAddress: mint,
         holders: [...(cachedTopHolders(mint) ?? [])],
-        creator: rugProfiles.get(mint)?.creator ?? null,
+        creator: rugProfiles.get(mint)?.creator ?? sourceCreators.get(mint) ?? null,
       })),
       deps.helius,
       { maxReads: staleLists.length, force: new Set(staleLists) },
