@@ -68,7 +68,17 @@ describe("FDSA hard floor", () => {
   });
 });
 
-describe("decideAdaptiveExit (stub)", () => {
+describe("decideAdaptiveExit", () => {
+  /** Only the stop, so a test sees one rule at a time. */
+  const bare: FdsaExitPlan = {
+    stopMultiple: FDSA_HARD_FLOOR_MULTIPLE,
+    lockIns: [],
+    trail: [],
+    partials: [],
+    maxHoldMinutes: 180,
+    stall: null,
+  };
+
   it("holds above the floor and inside the hold cap", () => {
     const d = decideAdaptiveExit(state(), 0.9, at(5), FDSA_DEFAULT_EXIT_PLAN);
     expect(d).toEqual({ action: "hold", peakMultiple: 0.9, floorMultiple: 0.5 });
@@ -80,12 +90,30 @@ describe("decideAdaptiveExit (stub)", () => {
   });
 
   it("never runs a floor below -50%, whatever the stored floor or plan says", () => {
-    const loose: FdsaExitPlan = { ...FDSA_DEFAULT_EXIT_PLAN, stopMultiple: 0.1 };
+    const loose: FdsaExitPlan = { ...FDSA_DEFAULT_EXIT_PLAN, stopMultiple: 0.1, lockIns: [], trail: [] };
     const d = decideAdaptiveExit(state({ floorMultiple: 0.05 }), 0.45, at(1), loose);
     expect(d).toMatchObject({ action: "sell", reason: "stop_loss", floorMultiple: 0.5 });
     expect(decideAdaptiveExit(state({ floorMultiple: Number.NaN }), 0.49, at(1), loose)).toMatchObject({
       action: "sell",
       floorMultiple: 0.5,
+    });
+    // Over a sweep of prices and plans, no floor the engine returns is ever under the stop.
+    for (const stop of [0.1, 0.5, 0.8]) {
+      for (const m of [0, 0.3, 0.5, 0.51, 1, 2.2, 5, 40]) {
+        const plan = { ...bare, stopMultiple: stop };
+        const out = decideAdaptiveExit(state({ floorMultiple: -3 }), m, at(2), plan);
+        expect(out.floorMultiple).toBeGreaterThanOrEqual(FDSA_HARD_FLOOR_MULTIPLE);
+        if (m <= 0.5) expect(out.action).toBe("sell");
+      }
+    }
+  });
+
+  it("a tighter plan stop sells sooner", () => {
+    const tight = { ...bare, stopMultiple: 0.7 };
+    expect(decideAdaptiveExit(state(), 0.69, at(1), tight)).toMatchObject({
+      action: "sell",
+      reason: "stop_loss",
+      floorMultiple: 0.7,
     });
   });
 
@@ -94,7 +122,7 @@ describe("decideAdaptiveExit (stub)", () => {
       state({ floorMultiple: 1.6, peakMultiple: 3, soldFraction: 0.25 }),
       1.5,
       at(20),
-      FDSA_DEFAULT_EXIT_PLAN,
+      bare,
     );
     expect(d).toMatchObject({
       action: "sell",
@@ -106,21 +134,104 @@ describe("decideAdaptiveExit (stub)", () => {
     });
   });
 
+  it("ratchets: a lock-in arms at its level and the trail follows the high, never back down", () => {
+    const plan: FdsaExitPlan = {
+      ...bare,
+      lockIns: [{ atMultiple: 2, floorMultiple: 1 }],
+      trail: [
+        { fromMultiple: 2, fraction: 0.4 },
+        { fromMultiple: 4, fraction: 0.25 },
+      ],
+    };
+    // Under 2x only the stop holds.
+    expect(decideAdaptiveExit(state({ peakMultiple: 1.9 }), 1.8, at(2), plan)).toMatchObject({
+      action: "hold",
+      floorMultiple: 0.5,
+    });
+    // At 2x: lock-in 1.0, trail 2 x 0.6 = 1.2.
+    const at2 = decideAdaptiveExit(state({ peakMultiple: 1.9 }), 2, at(3), plan);
+    expect(at2).toMatchObject({ action: "hold", peakMultiple: 2 });
+    expect(at2.floorMultiple).toBeCloseTo(1.2);
+    // At 5x the tighter tier: 5 x 0.75 = 3.75.
+    const at5 = decideAdaptiveExit(state({ peakMultiple: 4.5, floorMultiple: 2.7 }), 5, at(6), plan);
+    expect(at5.floorMultiple).toBeCloseTo(3.75);
+    // Back to 4x from a 5x peak: still holding (4 > 3.75), floor unchanged.
+    const back = decideAdaptiveExit(state({ peakMultiple: 5, floorMultiple: 3.75 }), 4, at(7), plan);
+    expect(back).toMatchObject({ action: "hold", peakMultiple: 5 });
+    expect(back.floorMultiple).toBeCloseTo(3.75);
+    // Through it: a floor exit, in profit, where the ladder would have sold 90% by 10x and capped it.
+    expect(
+      decideAdaptiveExit(state({ peakMultiple: 5, floorMultiple: 3.75 }), 3.7, at(8), plan),
+    ).toMatchObject({
+      action: "sell",
+      all: true,
+      reason: "floor",
+    });
+  });
+
+  it("a stored floor above what the plan gives now is kept (it never moves down)", () => {
+    const d = decideAdaptiveExit(state({ peakMultiple: 3, floorMultiple: 2.5 }), 2.6, at(9), bare);
+    expect(d).toMatchObject({ action: "hold", floorMultiple: 2.5 });
+  });
+
+  it("sells the plan's partials as cumulative targets, once each", () => {
+    const plan: FdsaExitPlan = {
+      ...bare,
+      partials: [
+        { atMultiple: 2, sellFraction: 0.25 },
+        { atMultiple: 4, sellFraction: 0.25 },
+      ],
+    };
+    expect(decideAdaptiveExit(state(), 1.9, at(2), plan).action).toBe("hold");
+    expect(decideAdaptiveExit(state(), 2.1, at(2), plan)).toMatchObject({
+      action: "sell",
+      reason: "partial",
+      all: false,
+      fraction: 0.25,
+    });
+    // Already sold: nothing more at 2x.
+    expect(
+      decideAdaptiveExit(state({ soldFraction: 0.25, peakMultiple: 2.1 }), 2.5, at(3), plan).action,
+    ).toBe("hold");
+    // A jump straight past both levels sells both shares at once.
+    expect(decideAdaptiveExit(state(), 4.2, at(3), plan)).toMatchObject({ reason: "partial", fraction: 0.5 });
+    // A partial that would leave nothing is a sell-all.
+    const whole = { ...bare, partials: [{ atMultiple: 3, sellFraction: 1 }] };
+    expect(decideAdaptiveExit(state(), 3, at(3), whole)).toMatchObject({ reason: "partial", all: true });
+  });
+
+  it("the floor wins over a partial on the same tick", () => {
+    const plan: FdsaExitPlan = {
+      ...bare,
+      stopMultiple: 2.5,
+      partials: [{ atMultiple: 2, sellFraction: 0.5 }],
+    };
+    expect(decideAdaptiveExit(state({ floorMultiple: 2.5 }), 2.4, at(3), plan)).toMatchObject({
+      reason: "floor",
+      all: true,
+    });
+  });
+
+  it("closes a stalled position after its window, and only while it is under the bar", () => {
+    const plan = { ...bare, stall: { afterMinutes: 30, belowMultiple: 1.2 } };
+    expect(decideAdaptiveExit(state(), 1.1, at(29), plan).action).toBe("hold");
+    expect(decideAdaptiveExit(state(), 1.1, at(30), plan)).toMatchObject({ action: "sell", reason: "stall" });
+    expect(decideAdaptiveExit(state(), 1.3, at(45), plan).action).toBe("hold");
+  });
+
   it("closes at the plan's hold cap, and at the absolute cap past a plan that says longer", () => {
     expect(decideAdaptiveExit(state(), 1.4, at(180), FDSA_DEFAULT_EXIT_PLAN)).toMatchObject({
       action: "sell",
       reason: "max_hold",
     });
-    const long = { ...FDSA_DEFAULT_EXIT_PLAN, maxHoldMinutes: 10 * FDSA_MAX_HOLD_CAP_MINUTES };
+    const long = { ...bare, maxHoldMinutes: 10 * FDSA_MAX_HOLD_CAP_MINUTES };
     expect(decideAdaptiveExit(state(), 1.4, at(FDSA_MAX_HOLD_CAP_MINUTES), long)).toMatchObject({
       reason: "max_hold",
     });
   });
 
   it("tracks the peak and holds on a price that isn't a number", () => {
-    expect(
-      decideAdaptiveExit(state({ peakMultiple: 2.5 }), 1.2, at(3), FDSA_DEFAULT_EXIT_PLAN),
-    ).toMatchObject({
+    expect(decideAdaptiveExit(state({ peakMultiple: 2.5 }), 1.2, at(3), bare)).toMatchObject({
       action: "hold",
       peakMultiple: 2.5,
     });
@@ -138,6 +249,14 @@ describe("decideAdaptiveExit (stub)", () => {
     expect(d.action).toBe("sell");
     if (d.action !== "sell") return;
     expect(sellAmount(d, 1_000_000n, 500n)).toBe(500n);
+    // A partial that would leave under 0.1% of the original sells the lot.
+    const p = decideAdaptiveExit(state({ soldFraction: 0 }), 2, at(2), {
+      ...bare,
+      partials: [{ atMultiple: 2, sellFraction: 0.9995 }],
+    });
+    expect(p).toMatchObject({ action: "sell", reason: "partial", all: false });
+    if (p.action !== "sell") return;
+    expect(sellAmount(p, 1_000_000n, 1_000_000n)).toBe(1_000_000n);
   });
 });
 
@@ -522,7 +641,13 @@ describe.skipIf(!dbAvailable)("FDSA schema", () => {
       },
       update: {},
     });
-    expect(desk).toMatchObject({ mode: "paper", running: false });
+    expect(desk.mode).toBe("paper");
+    // A new desk starts stopped. Read from the column default: the paper desk's suite shares this
+    // one row and may be running it while this suite runs.
+    const [col] = await prisma.$queryRaw<{ d: string | null }[]>`
+      SELECT column_default AS d FROM information_schema.columns
+      WHERE table_name = 'FdsaDesk' AND column_name = 'running'`;
+    expect(col?.d).toBe("false");
     await expect(prisma.fdsaDesk.update({ where: { id: "fdsa" }, data: { mode: "live" } })).rejects.toThrow();
     await expect(
       prisma.fdsaDesk.create({ data: { id: "second", config: {}, bankrollLamports: 1n, cashLamports: 1n } }),
@@ -533,7 +658,9 @@ describe.skipIf(!dbAvailable)("FDSA schema", () => {
       mint,
       signalAt: T0,
       openedAt: T0,
-      status: "open",
+      // Closed, so the paper desk's suite (paperDesk.test.ts), which shares the one desk, never
+      // walks it as an open position.
+      status: "closed",
       swapInLamports: 500_000_000n,
       tokensBought: "1000",
       tokensHeld: "1000",
