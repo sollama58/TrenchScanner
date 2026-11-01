@@ -245,9 +245,10 @@ async function comparablePool(env: Env): Promise<DatedGradedRow[]> {
 /**
  * The pick's nearest graded past calls, or undefined when the lookup fails (the brief then omits them).
  * `decisionAt` set (a shadow review): only rows knowable at that decision. Omitted (an in-cycle
- * gate review): the live pool, because "now" is the decision.
+ * gate review): the live pool, because "now" is the decision. FDSA's decide stage reads the same
+ * comparables (fdsa/review.ts).
  */
-async function comparablesFor(
+export async function comparablesFor(
   scored: ScoredToken,
   env: Env,
   decisionAt?: Date,
