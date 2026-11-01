@@ -808,6 +808,14 @@ const WALLET_COLUMNS = [
   // Win-sized trades fed by tokens transferred in (the Winners seat reads a Winner only at 0).
   "transferWins",
   "medianSupplyPct",
+  // Behaviour counters and the Wallet Score v2 (data-uses evaluation 2026-11-01), recorded only.
+  "medianHoldSec",
+  "roundTrips",
+  "churnCoins",
+  "microBuyCoins",
+  "sellsIntoCalls",
+  "exitsBeforeStop",
+  "walletScoreV2",
   "solIn",
   "solOut",
   "lastSeenAt",

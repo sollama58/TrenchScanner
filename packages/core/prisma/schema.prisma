@@ -3403,6 +3403,23 @@ model WalletRisk {
   avgPnlSol       Float?
   medianPnlPct    Float?
   avgPnlPct       Float?
+  /// Behaviour counters (data-uses evaluation 2026-11-01, notes/data-uses-2026-11-01): over the same
+  /// rows as appearances. medianHoldSec: median seconds from its first buy to its first sell, on
+  /// coins it sold (the one trait that read the right way for both the 2x and the stop). roundTrips:
+  /// buys and sells paired (LEAST(buys, sells)) summed over its coins. churnCoins: coins it bought
+  /// and sold twice or more on a clean trade (volume that never changed hands). microBuyCoins: coins
+  /// bought at under 0.01 SOL a buy (bump bots). sellsIntoCalls: coins it held at the call and first
+  /// sold within two minutes after it. exitsBeforeStop: coins it held at the call and sold before the
+  /// stop, not into it. walletScoreV2: the Wallet Score with per-trait priors and a hold-time term
+  /// (walletScoreV2 in core's wallets/walletScore.ts), recorded beside walletScore and read nowhere
+  /// until compared. Null until the first rebuild after they were added.
+  medianHoldSec   Float?
+  roundTrips      Int?
+  churnCoins      Int?
+  microBuyCoins   Int?
+  sellsIntoCalls  Int?
+  exitsBeforeStop Int?
+  walletScoreV2   Float?
   solIn           Float
   solOut          Float
   lastSeenAt      DateTime
