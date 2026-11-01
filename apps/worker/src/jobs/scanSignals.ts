@@ -23,6 +23,7 @@ import {
   type OwnTapeRow,
   type LiveFlagsReading,
   type LiveTraderCounts,
+  type SameSizeGroupReading,
   type WalletScoreReading,
   type WinnerFollowReading,
   type OnChainHolders,
@@ -648,6 +649,12 @@ function withLinkedReading(
   };
 }
 
+/** The recorded-only group and hold readings off the live page (liveTape.ts; GROUP_HOLD_FEATURES). */
+export interface LiveGroupReading {
+  sameSize: SameSizeGroupReading | null;
+  recentBuyersHoldMean: number | null;
+}
+
 /** The live flagged-wallet reading on the profile; unknown (left off) without one. Exported for tests. */
 export function withLiveFlags(
   onChain: OnChainProfile | null,
@@ -656,10 +663,21 @@ export function withLiveFlags(
   winnerTraders: LiveTraderCounts | null = null,
   walletScores: WalletScoreReading | null = null,
   winnerFollow: WinnerFollowReading | null = null,
+  /** The same-size buy group on the page and the buyers' hold time (recorded only, 2026-11-01). */
+  groups: LiveGroupReading | null = null,
 ): OnChainProfile | null {
   if (!onChain) return onChain;
   const withTraders = {
     ...onChain,
+    ...(groups?.sameSize
+      ? {
+          sameSizeGroupWallets: groups.sameSize.sameSizeGroupWallets,
+          sameSizeGroupSolShare: groups.sameSize.sameSizeGroupSolShare ?? undefined,
+        }
+      : {}),
+    ...(groups && groups.recentBuyersHoldMean !== null
+      ? { recentBuyersHoldMean: groups.recentBuyersHoldMean }
+      : {}),
     ...(winnerFollow
       ? {
           cleanWinnerRecentBuyers: winnerFollow.cleanWinnerRecentBuyers,

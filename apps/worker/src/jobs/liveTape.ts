@@ -4,6 +4,8 @@ import {
   createLogger,
   liveFlags,
   liveTraders,
+  recentBuyersHoldMean,
+  sameSizeGroupReading,
   STREAM_PAGE_TRADES,
   tradesFromChainTransactionsPriced,
   walletScoreReading,
@@ -12,6 +14,7 @@ import {
   type LaunchBags,
   type LiveFlagsReading,
   type LiveTraderCounts,
+  type SameSizeGroupReading,
   type ScoredWallet,
   type SolPriceLookup,
   type StreamTapePage,
@@ -289,6 +292,29 @@ export function liveWalletScoreOn(
 ): WalletScoreReading | null {
   if (!lookup || !page) return null;
   return walletScoreReading(page.trades, (wallet) => lookup(wallet)?.walletScore, ownTape);
+}
+
+/**
+ * The same-second, same-size buy group on a page already taken (core's sameSizeGroupReading), or
+ * null without one. A complete page starts at the launch, whose second is block zero's.
+ */
+export function liveSameSizeGroupOn(page: LiveTapePage | undefined): SameSizeGroupReading | null {
+  if (!page) return null;
+  return sameSizeGroupReading(page.trades, page.complete);
+}
+
+/**
+ * The mean median hold time of a page's buyers that have one on the wallet book (core's
+ * recentBuyersHoldMean), or null without the page or the book. Wallets in `ownTape` are left out,
+ * as for the Wallet Score: their hold on this coin is already in their median.
+ */
+export function liveRecentBuyersHoldOn(
+  page: LiveTapePage | undefined,
+  lookup: ((wallet: string) => ScoredWallet | undefined) | undefined,
+  ownTape: { has(wallet: string): boolean } | null | undefined,
+): number | null {
+  if (!lookup || !page) return null;
+  return recentBuyersHoldMean(page.trades, (wallet) => lookup(wallet)?.medianHoldSec, ownTape);
 }
 
 /**

@@ -5,6 +5,8 @@ import {
   liveFlagsOf,
   liveLaunchBagsOf,
   livePageOf,
+  liveRecentBuyersHoldOn,
+  liveSameSizeGroupOn,
   liveWalletScoreOf,
   liveWalletScoreOn,
   liveWindowFlowOf,
@@ -198,6 +200,40 @@ describe("live tape", () => {
     });
     expect(liveWalletScoreOf(MINT, undefined, undefined, 1)).toBeNull();
     expect(liveWalletScoreOf(MINT, scored, undefined, 16 * 60_000)).toBeNull();
+  });
+
+  it("reads the same-size group and the buyers' hold time off a page, unknown without one", () => {
+    const buy = (wallet: string, sol: number, atMs: number): TapeTrade => ({
+      wallet,
+      side: "buy",
+      sol,
+      tokens: 1,
+      atMs,
+      tx: `${wallet}-${atMs}`,
+    });
+    const page = {
+      atMs: 20_000,
+      complete: false,
+      trades: [
+        buy("a", 0.25, 10_100),
+        buy("b", 0.25, 10_200),
+        buy("c", 0.25, 10_900),
+        buy(RISKY, 1.25, 12_000),
+      ],
+    };
+    expect(liveSameSizeGroupOn(page)).toEqual({ sameSizeGroupWallets: 3, sameSizeGroupSolShare: 0.375 });
+    expect(liveSameSizeGroupOn(undefined)).toBeNull();
+    const book = (w: string) =>
+      w === RISKY
+        ? { score: 90, dumps: 0, medianHoldSec: 90 }
+        : w === "a"
+          ? { score: 10, dumps: 0, medianHoldSec: 210 }
+          : undefined;
+    expect(liveRecentBuyersHoldOn(page, book, undefined)).toBe(150);
+    // The coin's own tape rows are left out, as for the Wallet Score.
+    expect(liveRecentBuyersHoldOn(page, book, new Set([RISKY]))).toBe(210);
+    expect(liveRecentBuyersHoldOn(page, undefined, undefined)).toBeNull();
+    expect(liveRecentBuyersHoldOn(undefined, book, undefined)).toBeNull();
   });
 
   it("scores the page it was handed, whose buyers the own-tape read saw, when a newer page lands after", async () => {

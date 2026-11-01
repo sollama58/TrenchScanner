@@ -63,6 +63,7 @@ import {
   TRANSFER_FEATURES,
   WALLET_RISK_COVERAGE_FEATURES,
   LIVE_FLAG_FEATURES,
+  GROUP_HOLD_FEATURES,
   WALLET_WIN_FEATURES,
   WALLET_RISK_FEATURES,
   TRADE_FLOW_FEATURES,
@@ -448,7 +449,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("blockZeroBoughtPct");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("recentBuyersHoldMean");
     expect(CANDIDATE_FEATURE_NAMES).toContain("pathRet30mPerMin");
     expect(CANDIDATE_FEATURE_NAMES).toContain("devLaunchFamilyLaunches");
     // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
@@ -584,6 +585,29 @@ describe("scoredFromFeatures - replay round trip", () => {
       expect(LEARNER_FEATURE_NAMES).toContain(name);
     }
     expect(RETIRED_LEARNER_INPUTS.has("firstBuyersHolding")).toBe(true);
+  });
+
+  it("records the same-size groups and the buyers' hold time, recorded only, unknown without them", () => {
+    const f = buildCandidateFeatures(
+      scored({
+        sameSizeGroupWallets: 4,
+        sameSizeGroupSolShare: 0.31,
+        launchSameSizeWallets: 3,
+        recentBuyersHoldMean: 540,
+      }),
+    );
+    expect(f).toMatchObject({
+      sameSizeGroupWallets: 4,
+      sameSizeGroupSolShare: 0.31,
+      launchSameSizeWallets: 3,
+      recentBuyersHoldMean: 540,
+    });
+    const none = buildCandidateFeatures(scored());
+    for (const name of GROUP_HOLD_FEATURES) {
+      expect(none[name]).toBeNull();
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
   });
 
   it("records the newest buyers' Wallet Score, read by the learners, unknown without it", () => {

@@ -167,6 +167,34 @@ export function walletScoreV2(
   return Math.round(score * 1000) / 1000;
 }
 
+/**
+ * The mean of the newest buyers' median hold times (WalletRisk.medianHoldSec, seconds from first
+ * buy to first sell over the coins each sold), each buyer once, the coin's own tape left out as
+ * walletScoreReading does. Null when no buyer has one. Recorded only (curation/features.ts
+ * GROUP_HOLD_FEATURES, `recentBuyersHoldMean`): on the 2026-11-01 point-in-time read it was the
+ * one wallet reading with the right sign for both labels (AUC 0.527 for the 2x, 0.339 for the
+ * stop, 19 of 19 days in 0.46-0.60).
+ */
+export function recentBuyersHoldMean(
+  trades: readonly TapeTrade[],
+  holdOf: (wallet: string) => number | null | undefined,
+  ownTape?: { has(wallet: string): boolean } | null,
+): number | null {
+  const seen = new Set<string>();
+  let sum = 0;
+  let n = 0;
+  for (const t of trades) {
+    if (t.side !== "buy" || seen.has(t.wallet)) continue;
+    seen.add(t.wallet);
+    if (ownTape?.has(t.wallet)) continue;
+    const h = holdOf(t.wallet);
+    if (h === null || h === undefined || !Number.isFinite(h) || h < 0) continue;
+    sum += h;
+    n += 1;
+  }
+  return n > 0 ? Math.round(sum / n) : null;
+}
+
 /** What a decision records from the scores of the wallets buying in the coin's newest trades. */
 export interface WalletScoreReading {
   /** Mean Wallet Score of the buyers that have one; null when none has. */

@@ -7,6 +7,7 @@ import {
   devStillHolding,
   FIRST_BUYERS,
   launchFigures,
+  launchSameSizeWallets,
   SAFETY_REJECT_BLOCK_ZERO_HELD_PCT,
   tallyHeliusCredits,
   type HeliusClient,
@@ -45,6 +46,8 @@ interface Entry {
   blockZero: LaunchBuyer[];
   /** The launch's shape, from the same read (launchFigures). */
   figures: LaunchFigures;
+  /** Slot of the create transaction (LaunchBuyersReading.createSlot), when the provider gave one. */
+  createSlot: number | null;
   /** Block time of the create transaction, when the read gave one. */
   launchAt: Date | null;
   complete: boolean;
@@ -121,6 +124,12 @@ export interface LaunchSnipers extends LaunchFigures {
    * "Block 0". Null with no slots or supply to go by, or when the balance read missed one.
    */
   blockZeroHeldPct: number | null;
+  /**
+   * First buyers that took the same tokens in the same slot, three or more, block zero aside
+   * (core's launchSameSizeWallets, 2026-11-01): one owner's row of wallets. Null with no slots.
+   * Recorded only (GROUP_HOLD_FEATURES).
+   */
+  launchSameSizeWallets: number | null;
 }
 
 /** A launch read as saved: what getLaunchBuyersBatch found, whether it was complete, and when. */
@@ -202,6 +211,7 @@ export function launchSnipersFromCache(
       seen: e.buyers.length,
       devHolding: e.devHolding,
       blockZeroHeldPct: e.blockZeroHeld,
+      launchSameSizeWallets: launchSameSizeWallets(e.buyers, e.createSlot),
       ...e.figures,
     });
   }
@@ -295,6 +305,7 @@ function entryOf(
     devAccounts: reading.devAccounts ?? [],
     blockZero,
     figures: launchFigures(reading),
+    createSlot: reading.createSlot,
     launchAt: reading.launchAt,
     complete,
     readAt,

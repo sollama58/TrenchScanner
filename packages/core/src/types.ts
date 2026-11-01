@@ -245,6 +245,22 @@ export interface OnChainProfile {
   blockZeroBuyers?: number;
   blockZeroBoughtPct?: number;
   /**
+   * Same-second, same-size buy groups (wallets/sameSizeGroups.ts, data-uses evaluation
+   * 2026-11-01): the largest group of three or more single-buy wallets paying the same SOL in the
+   * same second on the newest trades read before the decision, the SOL they bought as a share of
+   * the page's, and the same print on the launch read's first buyers (same tokens, same slot,
+   * block zero aside). Undefined without the page or the read. Recorded as model inputs only.
+   */
+  sameSizeGroupWallets?: number;
+  sameSizeGroupSolShare?: number;
+  launchSameSizeWallets?: number;
+  /**
+   * The mean median hold time (seconds) of the newest buyers that have one on the wallet book
+   * (wallets/walletScore.ts recentBuyersHoldMean). Undefined without a live page or the book.
+   * Recorded as a model input only.
+   */
+  recentBuyersHoldMean?: number;
+  /**
    * How many of the chain's top 25 holders (pools and the creator aside) are on fresh wallets
    * (first used, or used again after a week idle, within the last day), and how many holders that
    * read (user decision 2026-10-14: Fresh as "N/25"). Undefined until the top-25 list is in and
