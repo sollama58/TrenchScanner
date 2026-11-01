@@ -21,6 +21,13 @@ function trim(n: number): string {
 }
 
 /** A rate already in percent (75 = 75%). */
+/** A hold time in seconds as the tiles say it: "45s", "3m", "1.5h", "12h". */
+export function holdTimeText(sec: number): string {
+  if (sec < 60) return `${Math.round(sec)}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  return `${(sec / 3600).toFixed(sec < 36_000 ? 1 : 0)}h`;
+}
+
 export function pct(value: number | null | undefined, digits = 0): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "–";
   return `${value.toFixed(digits)}%`;

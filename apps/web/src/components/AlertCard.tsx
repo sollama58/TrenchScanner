@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { quickBuyShown, useProState, useTradeSettings, type QuickBuySettings } from "../proTrade";
 import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
-import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
+import { ago, change, holdTimeText, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import {
   BrainIcon,
   ChefHatIcon,
@@ -36,6 +36,7 @@ import {
   TILE_FIRST_BUYERS_OF,
   TILE_RED_FIRST_BUYERS,
   TILE_RED_KOL_BUNDLED_PCT,
+  TILE_RED_COHORT_PCT,
   TILE_RED_TRANSFERRED_PCT,
   tileLook,
   tileMode,
@@ -165,6 +166,8 @@ export function AlertCard({
     blockZeroPct,
     blockZeroBuyers,
     blockZeroAtAlert,
+    cohort,
+    cohortAtAlert,
     largestPct,
     largestAtAlert,
     linkedPct,
@@ -219,6 +222,7 @@ export function AlertCard({
         "snipers",
         "sniperTop10",
         "blockZero",
+        "cohort",
         "linked",
         "cexFunded",
         "kolBundled",
@@ -661,6 +665,9 @@ export function AlertCard({
               tiles={tiles}
               later={laterWith(pctOr(a.blockZeroHeldPct), pctOr(blockZeroPct))}
             />
+          )}
+          {show("cohort") && (
+            <CohortTile reading={cohort} atAlert={cohortAtAlert} tiles={tiles} later={later} />
           )}
           {show("linked") && (
             <LinkedTile
@@ -1340,6 +1347,9 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
   const sniperFrom = pick((x) => x.sniperTopHolderCount != null || x.sniperTop10WalletPct != null);
   // Block 0: the supply block zero's wallets hold, the same way.
   const blockZeroFrom = pick((x) => x.blockZeroHeldPct != null);
+  // The cohort and same-size group readings from the live tape (2026-11-01), the same way: a scan
+  // that read the page keeps the cohort size (0 with none), so a row with it was read.
+  const cohortFrom = pick((x) => x.cohortRecentMaxSize != null || x.sameSizeGroupWallets != null);
   // Linked wallets: top holders one funder paid for (or that funded each other), at alert time or
   // from a later scan, with the clusters behind the share for the list under the tiles.
   const linkedFrom = pick((x) => x.linkedWalletPct != null) ?? latest;
@@ -1379,6 +1389,8 @@ export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
     blockZeroPct: blockZeroFrom?.blockZeroHeldPct ?? null,
     blockZeroBuyers: blockZeroFrom?.blockZeroBuyers ?? null,
     blockZeroAtAlert: blockZeroFrom === s,
+    cohort: cohortFrom ? cohortReading(cohortFrom) : null,
+    cohortAtAlert: cohortFrom === s,
     largestPct: pick((x) => x.largestHolderPct != null)?.largestHolderPct ?? null,
     largestAtAlert: pick((x) => x.largestHolderPct != null) === s,
     ...linkedTileReading(linkedFrom),
@@ -1729,6 +1741,131 @@ export function BlockZeroTile({
       <dd className={pct === null ? "muted" : "num"}>
         {pct === null ? "Not checked" : pct.toFixed(1) + "%"}
       </dd>
+    </div>
+  );
+}
+
+/** What the Cohort tile shows, from one scan's group readings. */
+export interface CohortTileReading {
+  /** % of the newest buyers in a recurring cohort; null when the page had no buyers or no book. */
+  pct: number | null;
+  /** The largest cohort among them (0 with none); null when not read. */
+  maxSize: number | null;
+  /** Whether a cohort includes a coin's creator; null when not read. */
+  creatorLinked: boolean | null;
+  /** The same-size buy group on the newest trades: wallets (0 with none) and their share of the buy SOL (0-1). */
+  sameSize: number | null;
+  sameSizeShare: number | null;
+  /** The same at launch, in the create's own slot. */
+  launchSameSize: number | null;
+  /** The newest buyers' mean hold time in seconds, from the wallet book. */
+  holdSec: number | null;
+}
+
+/** The Cohort tile's reading off a snapshot (the alert's or a later scan's). */
+export function cohortReading(
+  x: Pick<
+    Snapshot,
+    | "cohortRecentBuyersPct"
+    | "cohortRecentMaxSize"
+    | "cohortCreatorLinked"
+    | "sameSizeGroupWallets"
+    | "sameSizeGroupSolShare"
+    | "launchSameSizeWallets"
+    | "recentBuyersHoldMean"
+  >,
+): CohortTileReading {
+  return {
+    pct: x.cohortRecentBuyersPct ?? null,
+    maxSize: x.cohortRecentMaxSize ?? null,
+    creatorLinked: x.cohortCreatorLinked ?? null,
+    sameSize: x.sameSizeGroupWallets ?? null,
+    sameSizeShare: x.sameSizeGroupSolShare ?? null,
+    launchSameSize: x.launchSameSizeWallets ?? null,
+    holdSec: x.recentBuyersHoldMean ?? null,
+  };
+}
+
+/** The Cohort tile's one-line figure: "5 · dev", "3", "None", "Not checked". */
+export function cohortTileText(r: CohortTileReading | null): string {
+  if (!r || (r.maxSize === null && r.sameSize === null)) return "Not checked";
+  const cohort = r.maxSize ?? 0;
+  const group = r.sameSize ?? 0;
+  if (cohort === 0 && group === 0) return "None";
+  const parts: string[] = [];
+  if (cohort > 0) parts.push(`${cohort}${r.creatorLinked ? " · dev" : ""}`);
+  if (group > 0) parts.push(`${group} same-size`);
+  return parts.join(", ");
+}
+
+/** The Cohort tile's tooltip. */
+export function cohortTileTitle(r: CohortTileReading | null, atAlert: boolean, later: string): string {
+  if (!r || (r.maxSize === null && r.sameSize === null)) {
+    return "Cohort: not checked yet. It is read off the coin's newest trades against the hourly cohort book, so it needs a live trade page and the book loaded.";
+  }
+  const when = atAlert ? "at alert time" : later;
+  const lines: string[] = [];
+  if (r.maxSize === null) {
+    lines.push("Cohorts: not read (the cohort book had not loaded).");
+  } else if (r.maxSize === 0 || r.pct === null) {
+    lines.push(
+      r.pct === null
+        ? "Cohorts: no buyers on the newest trades to read."
+        : "Cohorts: none of the newest buyers belongs to a recurring cohort.",
+    );
+  } else {
+    lines.push(
+      `Cohorts: ${r.pct.toFixed(1)}% of the newest buyers belong to a recurring cohort (wallets that keep buying the same launches together within seconds); the largest is ${r.maxSize} wallets; a cohort includes a coin's creator: ${r.creatorLinked ? "yes" : "no"}.`,
+    );
+  }
+  if (r.sameSize !== null) {
+    lines.push(
+      r.sameSize === 0
+        ? "Same-size group: none (no three wallets bought the same SOL in one second)."
+        : `Same-size group: ${r.sameSize} wallets bought the same SOL in one second${
+            r.sameSizeShare === null ? "" : `, ${(r.sameSizeShare * 100).toFixed(0)}% of the recent buy SOL`
+          }${r.launchSameSize ? `; ${r.launchSameSize} did at launch` : ""}.`,
+    );
+  } else if (r.launchSameSize) {
+    lines.push(
+      `Same-size group at launch: ${r.launchSameSize} wallets bought the same SOL in the create's own slot.`,
+    );
+  }
+  if (r.holdSec !== null) lines.push(`The newest buyers typically hold a coin ${holdTimeText(r.holdSec)}.`);
+  return `${lines.join(" ")} Read ${when}. Recorded for the models, not a filter.`;
+}
+
+/** The Cohort tile's tone: red with a creator in a cohort, else the cohort share against the bound. */
+export function cohortTileTone(r: CohortTileReading | null): number | null {
+  if (!r) return null;
+  if (r.creatorLinked) return 1;
+  if (r.pct !== null) return tileTone(r.pct, TILE_RED_COHORT_PCT);
+  return r.maxSize !== null || r.sameSize !== null ? 0 : null;
+}
+
+/**
+ * The Cohort tile (user ask 2026-11-01): the recurring buyer cohorts and the same-size buy group on
+ * the coin's newest trades. Amber when a cohort includes a creator or the group is large; no cut.
+ */
+export function CohortTile({
+  reading,
+  atAlert,
+  tiles = "off",
+  later = LATER_SCAN,
+}: {
+  reading: CohortTileReading | null;
+  atAlert: boolean;
+  tiles?: TileMode;
+  later?: string;
+}) {
+  const text = cohortTileText(reading);
+  return (
+    <div
+      {...tileLook(tiles, cohortTileTone(reading), false)}
+      title={cohortTileTitle(reading, atAlert, later)}
+    >
+      <dt>Cohort</dt>
+      <dd className={text === "Not checked" ? "muted" : "num"}>{text}</dd>
     </div>
   );
 }

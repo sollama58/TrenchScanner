@@ -40,6 +40,7 @@ export const CARD_FIELDS = [
   "snipers",
   "sniperTop10",
   "blockZero",
+  "cohort",
   "linked",
   "cexFunded",
   "kolBundled",

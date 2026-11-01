@@ -172,6 +172,33 @@ export interface WalletProfile {
       medianPct: number | null;
       avgPct: number | null;
     } | null;
+    /**
+     * The behaviour counters (wallet-risk rebuild, 2026-11-01): median seconds from its first buy
+     * to its first sell on coins it sold; buys and sells paired over its coins; coins it bought and
+     * sold twice or more on a clean trade (churn); coins bought at under 0.01 SOL a buy; coins it
+     * held at the call and first sold within two minutes after it; coins it held at the call and
+     * sold before the stop. Null before the rebuild that added them.
+     */
+    medianHoldSec: number | null;
+    roundTrips: number | null;
+    churnCoins: number | null;
+    microBuyCoins: number | null;
+    sellsIntoCalls: number | null;
+    exitsBeforeStop: number | null;
+    lastSeenAt: string;
+    computedAt: string;
+  } | null;
+  /**
+   * The recurring cohort the wallet is in (the hourly cohort book, wallets/cohorts.ts): wallets
+   * that keep first-buying the same launches within seconds of each other. Null when in none.
+   */
+  cohort: {
+    /** The cohort's id: its smallest wallet address. */
+    id: string;
+    /** Wallets in the cohort, the coins this wallet bought with a cohort-mate, and of the cohort's coins those a member created. */
+    size: number;
+    coins: number;
+    creatorCoins: number;
     lastSeenAt: string;
     computedAt: string;
   } | null;
@@ -464,34 +491,37 @@ export async function loadWalletProfile(
     loadTrackedSides(tracked, [wallet]).catch(() => ({}) as Record<string, PossibleSide[]>),
   ]).then(([base, own]) => mergeSides(base, own, tracked));
   const kolSidesRead = loadKolLabeledSides(wallet).catch(() => [] as LabeledSide[]);
-  const [risk, funderRow, activityCache, holdings, activity, fundedRows, overview, kol] = await Promise.all([
-    // computedAt shown as the last rebuild: the job rewrites only rows whose figures changed.
-    prisma.walletRisk
-      .findUnique({ where: { wallet } })
-      .then(async (r) =>
-        r ? { ...r, computedAt: (await lastRebuiltAt("wallet-risk", r.computedAt))! } : null,
-      ),
-    prisma.walletFunder.findUnique({ where: { wallet } }),
-    prisma.walletActivityCache.findUnique({ where: { address: wallet } }),
-    prisma.walletHoldingsCache.findUnique({ where: { address: wallet } }),
-    prisma.tokenWalletActivity.findMany({
-      where: { wallet },
-      orderBy: { createdAt: "desc" },
-      take: MAX_COINS,
-      include: {
-        token: {
-          select: { mintAddress: true, symbol: true, name: true, imageUrl: true, tradeTape: true },
+  const [risk, funderRow, activityCache, holdings, activity, fundedRows, overview, kol, cohort] =
+    await Promise.all([
+      // computedAt shown as the last rebuild: the job rewrites only rows whose figures changed.
+      prisma.walletRisk
+        .findUnique({ where: { wallet } })
+        .then(async (r) =>
+          r ? { ...r, computedAt: (await lastRebuiltAt("wallet-risk", r.computedAt))! } : null,
+        ),
+      prisma.walletFunder.findUnique({ where: { wallet } }),
+      prisma.walletActivityCache.findUnique({ where: { address: wallet } }),
+      prisma.walletHoldingsCache.findUnique({ where: { address: wallet } }),
+      prisma.tokenWalletActivity.findMany({
+        where: { wallet },
+        orderBy: { createdAt: "desc" },
+        take: MAX_COINS,
+        include: {
+          token: {
+            select: { mintAddress: true, symbol: true, name: true, imageUrl: true, tradeTape: true },
+          },
         },
-      },
-    }),
-    prisma.walletFunder.findMany({
-      where: { funder: wallet, status: "found" },
-      orderBy: { fundedAt: "desc" },
-      take: MAX_LINKED,
-    }),
-    live ? live.overview(wallet).catch(() => null) : Promise.resolve(null),
-    prisma.kolWallet.findUnique({ where: { wallet } }),
-  ]);
+      }),
+      prisma.walletFunder.findMany({
+        where: { funder: wallet, status: "found" },
+        orderBy: { fundedAt: "desc" },
+        take: MAX_LINKED,
+      }),
+      live ? live.overview(wallet).catch(() => null) : Promise.resolve(null),
+      prisma.kolWallet.findUnique({ where: { wallet } }),
+      // The recurring cohort it is in, from the hourly cohort book (2026-11-01).
+      prisma.walletCohort.findUnique({ where: { wallet } }),
+    ]);
 
   // The funder, read now when the linked-wallets job never reached this wallet. Cached in the
   // same table it would have written, with the same rule: only final answers are kept.
@@ -729,8 +759,24 @@ export async function loadWalletProfile(
                   medianPct: risk.medianPnlPct,
                   avgPct: risk.avgPnlPct,
                 },
+          medianHoldSec: risk.medianHoldSec,
+          roundTrips: risk.roundTrips,
+          churnCoins: risk.churnCoins,
+          microBuyCoins: risk.microBuyCoins,
+          sellsIntoCalls: risk.sellsIntoCalls,
+          exitsBeforeStop: risk.exitsBeforeStop,
           lastSeenAt: risk.lastSeenAt.toISOString(),
           computedAt: risk.computedAt.toISOString(),
+        }
+      : null,
+    cohort: cohort
+      ? {
+          id: cohort.cohortId,
+          size: cohort.size,
+          coins: cohort.coins,
+          creatorCoins: cohort.creatorCoins,
+          lastSeenAt: cohort.lastSeenAt.toISOString(),
+          computedAt: cohort.computedAt.toISOString(),
         }
       : null,
     totals: {

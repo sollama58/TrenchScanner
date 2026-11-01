@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, lookupRequired } from "../api";
 import { cachedGet } from "../cache";
-import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
+import { MIN_WIN_SOL, ago, holdTimeText, shortAddress, signedPct, usd } from "../format";
 import { useNow } from "../hooks";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
@@ -84,6 +84,22 @@ export interface WalletProfile {
       medianPct: number | null;
       avgPct: number | null;
     } | null;
+    /** The behaviour counters (2026-11-01). Absent from older API builds, null before the rebuild that added them. */
+    medianHoldSec?: number | null;
+    roundTrips?: number | null;
+    churnCoins?: number | null;
+    microBuyCoins?: number | null;
+    sellsIntoCalls?: number | null;
+    exitsBeforeStop?: number | null;
+    lastSeenAt: string;
+    computedAt: string;
+  } | null;
+  /** The recurring cohort it is in (2026-11-01); null when in none, absent from older API builds. */
+  cohort?: {
+    id: string;
+    size: number;
+    coins: number;
+    creatorCoins: number;
     lastSeenAt: string;
     computedAt: string;
   } | null;
@@ -466,7 +482,7 @@ function Profile({ p }: { p: WalletProfile }) {
         />
       )}
       {!p.kol && <BundleLabels wallet={p.wallet} />}
-      {p.risk && <Risk risk={p.risk} />}
+      {p.risk && <Risk risk={p.risk} cohort={p.cohort ?? null} />}
       <Coins
         title="Tracked coins"
         coins={p.coins}
@@ -661,7 +677,14 @@ function BundleLabels({ wallet }: { wallet: string }) {
   );
 }
 
-function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
+function Risk({
+  risk,
+  cohort,
+}: {
+  risk: NonNullable<WalletProfile["risk"]>;
+  cohort: NonNullable<WalletProfile["cohort"]> | null;
+}) {
+  const counted = risk.medianHoldSec !== undefined || risk.exitsBeforeStop !== undefined;
   return (
     <section className="sage-card wm-section">
       <h4>
@@ -711,6 +734,39 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
             <PnlFact label="Average profit/loss" sol={risk.pnl.avgSol} pct={risk.pnl.avgPct} />
           </>
         )}
+        {counted && (
+          <>
+            <div title="Median time from its first buy to its first sell, over the coins it sold">
+              <dt>Typical hold</dt>
+              <dd className="num">{risk.medianHoldSec == null ? "–" : holdTimeText(risk.medianHoldSec)}</dd>
+            </div>
+            <div title="Coins it held at the alert and sold before the alert's stop">
+              <dt>Exits before stop</dt>
+              <dd className="num">{risk.exitsBeforeStop ?? "–"}</dd>
+            </div>
+            <div title="Coins it held at the alert and first sold within two minutes after it">
+              <dt>Sells into calls</dt>
+              <dd className="num">{risk.sellsIntoCalls ?? "–"}</dd>
+            </div>
+            <div title="Coins it bought and sold twice or more on a clean trade: volume that never changed hands">
+              <dt>Churned coins</dt>
+              <dd className="num">{risk.churnCoins ?? "–"}</dd>
+            </div>
+            <div title="Coins it bought at under 0.01 SOL a buy, the way bump bots do">
+              <dt>Micro-buy coins</dt>
+              <dd className="num">{risk.microBuyCoins ?? "–"}</dd>
+            </div>
+          </>
+        )}
+        {cohort && (
+          <div className="wm-fact-wide" title={`Cohort ${cohort.id}, rebuilt ${ago(cohort.computedAt)}`}>
+            <dt>Cohort</dt>
+            <dd className="num">
+              {cohort.size} wallets · {cohort.coins} coins together
+              {cohort.creatorCoins > 0 ? ` · ${cohort.creatorCoins} created by a member` : ""}
+            </dd>
+          </div>
+        )}
       </dl>
       <p className="faint small wm-note">
         How often it sold into an alert&apos;s stop, against the market&apos;s rate, nudged up by fast exits
@@ -725,6 +781,13 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
             Profit/loss is per coin, SOL out less SOL in and as a % of SOL in, over the {risk.pnl.coins} of
             these coins it sold some of on a clean trade: one it still holds unsold isn&apos;t counted, and a
             part-sold one counts only what it took out so far.
+          </>
+        )}
+        {cohort && (
+          <>
+            {" "}
+            A cohort is a group of wallets that keep first-buying the same launches within seconds of each
+            other, rebuilt hourly over the last 60 days of trades.
           </>
         )}
       </p>

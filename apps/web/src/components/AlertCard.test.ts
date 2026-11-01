@@ -17,6 +17,9 @@ import {
   sniperTileMark,
   sniperTileTitle,
   blockZeroTileTitle,
+  cohortTileText,
+  cohortTileTitle,
+  cohortTileTone,
   walletCountText,
 } from "./AlertCard";
 
@@ -309,6 +312,62 @@ describe("holder counts", () => {
       blockZeroAtAlert: false,
     });
     expect(at({})).toMatchObject({ blockZeroPct: null, blockZeroBuyers: null });
+  });
+
+  it("reads the Cohort tile from the alert's scan, else a later one, and words it", () => {
+    const at = (snapshot: object, latest: object | null = null) =>
+      cardReadings({ snapshot, latestSnapshot: latest, token: {} } as unknown as Card);
+    const read = {
+      cohortRecentBuyersPct: 12.5,
+      cohortRecentMaxSize: 5,
+      cohortCreatorLinked: true,
+      sameSizeGroupWallets: 4,
+      sameSizeGroupSolShare: 0.31,
+      launchSameSizeWallets: 3,
+      recentBuyersHoldMean: 95,
+    };
+    const r = at(read);
+    expect(r.cohortAtAlert).toBe(true);
+    expect(r.cohort).toEqual({
+      pct: 12.5,
+      maxSize: 5,
+      creatorLinked: true,
+      sameSize: 4,
+      sameSizeShare: 0.31,
+      launchSameSize: 3,
+      holdSec: 95,
+    });
+    expect(cohortTileText(r.cohort)).toBe("5 · dev, 4 same-size");
+    const t = cohortTileTitle(r.cohort, true, "later");
+    expect(t).toContain("12.5% of the newest buyers belong to a recurring cohort");
+    expect(t).toContain("largest is 5 wallets");
+    expect(t).toContain("creator: yes");
+    expect(t).toContain(
+      "4 wallets bought the same SOL in one second, 31% of the recent buy SOL; 3 did at launch",
+    );
+    expect(t).toContain("hold a coin 2m");
+    expect(t).toContain("at alert time");
+    expect(cohortTileTone(r.cohort)).toBe(1);
+
+    const later = at({}, { cohortRecentMaxSize: 0, cohortRecentBuyersPct: 0, sameSizeGroupWallets: 0 });
+    expect(later.cohortAtAlert).toBe(false);
+    expect(cohortTileText(later.cohort)).toBe("None");
+    expect(cohortTileTitle(later.cohort, false, "from a scan 2m ago")).toContain("none of the newest buyers");
+    expect(cohortTileTone(later.cohort)).toBe(0);
+
+    const unread = at({});
+    expect(unread.cohort).toBeNull();
+    expect(cohortTileText(null)).toBe("Not checked");
+    expect(cohortTileTitle(null, true, "later")).toContain("not checked yet");
+    expect(cohortTileTone(null)).toBeNull();
+
+    // A cohort read with no same-size reading, and the reverse, each say only what was read.
+    expect(
+      cohortTileText(
+        at({ cohortRecentMaxSize: 3, cohortRecentBuyersPct: 40, cohortCreatorLinked: false }).cohort,
+      ),
+    ).toBe("3");
+    expect(cohortTileText(at({ sameSizeGroupWallets: 6 }).cohort)).toBe("6 same-size");
   });
 
   it("reads Fresh over the top 25 where the scan counted it, else the top 10", () => {

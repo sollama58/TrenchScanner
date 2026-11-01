@@ -3,6 +3,7 @@ import { usePolling } from "../hooks";
 import { MIN_WIN_SOL, pct } from "../format";
 import { useWalletNames } from "../walletNames";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
+import { holdTimeText } from "../format";
 import { SideBotsModal } from "./AdminSideBots";
 
 /**
@@ -61,7 +62,18 @@ interface Overview {
 
 interface WalletDetail {
   wallet: string;
-  risk: { score: number; appearances: number; dumps: number; fastExits: number; snipes: number } | null;
+  risk: {
+    score: number;
+    appearances: number;
+    dumps: number;
+    fastExits: number;
+    snipes: number;
+    medianHoldSec?: number | null;
+    churnCoins?: number | null;
+    exitsBeforeStop?: number | null;
+    sellsIntoCalls?: number | null;
+  } | null;
+  cohort?: { id: string; size: number; coins: number; creatorCoins: number } | null;
   coins: {
     mint: string;
     symbol: string | null;
@@ -286,7 +298,16 @@ function Lookup({ address, risky }: { address: string; risky: number }) {
             w.risk ? (
               <>
                 Score {w.risk.score.toFixed(0)} over {n(w.risk.appearances)} coins: {n(w.risk.dumps)} dumps,{" "}
-                {n(w.risk.fastExits)} fast exits, {n(w.risk.snipes)} snipes.
+                {n(w.risk.fastExits)} fast exits, {n(w.risk.snipes)} snipes
+                {w.risk.exitsBeforeStop != null ? `, ${n(w.risk.exitsBeforeStop)} exits before the stop` : ""}
+                {w.risk.sellsIntoCalls != null ? `, ${n(w.risk.sellsIntoCalls)} sells into calls` : ""}
+                {w.risk.churnCoins != null ? `, ${n(w.risk.churnCoins)} churned coins` : ""}
+                {w.risk.medianHoldSec != null ? `; typical hold ${holdTimeText(w.risk.medianHoldSec)}` : ""}.
+                {w.cohort
+                  ? ` In a cohort of ${n(w.cohort.size)} wallets (${n(w.cohort.coins)} coins bought together${
+                      w.cohort.creatorCoins > 0 ? `, ${n(w.cohort.creatorCoins)} created by a member` : ""
+                    }).`
+                  : ""}
               </>
             ) : (
               "Not scored: seen in fewer than two coins read."

@@ -135,6 +135,15 @@ export function snapshotDataFor(
     blockZeroHeldPct: scored.blockZeroHeldPct,
     blockZeroBuyers: scored.blockZeroBuyers,
     blockZeroBoughtPct: scored.blockZeroBoughtPct,
+    // The live-tape group readings (2026-11-01), for the card's Cohort tile; the fast lane has none.
+    sameSizeGroupWallets: scored.sameSizeGroupWallets,
+    sameSizeGroupSolShare: scored.sameSizeGroupSolShare,
+    launchSameSizeWallets: scored.launchSameSizeWallets,
+    recentBuyersHoldMean: scored.recentBuyersHoldMean,
+    cohortRecentBuyersPct: scored.cohortRecentBuyersPct,
+    cohortRecentMaxSize: scored.cohortRecentMaxSize,
+    cohortCreatorLinked:
+      scored.cohortCreatorLinked === undefined ? undefined : scored.cohortCreatorLinked === 1,
     freshTopHolderCount: scored.freshTopHolderCount,
     freshTopHoldersChecked: scored.freshTopHoldersChecked,
     // Jupiter's count from the fresh quote, the one the "Min holders (live)" filter reads.
