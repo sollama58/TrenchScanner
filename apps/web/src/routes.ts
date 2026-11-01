@@ -2,7 +2,7 @@ import { isAdminHash } from "./adminNav";
 
 /** The dashboard's tabs, and the code-split chunks behind them. */
 export type Tab =
-  "live" | "model" | "lighthouse" | "filters" | "utilities" | "portfolio" | "settings" | "admin";
+  "live" | "model" | "lighthouse" | "filters" | "utilities" | "portfolio" | "settings" | "admin" | "fdsa";
 
 export function tabFromHash(): Tab {
   const h = window.location.hash.replace("#", "");
@@ -17,9 +17,23 @@ export function tabFromHash(): Tab {
     h === "utilities" ||
     h === "portfolio" ||
     h === "settings" ||
-    h === "admin"
+    h === "admin" ||
+    // FDSA, the AI desk (owner decision 2026-10-31): hidden, reachable only by typing #fdsa, and
+    // only for admin wallets (resolveTab). No header link, nav entry or warm-up names it.
+    h === "fdsa"
     ? h
     : "live";
+}
+
+/**
+ * The tab actually shown for the one asked for: #admin and #fdsa without an admin wallet, and
+ * #portfolio without Pro Mode, read as the Live tab, so a tab is always the highlighted one and a
+ * hidden tab is never drawn for anyone it isn't for (its API refuses them too).
+ */
+export function resolveTab(wanted: Tab, who: { isAdmin: boolean; portfolioOn: boolean }): Tab {
+  if ((wanted === "admin" || wanted === "fdsa") && !who.isAdmin) return "live";
+  if (wanted === "portfolio" && !who.portfolioOn) return "live";
+  return wanted;
 }
 
 type ModelTabModule = typeof import("./tabs/ModelTab");
@@ -27,6 +41,7 @@ type LighthouseTabModule = typeof import("./tabs/LighthouseTab");
 type FiltersTabModule = typeof import("./tabs/FiltersTab");
 type SettingsTabModule = typeof import("./tabs/SettingsTab");
 type AdminTabModule = typeof import("./tabs/AdminTab");
+type FdsaTabModule = typeof import("./tabs/FdsaTab");
 
 /**
  * Chunks already downloaded. React.lazy suspends on its first render even when the chunk is in
@@ -39,6 +54,7 @@ export const loaded: {
   filters?: FiltersTabModule;
   settings?: SettingsTabModule;
   admin?: AdminTabModule;
+  fdsa?: FdsaTabModule;
 } = {};
 
 export const loadModelTab = () => import("./tabs/ModelTab").then((m) => (loaded.model = m));
@@ -46,6 +62,8 @@ export const loadLighthouseTab = () => import("./tabs/LighthouseTab").then((m) =
 export const loadFiltersTab = () => import("./tabs/FiltersTab").then((m) => (loaded.filters = m));
 export const loadSettingsTab = () => import("./tabs/SettingsTab").then((m) => (loaded.settings = m));
 export const loadAdminTab = () => import("./tabs/AdminTab").then((m) => (loaded.admin = m));
+/** Loaded only when an admin opens #fdsa: never warmed, so its chunk stays off everyone else's wire. */
+export const loadFdsaTab = () => import("./tabs/FdsaTab").then((m) => (loaded.fdsa = m));
 export const loadSignIn = () => import("./components/SignIn");
 
 /**
@@ -106,4 +124,6 @@ export const TAB_DATA: Record<Tab, string[]> = {
   settings: ["/settings"],
   // Nothing warmed: only admin wallets can read /admin, and everyone's session runs this warm-up.
   admin: [],
+  // Nothing warmed: hidden and admin-only (owner decision 2026-10-31).
+  fdsa: [],
 };

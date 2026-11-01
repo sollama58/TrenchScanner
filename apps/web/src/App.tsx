@@ -44,6 +44,8 @@ import {
 import {
   TAB_DATA,
   loadAdminTab,
+  loadFdsaTab,
+  resolveTab,
   loadFiltersTab,
   loadLighthouseTab,
   loadModelTab,
@@ -91,6 +93,7 @@ const LazyLighthouseTab = lazy(() => loadLighthouseTab().then((m) => ({ default:
 const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
 const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.SettingsTab })));
 const LazyAdminTab = lazy(() => loadAdminTab().then((m) => ({ default: m.AdminTab })));
+const LazyFdsaTab = lazy(() => loadFdsaTab().then((m) => ({ default: m.FdsaTab })));
 const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 // The burn button (and its transaction builder) only matters to someone without access.
 // The TokenSage view (and its charts) loads the first time a card or a Telegram link opens one.
@@ -138,6 +141,8 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
 const PORTFOLIO_TAB = { id: "portfolio" as Tab, label: "Portfolio", Icon: WalletIcon };
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
 const ADMIN_TAB = { id: "admin" as Tab, label: "Admin", Icon: ShieldIcon };
+/** FDSA, the AI desk (owner decision 2026-10-31): hidden, so never in the tab bar; #fdsa opens it. */
+const FDSA_TAB = { id: "fdsa" as Tab, label: "FDSA" };
 /** Asyl, the wallet-link explorer: the tab bar's "Intel" opens it (user ask 2026-10-24). */
 const ASYL_URL = "https://asyl.trenchscanner.app";
 
@@ -460,6 +465,7 @@ export function App() {
   const FiltersTab = loaded.filters?.FiltersTab ?? LazyFiltersTab;
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
+  const FdsaTab = loaded.fdsa?.FdsaTab ?? LazyFdsaTab;
   const isAdmin = signedIn && session.user.isAdmin;
   // Every render, like setProState: panels deep in a tab read the user from here (me.ts).
   useEffect(() => setMe(signedIn ? session.user : null));
@@ -546,12 +552,12 @@ export function App() {
   const portfolioOn = !!pro?.pro;
   const shownTabs = TABS.filter((t) => t.id !== "lighthouse" || lighthouseOn);
   const tabs = isAdmin ? [...shownTabs, ADMIN_TAB] : shownTabs;
-  // #admin without an admin wallet reads as the Live tab, so a tab is always the highlighted one.
-  const tab: Tab =
-    (wantedTab === "admin" && !isAdmin) || (wantedTab === "portfolio" && !portfolioOn) ? "live" : wantedTab;
+  // #admin and #fdsa without an admin wallet read as the Live tab, so a tab is always the
+  // highlighted one and a hidden tab is never drawn for anyone else (routes.ts resolveTab).
+  const tab: Tab = resolveTab(wantedTab, { isAdmin, portfolioOn });
   // A new tab, or signing in or out, is a new page: its load gets the full loader.
   useEffect(markNavigation, [tab, session.state]);
-  const tabLabel = [...TABS, ADMIN_TAB, PORTFOLIO_TAB].find((t) => t.id === tab)?.label ?? "";
+  const tabLabel = [...TABS, ADMIN_TAB, PORTFOLIO_TAB, FDSA_TAB].find((t) => t.id === tab)?.label ?? "";
   const loaderLabel =
     session.state === "signed-in" || session.state === "guest"
       ? `Loading ${tabLabel || "TrenchScanner"}`
@@ -772,6 +778,7 @@ export function App() {
                   {tab === "portfolio" && <PortfolioTab />}
                   {tab === "settings" && <SettingsTab goTo={goTo} />}
                   {tab === "admin" && <AdminTab goTo={goTo} />}
+                  {tab === "fdsa" && isAdmin && <FdsaTab />}
                 </Suspense>
               </SectionBoundary>
             </div>
