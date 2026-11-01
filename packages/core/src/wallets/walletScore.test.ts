@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { walletScore, walletScoreMarket, walletScoreReading, type WalletScoreCounts } from "./walletScore.js";
+import {
+  walletScore,
+  walletScoreMarket,
+  walletScoreReading,
+  walletScoreV2,
+  type WalletScoreCounts,
+} from "./walletScore.js";
 import type { TapeTrade } from "./tradeTape.js";
 
 const market = walletScoreMarket({
@@ -66,6 +72,47 @@ describe("walletScore", () => {
   it("leaves out a count the market never shows", () => {
     const thin = walletScoreMarket({ ...average(100, 40), early4x: 0, own4x: 0 });
     expect(Number.isFinite(walletScore(average(10, 5), thin)!)).toBe(true);
+  });
+});
+
+describe("walletScoreV2", () => {
+  const noHold = { medianHoldSec: null, soldCoins: 0 };
+  it("reads 0 for a wallet like the market with a market-like hold, and nothing under three coins", () => {
+    expect(walletScoreV2(average(40, 20), market, { medianHoldSec: 120, soldCoins: 30 }, 120)).toBeCloseTo(
+      0,
+      6,
+    );
+    expect(walletScoreV2(average(2, 1), market, noHold, 120)).toBeNull();
+  });
+
+  it("moves less than v1 on two lucky early coins, and about as much on fast exits", () => {
+    const base = average(10, 10);
+    const lucky = { ...base, early2x: 2 };
+    expect(walletScoreV2(lucky, market, noHold, null)!).toBeGreaterThan(0);
+    expect(walletScoreV2(lucky, market, noHold, null)!).toBeLessThan(walletScore(lucky, market)! / 2);
+    const flipper = { ...base, fastExits: 10 };
+    expect(walletScoreV2(flipper, market, noHold, null)!).toBeLessThan(0);
+    expect(
+      Math.abs(walletScoreV2(flipper, market, noHold, null)! - walletScore(flipper, market)!),
+    ).toBeLessThan(0.1);
+  });
+
+  it("raises the score for longer holds and lowers it for shorter, weighted by the coins sold, clipped", () => {
+    const base = average(20, 10);
+    const s0 = walletScoreV2(base, market, noHold, 120)!;
+    const long = walletScoreV2(base, market, { medianHoldSec: 600, soldCoins: 20 }, 120)!;
+    const short = walletScoreV2(base, market, { medianHoldSec: 20, soldCoins: 20 }, 120)!;
+    expect(long).toBeGreaterThan(s0);
+    expect(short).toBeLessThan(s0);
+    // Few coins sold: the same hold moves the score less.
+    expect(walletScoreV2(base, market, { medianHoldSec: 600, soldCoins: 2 }, 120)!).toBeLessThan(long);
+    // Clipped: a day-long hold reads as 2, not 6.
+    expect(walletScoreV2(base, market, { medianHoldSec: 86_400, soldCoins: 1000 }, 120)!).toBeCloseTo(
+      0.5 * 2 * (1000 / 1005),
+      3,
+    );
+    // No market hold yet: the term is left out.
+    expect(walletScoreV2(base, market, { medianHoldSec: 600, soldCoins: 20 }, null)!).toBeCloseTo(s0, 6);
   });
 });
 

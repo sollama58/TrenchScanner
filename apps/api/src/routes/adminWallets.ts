@@ -200,7 +200,7 @@ async function walletDetail(wallet: string) {
     ).map((o) => [o.id, o]),
   );
   // The Wallet Score stays hidden (user ask 2026-10-16): it is a model input, not a reading.
-  const shown = risk ? (({ walletScore: _hidden, ...rest }) => rest)(risk) : null;
+  const shown = risk ? (({ walletScore: _hidden, walletScoreV2: _hiddenV2, ...rest }) => rest)(risk) : null;
   return {
     wallet,
     risk: shown,

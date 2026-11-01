@@ -7,6 +7,7 @@ import {
   walletLabels,
   walletScore,
   walletScoreMarket,
+  walletScoreV2,
   WALLET_SCORE_MARKET_FIGURES,
   MIN_WIN_SOL,
   OWN_MULTIPLE_MIN_SOL,
@@ -106,10 +107,10 @@ const earlySql = Prisma.sql`(a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."
  * so it would count as a buy that neither won nor dumped.
  */
 export const tapeOutcomesJoinSql = Prisma.sql`JOIN (
-    SELECT t."tokenId", t."anchorAt", o."hit2xIn1h", o."hit4xIn1h", o."disqualified"
+    SELECT t."tokenId", t."anchorAt", o."hit2xIn1h", o."hit4xIn1h", o."disqualified", o."stoppedAt"
     FROM "TokenTradeTape" t
     LEFT JOIN LATERAL (
-      SELECT c."hit2xIn1h", c."hit4xIn1h", c."disqualified"
+      SELECT c."hit2xIn1h", c."hit4xIn1h", c."disqualified", c."stoppedAt"
       FROM "CandidateOutcome" c
       WHERE c."id" = t."outcomeId"
       LIMIT 1
@@ -140,6 +141,27 @@ export const scoreCounts = (r: ScoreCountRow) => ({
   fastExits: Number(r.fastExits),
 });
 
+/** A buy under this many SOL is a bump bot's, not a position (1.2% of tape rows). */
+const MICRO_BUY_SOL = 0.01;
+
+/** A coin the wallet sold after buying: its hold time is first sell less first buy. */
+const soldSql = Prisma.sql`(a."firstBuyAt" IS NOT NULL AND a."firstSellAt" IS NOT NULL AND a."firstSellAt" >= a."firstBuyAt")`;
+const holdSecSql = Prisma.sql`EXTRACT(EPOCH FROM (a."firstSellAt" - a."firstBuyAt"))`;
+/**
+ * The behaviour counters (data-uses evaluation 2026-11-01; WalletRisk's column notes say what each
+ * one is), as one SELECT list. sellsIntoCalls and exitsBeforeStop read the call's anchor and stop
+ * from the tape join (`t`).
+ */
+const behaviourCountsSql = Prisma.sql`percentile_cont(0.5) WITHIN GROUP (ORDER BY ${holdSecSql})
+             FILTER (WHERE ${soldSql}) AS "medianHoldSec",
+           COUNT(*) FILTER (WHERE ${soldSql}) AS "soldCoins",
+           SUM(LEAST(a."buys", a."sells"))::int AS "roundTrips",
+           COUNT(*) FILTER (WHERE a."buys" >= 2 AND a."sells" >= 2 AND ${cleanSql}) AS "churnCoins",
+           COUNT(*) FILTER (WHERE a."buys" > 0 AND a."solIn" / a."buys" < ${MICRO_BUY_SOL}) AS "microBuyCoins",
+           COUNT(*) FILTER (WHERE ${earlySql} AND a."firstSellAt" >= t."anchorAt"
+                              AND a."firstSellAt" < t."anchorAt" + INTERVAL '2 minutes') AS "sellsIntoCalls",
+           COUNT(*) FILTER (WHERE ${earlySql} AND t."stoppedAt" IS NOT NULL AND a."firstSellAt" < t."stoppedAt"
+                              AND NOT a."dumpedIntoStop") AS "exitsBeforeStop"`;
 const MIN_APPEARANCES = 2;
 
 const WALLET_RISK_TABLE: ReplaceRowsSpec = {
@@ -171,6 +193,13 @@ const WALLET_RISK_TABLE: ReplaceRowsSpec = {
     { name: "avgPnlSol", type: "double precision" },
     { name: "medianPnlPct", type: "double precision" },
     { name: "avgPnlPct", type: "double precision" },
+    { name: "medianHoldSec", type: "double precision" },
+    { name: "roundTrips", type: "integer" },
+    { name: "churnCoins", type: "integer" },
+    { name: "microBuyCoins", type: "integer" },
+    { name: "sellsIntoCalls", type: "integer" },
+    { name: "exitsBeforeStop", type: "integer" },
+    { name: "walletScoreV2", type: "double precision" },
     { name: "solIn", type: "double precision" },
     { name: "solOut", type: "double precision" },
     { name: "lastSeenAt", type: "timestamp(3)" },
@@ -194,6 +223,13 @@ interface Agg {
   avgPnlSol: number | null;
   medianPnlPct: number | null;
   avgPnlPct: number | null;
+  medianHoldSec: number | null;
+  soldCoins: number;
+  roundTrips: number;
+  churnCoins: number;
+  microBuyCoins: number;
+  sellsIntoCalls: number;
+  exitsBeforeStop: number;
   solIn: number;
   solOut: number;
   lastSeenAt: Date;
@@ -204,10 +240,13 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
   // The market's dump rate, over every wallet, the once-seen ones included.
   // The Wallet Score's market rates are over the same rows (bought), from the same SELECT list.
   const [totals] = await withLongReads(
-    (tx) => tx.$queryRaw<({ appearances: bigint; dumps: bigint; wins: bigint } & ScoreCountRow)[]>`
+    (tx) => tx.$queryRaw<
+      ({ appearances: bigint; dumps: bigint; wins: bigint; medianHoldSec: number | null } & ScoreCountRow)[]
+    >`
     SELECT COUNT(*) AS appearances,
            COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
            COUNT(*) FILTER (WHERE ${winSql}) AS wins,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY ${holdSecSql}) FILTER (WHERE ${soldSql}) AS "medianHoldSec",
            ${scoreCountsSql}
     FROM "TokenWalletActivity" a
     ${tapeOutcomesJoinSql}
@@ -221,6 +260,11 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     appearances > 0 ? Number((k / appearances).toPrecision(WALLET_SCORE_MARKET_FIGURES)) : 0;
   const marketDumpRate = marketRate(Number(totals?.dumps ?? 0));
   const marketWinRate = marketRate(Number(totals?.wins ?? 0));
+  // The market's median hold, to two figures like the rates, so the v2 score doesn't drift hourly.
+  const marketMedianHoldSec =
+    totals?.medianHoldSec !== null && totals?.medianHoldSec !== undefined && Number(totals.medianHoldSec) > 0
+      ? Number(Number(totals.medianHoldSec).toPrecision(WALLET_SCORE_MARKET_FIGURES))
+      : null;
   const scoreMarket = walletScoreMarket({
     appearances,
     dumps: Number(totals?.dumps ?? 0),
@@ -233,7 +277,20 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     (tx) => tx.$queryRaw<
       (Omit<
         Agg,
-        "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins" | "transferWins" | "pnlCoins"
+        | "appearances"
+        | "dumps"
+        | "fastExits"
+        | "snipes"
+        | "wins"
+        | "earlyWins"
+        | "transferWins"
+        | "pnlCoins"
+        | "soldCoins"
+        | "roundTrips"
+        | "churnCoins"
+        | "microBuyCoins"
+        | "sellsIntoCalls"
+        | "exitsBeforeStop"
       > &
         ScoreCountRow & {
           appearances: bigint;
@@ -243,6 +300,12 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
           earlyWins: bigint;
           transferWins: bigint;
           pnlCoins: bigint;
+          soldCoins: bigint;
+          roundTrips: number | null;
+          churnCoins: bigint;
+          microBuyCoins: bigint;
+          sellsIntoCalls: bigint;
+          exitsBeforeStop: bigint;
         })[]
     >`
     SELECT a."wallet",
@@ -262,6 +325,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
            percentile_cont(0.5) WITHIN GROUP (ORDER BY (a."solOut" / a."solIn" - 1) * 100)
              FILTER (WHERE ${pnlSql}) AS "medianPnlPct",
            AVG(((a."solOut" / a."solIn" - 1) * 100)::numeric) FILTER (WHERE ${pnlSql})::float8 AS "avgPnlPct",
+           ${behaviourCountsSql},
            -- Summed as numeric: float8 addition depends on the order the rows arrive in, so a
            -- plan change (an index walk one hour, a scan the next) moved the last bits of 13-25%
            -- of wallets' sums and replaceRows rewrote those rows for nothing.
@@ -312,6 +376,21 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
       avgPnlSol: r.avgPnlSol === null ? null : Number(r.avgPnlSol),
       medianPnlPct: r.medianPnlPct === null ? null : Number(r.medianPnlPct),
       avgPnlPct: r.avgPnlPct === null ? null : Number(r.avgPnlPct),
+      medianHoldSec: r.medianHoldSec === null ? null : Number(r.medianHoldSec),
+      roundTrips: Number(r.roundTrips ?? 0),
+      churnCoins: Number(r.churnCoins),
+      microBuyCoins: Number(r.microBuyCoins),
+      sellsIntoCalls: Number(r.sellsIntoCalls),
+      exitsBeforeStop: Number(r.exitsBeforeStop),
+      walletScoreV2: walletScoreV2(
+        { ...counts, appearances: stats.appearances, dumps: stats.dumps },
+        scoreMarket,
+        {
+          medianHoldSec: r.medianHoldSec === null ? null : Number(r.medianHoldSec),
+          soldCoins: Number(r.soldCoins),
+        },
+        marketMedianHoldSec,
+      ),
       solIn: Number(r.solIn),
       solOut: Number(r.solOut),
       lastSeenAt: r.lastSeenAt,

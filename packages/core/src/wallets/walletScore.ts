@@ -96,6 +96,77 @@ export function walletScore(c: WalletScoreCounts, market: WalletScoreMarket): nu
   return Math.round(score * 1000) / 1000;
 }
 
+/**
+ * Wallet Score v2 (data-uses evaluation 2026-11-01, notes/data-uses-2026-11-01/report.md): the same
+ * terms, each shrunk toward the market by its own prior, plus a hold-time term. Recorded beside
+ * walletScore (WalletRisk.walletScoreV2) and read by nothing until the two are compared live.
+ *
+ * Why per-trait priors: across 96,300 wallets with 10+ taped coins, the first half of a wallet's
+ * record predicted the second half at Spearman 0.76 for fast exits and 0.54 for dumps, but only
+ * 0.29 for early 2x coins and 0.29 for own 2x trades. One 5-coin prior on all six terms let two
+ * lucky early coins move a short record +1.4 on a trait that barely repeats. The prior here is
+ * about 5 / persistence^2 coins: a trait that repeats needs few coins to count, one that doesn't
+ * needs many - which is also what keeps a farm from cleaning a wallet's record with planted wins.
+ *
+ * Why hold time: the mean prior hold time of a coin's early buyers was the one wallet reading with
+ * the right sign for both labels (AUC 0.527 for the 2x, 0.339 for the stop; 19 of 19 days in
+ * 0.46-0.60). Read as the log of the wallet's median hold over the market's, weighted by how many
+ * coins it sold (n / (n + WALLET_SCORE_V2_HOLD_PRIOR_COINS)) and clipped to +-2.
+ */
+export const WALLET_SCORE_V2_PRIORS: Record<keyof typeof WALLET_SCORE_WEIGHTS, number> = {
+  early2x: 55,
+  early4x: 55,
+  own2x: 55,
+  own4x: 55,
+  fastExits: 9,
+  dumps: 17,
+};
+export const WALLET_SCORE_V2_HOLD_WEIGHT = 0.5;
+export const WALLET_SCORE_V2_HOLD_PRIOR_COINS = 5;
+const HOLD_LIFT_CLIP = 2;
+
+export interface WalletHold {
+  /** The wallet's median seconds from first buy to first sell, over the coins it sold. */
+  medianHoldSec: number | null;
+  /** How many coins that median is over. */
+  soldCoins: number;
+}
+
+export function walletScoreV2(
+  c: WalletScoreCounts,
+  market: WalletScoreMarket,
+  hold: WalletHold,
+  marketMedianHoldSec: number | null,
+): number | null {
+  if (c.appearances < WALLET_SCORE_MIN_COINS) return null;
+  const lift = (k: number, n: number, base: number, p: number) =>
+    base > 0 && Number.isFinite(base) ? Math.log((k + p * base) / (n + p) / base) : 0;
+  const w = WALLET_SCORE_WEIGHTS;
+  const p = WALLET_SCORE_V2_PRIORS;
+  let score =
+    w.early2x * lift(c.early2x, c.earlyBuys, market.early2x, p.early2x) +
+    w.early4x * lift(c.early4x, c.earlyBuys, market.early4x, p.early4x) +
+    w.own2x * lift(c.own2x, c.appearances, market.own2x, p.own2x) +
+    w.own4x * lift(c.own4x, c.appearances, market.own4x, p.own4x) +
+    w.fastExits * lift(c.fastExits, c.appearances, market.fastExits, p.fastExits) +
+    w.dumps * lift(c.dumps, c.appearances, market.dumps, p.dumps);
+  if (
+    hold.medianHoldSec !== null &&
+    hold.medianHoldSec > 0 &&
+    hold.soldCoins > 0 &&
+    marketMedianHoldSec !== null &&
+    marketMedianHoldSec > 0
+  ) {
+    const raw = Math.log(hold.medianHoldSec / marketMedianHoldSec);
+    const clipped = Math.max(-HOLD_LIFT_CLIP, Math.min(HOLD_LIFT_CLIP, raw));
+    score +=
+      WALLET_SCORE_V2_HOLD_WEIGHT *
+      clipped *
+      (hold.soldCoins / (hold.soldCoins + WALLET_SCORE_V2_HOLD_PRIOR_COINS));
+  }
+  return Math.round(score * 1000) / 1000;
+}
+
 /** What a decision records from the scores of the wallets buying in the coin's newest trades. */
 export interface WalletScoreReading {
   /** Mean Wallet Score of the buyers that have one; null when none has. */

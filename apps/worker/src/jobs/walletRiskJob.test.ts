@@ -319,4 +319,80 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
       early4x: 1,
     });
   });
+  it("counts the behaviour counters and a Wallet Score v2 beside the score", async () => {
+    const trader = `${TAG}-behaviour`;
+    const anchorAt = new Date("2026-10-15T10:00:00Z");
+    const min = (n: number) => new Date(anchorAt.getTime() + n * 60_000);
+    // Per coin: [firstBuyAt, firstSellAt, buys, sells, solIn, stoppedAt, dumpedIntoStop]
+    const coins: [Date, Date | null, number, number, number, Date | null, boolean][] = [
+      [min(-1), min(1), 1, 1, 1, min(10), false], // sold into the call, before the stop: hold 2 min
+      [min(-1), min(5), 2, 2, 0.01, min(10), false], // churn (2 buys, 2 sells), micro buys, exit before stop
+      [min(-1), min(20), 1, 1, 1, min(10), true], // dumped into the stop: hold 21 min
+      [min(2), null, 1, 0, 1, null, false], // late buyer, never sold
+    ];
+    for (const [
+      i,
+      [firstBuyAt, firstSellAt, buys, sells, solIn, stoppedAt, dumpedIntoStop],
+    ] of coins.entries()) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-behaviour-${i}` } });
+      const outcome = await prisma.candidateOutcome.create({
+        data: {
+          tokenId: token.id,
+          anchorAt,
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 100_000,
+          features: {},
+          sampleKind: "event",
+          nextCheckAt: anchorAt,
+          peak1hPriceUsd: 1,
+          low1hPriceUsd: 1,
+          lowBefore2xPriceUsd: 1,
+          peak24hPriceUsd: 1,
+          hit2xIn1h: false,
+          hit4xIn1h: false,
+          stoppedAt,
+        },
+      });
+      await prisma.tokenTradeTape.create({
+        data: {
+          tokenId: token.id,
+          outcomeId: outcome.id,
+          anchorAt,
+          reason: "called",
+          status: "done",
+          windowEnd: anchorAt,
+        },
+      });
+      await prisma.tokenWalletActivity.create({
+        data: {
+          tokenId: token.id,
+          wallet: trader,
+          buys,
+          sells,
+          solIn,
+          firstBuyAt,
+          firstSellAt,
+          dumpedIntoStop,
+        },
+      });
+    }
+    await runWalletRiskJob();
+    const row = await prisma.walletRisk.findUnique({ where: { wallet: trader } });
+    expect(row).toMatchObject({
+      appearances: 4,
+      earlyBuys: 3,
+      // Three sold coins held 2, 6 and 21 minutes.
+      medianHoldSec: 6 * 60,
+      // 1 + 2 + 1 round trips over the sold coins; the unsold coin adds none.
+      roundTrips: 4,
+      churnCoins: 1,
+      microBuyCoins: 1,
+      sellsIntoCalls: 1,
+      // The first two sold before the stop; the third sold into it.
+      exitsBeforeStop: 2,
+    });
+    // Three early coins, none a winner, one dump: the v2 score is set and below the market's zero.
+    expect(row!.walletScoreV2).not.toBeNull();
+    expect(row!.walletScoreV2!).toBeLessThan(0);
+  });
 });
