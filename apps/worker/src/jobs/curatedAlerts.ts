@@ -1068,12 +1068,26 @@ export async function emitCuratedCycle(
   // How many seats called each coin this cycle, for FDSA's decide brief (AI evaluation
   // 2026-11-01): the 2026-10-25 evaluation found coins called by 9+ models the best cheap cut
   // (27% against 20%), and the brief carried one seat's line. A contender is a seat's call.
-  const calledBy = new Map<string, number>();
-  for (const contenders of cycle.byModel.values()) {
-    for (const c of contenders) calledBy.set(c.token.id, (calledBy.get(c.token.id) ?? 0) + 1);
+  // The seats themselves too (user ask 2026-11-01): FDSA's briefs name each caller and its live
+  // record, and say what the alerting seat is.
+  const calledBy = new Map<string, string[]>();
+  for (const [seat, contenders] of cycle.byModel) {
+    for (const c of contenders) calledBy.set(c.token.id, [...(calledBy.get(c.token.id) ?? []), seat]);
   }
   const callingSeats = roster.entries.filter((e) => e.spec.trackingOnly !== true).length;
-  const agreementOf = (tokenId: string) => ({ called: calledBy.get(tokenId) ?? 0, of: callingSeats });
+  const seatSpec = (id: string) => roster.entries.find((e) => e.spec.id === id)?.spec;
+  const agreementOf = (tokenId: string) => {
+    const seats = calledBy.get(tokenId) ?? [];
+    return {
+      called: seats.length,
+      of: callingSeats,
+      seats: seats.map((id) => ({ id, name: seatSpec(id)?.name ?? id })),
+    };
+  };
+  const seatOf = (id: string) => {
+    const spec = seatSpec(id);
+    return spec ? { name: spec.name, description: spec.summary ?? spec.description } : null;
+  };
 
   let emitted = 0;
   for (const model of order) {
@@ -1087,6 +1101,7 @@ export async function emitCuratedCycle(
         hourAgo,
         burstAgo,
         agreementOf,
+        seatOf,
       });
     } catch (err) {
       // One ledger's failure must not cost the others their calls.
@@ -1208,7 +1223,13 @@ async function emitForModel(
     hourAgo: Date;
     burstAgo: Date;
     /** Seats that called a token this cycle, of the calling seats (for FDSA's brief); omitted, unknown. */
-    agreementOf?: (tokenId: string) => { called: number; of: number };
+    agreementOf?: (tokenId: string) => {
+      called: number;
+      of: number;
+      seats?: { id: string; name: string }[];
+    };
+    /** A seat's name and what it is, for FDSA's brief; omitted, unknown. */
+    seatOf?: (id: string) => { name: string; description: string } | null;
   },
 ): Promise<number> {
   // No pace set (the default): nothing to count, every contender has a slot.
@@ -1355,6 +1376,12 @@ async function emitForModel(
         curatedAlertId: result.alertId,
         alertAt: new Date(),
         agreement: clock.agreementOf?.(pick.token.id) ?? null,
+        seat: {
+          id: model,
+          name: modelName ?? clock.seatOf?.(model)?.name ?? model,
+          description: clock.seatOf?.(model)?.description ?? null,
+          tier: pick.decision.tier ?? null,
+        },
       },
       env,
     );
