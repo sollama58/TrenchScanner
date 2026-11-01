@@ -36,10 +36,12 @@ export type FdsaStage = (typeof FDSA_STAGES)[number];
  *   revise brief gained the market block it never received, the position's own tape, the thesis
  *   at entry, what changed since entry and the entry against the alert price; the trade bar is
  *   enforced in code (FDSA_TRADE_MIN_P2X).
+ *   v3 (2026-11-01): screen and decide no longer count a copied name as a reason to drop or pass
+ *   on its own (prompts.ts COPY_GUIDANCE; user ask). The revise prompt is unchanged.
  */
 export const FDSA_PROMPT_VERSIONS: Readonly<Record<FdsaStage, string>> = {
-  screen: "fdsa-screen-v2",
-  decide: "fdsa-decide-v2",
+  screen: "fdsa-screen-v3",
+  decide: "fdsa-decide-v3",
   revise: "fdsa-revise-v2",
 };
 /** The decide stage's version: the one the tab's settings and record name. */
