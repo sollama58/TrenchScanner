@@ -215,7 +215,55 @@ describe("AI review brief", () => {
     // No winner scores and no same-minute reading: those lines are left out, not "unknown".
     expect(brief).not.toContain("winner wallets (wallets that keep selling");
     expect(brief).not.toContain("same minute");
+    expect(brief).not.toContain("same-size buy groups");
+    expect(brief).not.toContain("recurring cohorts");
+    expect(brief).not.toContain("usual hold");
     expect(buildAiReviewBrief(scored, decision)).not.toContain("wallets:");
+  });
+
+  it("says in words what the group, cohort and hold-time readings found (data-uses 2026-11-01)", () => {
+    const brief = buildAiReviewBrief(
+      {
+        ...scored,
+        sameSizeGroupWallets: 4,
+        sameSizeGroupSolShare: 0.315,
+        launchSameSizeWallets: 0,
+        cohortRecentBuyersPct: 40,
+        cohortRecentMaxSize: 6,
+        cohortCreatorLinked: 1,
+        recentBuyersHoldMean: 542,
+      } as ScoredToken,
+      decision,
+    );
+    expect(brief).toContain(
+      "same-size buy groups (3+ wallets each buying once, for the same amount, in the same second: one script's row of wallets): 4 wallets in the newest trades, 31.5% of the recent buy SOL; none among the launch's first buyers",
+    );
+    expect(brief).toContain(
+      "recurring cohorts among the newest buyers (wallets that keep buying the same launches together within seconds): 40.0% of the buyers, largest cohort 6 wallets; a cohort includes a coin's creator: yes",
+    );
+    expect(brief).toContain(
+      "newest buyers' usual hold (their median first-buy-to-first-sell time over past coins, averaged): 9m 2s",
+    );
+    // A page with no group and no cohort says so rather than staying silent: silence reads as unknown.
+    const none = buildAiReviewBrief(
+      {
+        ...scored,
+        sameSizeGroupWallets: 0,
+        sameSizeGroupSolShare: 0,
+        cohortRecentBuyersPct: 0,
+        cohortRecentMaxSize: 0,
+        cohortCreatorLinked: 0,
+        recentBuyersHoldMean: 4000,
+      } as ScoredToken,
+      decision,
+    );
+    expect(none).toContain(
+      "same-size buy groups (3+ wallets each buying once, for the same amount, in the same second: one script's row of wallets): none in the newest trades; launch's first buyers unknown",
+    );
+    expect(none).toContain(
+      "0.0% of the buyers, largest cohort 0 wallets; a cohort includes a coin's creator: no",
+    );
+    expect(none).toContain("averaged): 1h 6m");
   });
 
   it("prints KOL Bundled % and the creator share with transfers counted, as the models read them", () => {
