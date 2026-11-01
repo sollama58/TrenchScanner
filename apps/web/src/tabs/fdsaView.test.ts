@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { describeFdsaPlan, fdsaRateText, fdsaSignedPct, fdsaSignedSol, fdsaSol } from "./fdsaView";
+import {
+  describeFdsaPlan,
+  fdsaAxisTop,
+  fdsaBankedMultiple,
+  fdsaCheckInText,
+  fdsaExitReasonText,
+  fdsaHeld,
+  fdsaLogPos,
+  fdsaMultiple,
+  fdsaRateText,
+  fdsaSignedPct,
+  fdsaSignedSol,
+  fdsaSol,
+} from "./fdsaView";
 
 describe("FDSA tab formatting", () => {
   it("describes a plan in words", () => {
@@ -43,5 +56,38 @@ describe("FDSA tab formatting", () => {
     expect(fdsaSignedPct(12.345)).toBe("+12.3%");
     expect(fdsaSignedPct(-50)).toBe("−50.0%");
     expect(fdsaSignedPct(null)).toBe("–");
+  });
+});
+
+describe("FDSA page formatting", () => {
+  it("names exits and check-ins in words", () => {
+    expect(fdsaExitReasonText("floor")).toBe("Fell to its locked-in floor");
+    expect(fdsaExitReasonText("new_reason")).toBe("new reason");
+    expect(fdsaExitReasonText(null)).toBe("–");
+    expect(fdsaCheckInText("crossed_2x")).toBe("Crossed 2x");
+    expect(fdsaCheckInText("drawdown@3.1")).toBe("Sharp drop from the high");
+  });
+
+  it("formats multiples, holds and what a trade banked", () => {
+    expect(fdsaMultiple(2.4)).toBe("2.40x");
+    expect(fdsaMultiple(12.34)).toBe("12.3x");
+    expect(fdsaMultiple(null)).toBe("–");
+    expect(fdsaBankedMultiple(140)).toBeCloseTo(2.4);
+    expect(fdsaBankedMultiple(null)).toBeNull();
+    expect(fdsaHeld(45_000)).toBe("45s");
+    expect(fdsaHeld(12 * 60_000)).toBe("12m");
+    expect(fdsaHeld(125 * 60_000)).toBe("2h 5m");
+    expect(fdsaHeld(120 * 60_000)).toBe("2h");
+  });
+
+  it("places multiples on a log axis that fits the biggest run", () => {
+    expect(fdsaLogPos(1, 0.5, 2)).toBeCloseTo(0.5);
+    expect(fdsaLogPos(0.1, 0.5, 2)).toBe(0);
+    expect(fdsaLogPos(9, 0.5, 2)).toBe(1);
+    expect(fdsaAxisTop([1.2, 1.5])).toBe(2);
+    expect(fdsaAxisTop([3.5])).toBe(4);
+    expect(fdsaAxisTop([7, null])).toBe(10);
+    expect(fdsaAxisTop([140])).toBe(200);
+    expect(fdsaAxisTop([])).toBe(2);
   });
 });

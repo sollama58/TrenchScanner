@@ -141,7 +141,7 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
 const PORTFOLIO_TAB = { id: "portfolio" as Tab, label: "Portfolio", Icon: WalletIcon };
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
 const ADMIN_TAB = { id: "admin" as Tab, label: "Admin", Icon: ShieldIcon };
-/** FDSA, the AI desk (owner decision 2026-10-31): hidden, so never in the tab bar; #fdsa opens it. */
+/** FDSA, the AI desk's page (user ask 2026-11-01): unlinked, so never in the tab bar; #fdsa opens it. */
 const FDSA_TAB = { id: "fdsa" as Tab, label: "FDSA" };
 /** Asyl, the wallet-link explorer: the tab bar's "Intel" opens it (user ask 2026-10-24). */
 const ASYL_URL = "https://asyl.trenchscanner.app";
@@ -552,7 +552,7 @@ export function App() {
   const portfolioOn = !!pro?.pro;
   const shownTabs = TABS.filter((t) => t.id !== "lighthouse" || lighthouseOn);
   const tabs = isAdmin ? [...shownTabs, ADMIN_TAB] : shownTabs;
-  // #admin and #fdsa without an admin wallet read as the Live tab, so a tab is always the
+  // #admin without an admin wallet reads as the Live tab, so a tab is always the
   // highlighted one and a hidden tab is never drawn for anyone else (routes.ts resolveTab).
   const tab: Tab = resolveTab(wantedTab, { isAdmin, portfolioOn });
   // A new tab, or signing in or out, is a new page: its load gets the full loader.
@@ -741,7 +741,7 @@ export function App() {
                 </Suspense>
               ) : (
                 <GuestLocked
-                  label={TABS.find((t) => t.id === tab)?.label ?? "this"}
+                  label={[...TABS, FDSA_TAB].find((t) => t.id === tab)?.label ?? "this"}
                   onConnect={connectWallet}
                 />
               )}
@@ -778,7 +778,7 @@ export function App() {
                   {tab === "portfolio" && <PortfolioTab />}
                   {tab === "settings" && <SettingsTab goTo={goTo} />}
                   {tab === "admin" && <AdminTab goTo={goTo} />}
-                  {tab === "fdsa" && isAdmin && <FdsaTab />}
+                  {tab === "fdsa" && <FdsaTab />}
                 </Suspense>
               </SectionBoundary>
             </div>

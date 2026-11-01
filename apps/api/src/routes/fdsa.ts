@@ -25,14 +25,15 @@ import {
 } from "@trenchscanner/core";
 
 /**
- * FDSA's hidden tab (#fdsa) and its API (owner decision 2026-10-31): the desk's mode and running
- * state, today's spend against FDSA's own cap, the review counts, open and closed paper positions
- * with their exit plans and plan history, FDSA's record against the goal metric with sample sizes
- * and the pool's base rate, its exit P&L against the default ladder on the same alerts, and the
- * recent reviews with their reasoning.
+ * Admin > FDSA (moved from the hidden #fdsa tab on 2026-11-01, user ask; owner decision
+ * 2026-10-31 for the desk itself) and its API at /admin/fdsa: the desk's mode and running state,
+ * today's spend against FDSA's own cap, the review counts, open and closed paper positions with
+ * their exit plans and plan history, FDSA's record against the goal metric with sample sizes and
+ * the pool's base rate, its exit P&L against the default ladder on the same alerts, and the recent
+ * reviews with their reasoning. The read-only page readers see at #fdsa is routes/fdsaPublic.ts.
  *
- * Admin wallets only (decision 7): registered behind authenticateAdmin in server.ts, so anyone
- * else gets a 401 or 403 and the tab is never linked from the header, nav or a prefetch.
+ * Admin wallets only: registered behind authenticateAdmin in server.ts, so anyone else gets a
+ * 401 or 403.
  *
  * Paper only (decision 6): a mode change to "live" is refused here, and a CHECK on FdsaDesk.mode
  * refuses it in the database too. Nothing here holds a key, builds a transaction or signs; the
@@ -87,7 +88,7 @@ export async function ensureFdsaDesk() {
 }
 
 /** A rate with its sample: wins over graded, null while nothing is graded. */
-interface Rate {
+export interface Rate {
   total: number;
   graded: number;
   wins: number;
@@ -95,14 +96,14 @@ interface Rate {
   /** Clean 4x inside the goal window, over the same graded rows. */
   wins4x: number;
 }
-const rate = (total: number, graded: number, wins: number, wins4x: number): Rate => ({
+export const rate = (total: number, graded: number, wins: number, wins4x: number): Rate => ({
   total,
   graded,
   wins,
   rate: graded > 0 ? wins / graded : null,
   wins4x,
 });
-const num = (v: bigint | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
+export const num = (v: bigint | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 
 /**
  * Whether an outcome row won, in SQL: the same test as curation/labels.ts isWin (a positive
@@ -118,7 +119,7 @@ function planView(raw: unknown) {
   return readFdsaExitPlan(raw);
 }
 
-function pnl(p: { swapInLamports: bigint; feesLamports: bigint; proceedsLamports: bigint }) {
+export function pnl(p: { swapInLamports: bigint; feesLamports: bigint; proceedsLamports: bigint }) {
   const paid = p.swapInLamports + p.feesLamports;
   const back = p.proceedsLamports;
   return {
@@ -405,109 +406,7 @@ export async function registerFdsaRoutes(app: FastifyInstance, { env }: { env: E
   app.get("/record", async (request, reply) => {
     const parsed = recordSchema.safeParse(request.query);
     if (!parsed.success) return badRequest(reply, parsed.error);
-    const since = new Date(Date.now() - parsed.data.days * DAY_MS);
-    const [byVerdict, trades, ladder, latency] = await Promise.all([
-      prisma.$queryRaw<
-        {
-          stage: string;
-          decision: string | null;
-          total: bigint;
-          graded: bigint;
-          wins: bigint;
-          wins4x: bigint;
-        }[]
-      >`
-        SELECT r."stage", r."decision", count(*) AS total,
-               count(*) FILTER (WHERE ${GRADED}) AS graded,
-               count(*) FILTER (WHERE ${WON}) AS wins,
-               count(*) FILTER (WHERE ${WON_4X}) AS wins4x
-        FROM "FdsaReview" r
-        LEFT JOIN "CandidateOutcome" o ON o."id" = r."candidateOutcomeId"
-        WHERE r."createdAt" > ${since} AND r."stage" IN ('screen', 'decide')
-        GROUP BY r."stage", r."decision"`,
-      prisma.$queryRaw<{ total: bigint; graded: bigint; wins: bigint; wins4x: bigint }[]>`
-        SELECT count(*) AS total,
-               count(*) FILTER (WHERE ${GRADED}) AS graded,
-               count(*) FILTER (WHERE ${WON}) AS wins,
-               count(*) FILTER (WHERE ${WON_4X}) AS wins4x
-        FROM "FdsaPosition" p
-        LEFT JOIN "CandidateOutcome" o ON o."id" = p."candidateOutcomeId"
-        WHERE p."deskId" = ${FDSA_DESK_ID} AND p."openedAt" > ${since}`,
-      prisma.fdsaPosition.findMany({
-        where: { deskId: FDSA_DESK_ID, status: { not: "open" }, openedAt: { gt: since } },
-        select: {
-          swapInLamports: true,
-          feesLamports: true,
-          proceedsLamports: true,
-          candidateOutcomeId: true,
-        },
-      }),
-      prisma.$queryRaw<
-        { n: bigint; verdict_p50: number | null; fill_p50: number | null; fill_p90: number | null }[]
-      >`
-        SELECT count(*) AS n,
-               percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM p."verdictAt" - p."signalAt") * 1000) AS verdict_p50,
-               percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM p."openedAt" - p."signalAt") * 1000) AS fill_p50,
-               percentile_cont(0.9) WITHIN GROUP (ORDER BY extract(epoch FROM p."openedAt" - p."signalAt") * 1000) AS fill_p90
-        FROM "FdsaPosition" p
-        WHERE p."deskId" = ${FDSA_DESK_ID} AND p."openedAt" > ${since}`,
-    ]);
-
-    const sum = (rows: typeof byVerdict) =>
-      rate(
-        rows.reduce((s, r) => s + num(r.total), 0),
-        rows.reduce((s, r) => s + num(r.graded), 0),
-        rows.reduce((s, r) => s + num(r.wins), 0),
-        rows.reduce((s, r) => s + num(r.wins4x), 0),
-      );
-    const screen = byVerdict.filter((r) => r.stage === "screen");
-    const decide = byVerdict.filter((r) => r.stage === "decide");
-    const t = trades[0];
-
-    // Paired: only closed trades whose alert has a ladder return. FDSA's is net of the paper fill
-    // penalty and fees, from its own (later) fill; the ladder's is gross, from the alert price.
-    const ladderOutcomes = await outcomesById(ladder.map((p) => p.candidateOutcomeId));
-    const paired = ladder.flatMap((p) => {
-      const sim = ladderOutcomes.get(p.candidateOutcomeId ?? "")?.simReturnPct;
-      return sim === null || sim === undefined ? [] : [{ fdsa: pnl(p).pnlPct ?? 0, ladder: sim }];
-    });
-    const fdsaPct = paired.map((p) => p.fdsa);
-    const ladderPct = paired.map((p) => p.ladder);
-    const mean = (xs: number[]) => (xs.length > 0 ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
-    const l = latency[0];
-
-    return {
-      days: parsed.data.days,
-      promptVersion: FDSA_PROMPT_VERSION,
-      // The pool: every alert FDSA screened, graded on the same label.
-      pool: sum(screen),
-      screen: {
-        shortlisted: sum(screen.filter((r) => r.decision === "shortlist")),
-        dropped: sum(screen.filter((r) => r.decision === "drop")),
-        failed: sum(screen.filter((r) => r.decision === null)),
-      },
-      decide: {
-        trade: sum(decide.filter((r) => r.decision === "trade")),
-        pass: sum(decide.filter((r) => r.decision === "pass")),
-        failed: sum(decide.filter((r) => r.decision === null)),
-      },
-      trades: rate(num(t?.total), num(t?.graded), num(t?.wins), num(t?.wins4x)),
-      target: 0.75,
-      ladder: {
-        summary: describeExitPlan(EXIT_PLAN),
-        closedTrades: ladder.length,
-        paired: paired.length,
-        fdsaAvgPct: mean(fdsaPct),
-        ladderAvgPct: mean(ladderPct),
-        fdsaBetter: paired.filter((_, i) => fdsaPct[i]! > ladderPct[i]!).length,
-      },
-      latency: {
-        trades: num(l?.n),
-        verdictP50Ms: l?.verdict_p50 ?? null,
-        fillP50Ms: l?.fill_p50 ?? null,
-        fillP90Ms: l?.fill_p90 ?? null,
-      },
-    };
+    return fdsaRecord(parsed.data.days);
   });
 
   /** The latest reviews, passes included, with the model's reasoning (stored text, shown as text). */
@@ -560,7 +459,7 @@ export async function registerFdsaRoutes(app: FastifyInstance, { env }: { env: E
 }
 
 /** The alerts' outcome rows by id (FdsaPosition.candidateOutcomeId is a plain id, not a relation). */
-async function outcomesById(ids: (string | null)[]) {
+export async function outcomesById(ids: (string | null)[]) {
   const wanted = [...new Set(ids.filter((x): x is string => !!x))];
   if (wanted.length === 0) return new Map<string, Outcome>();
   const rows = await prisma.candidateOutcome.findMany({
@@ -576,7 +475,7 @@ interface Outcome {
   simReturnPct: number | null;
 }
 /** The goal metric on one alert (curation/labels.ts isWin), null while its window is open. */
-function hit2xOf(o: Outcome | undefined): boolean | null {
+export function hit2xOf(o: Outcome | undefined): boolean | null {
   return o?.finalizedAt && o.labelValue !== null ? isWin({ labelValue: o.labelValue }) : null;
 }
 
@@ -604,5 +503,116 @@ async function reviewCounts(since: Date) {
     revisions: count("revise"),
     failed: rows.filter((r) => r.decision === null).reduce((s, r) => s + r._count._all, 0),
     costUsd: Math.round(rows.reduce((s, r) => s + (r._sum.costUsd ?? 0), 0) * 100) / 100,
+  };
+}
+
+/**
+ * FDSA's record against the goal metric over the last `days` (see GET /record). Shared with the
+ * public #fdsa page (routes/fdsaPublic.ts), which shows the rates and the ladder comparison but
+ * not the prompt version or anything about spend.
+ */
+export async function fdsaRecord(days: number) {
+  const since = new Date(Date.now() - days * DAY_MS);
+  const [byVerdict, trades, ladder, latency] = await Promise.all([
+    prisma.$queryRaw<
+      {
+        stage: string;
+        decision: string | null;
+        total: bigint;
+        graded: bigint;
+        wins: bigint;
+        wins4x: bigint;
+      }[]
+    >`
+      SELECT r."stage", r."decision", count(*) AS total,
+             count(*) FILTER (WHERE ${GRADED}) AS graded,
+             count(*) FILTER (WHERE ${WON}) AS wins,
+             count(*) FILTER (WHERE ${WON_4X}) AS wins4x
+      FROM "FdsaReview" r
+      LEFT JOIN "CandidateOutcome" o ON o."id" = r."candidateOutcomeId"
+      WHERE r."createdAt" > ${since} AND r."stage" IN ('screen', 'decide')
+      GROUP BY r."stage", r."decision"`,
+    prisma.$queryRaw<{ total: bigint; graded: bigint; wins: bigint; wins4x: bigint }[]>`
+      SELECT count(*) AS total,
+             count(*) FILTER (WHERE ${GRADED}) AS graded,
+             count(*) FILTER (WHERE ${WON}) AS wins,
+             count(*) FILTER (WHERE ${WON_4X}) AS wins4x
+      FROM "FdsaPosition" p
+      LEFT JOIN "CandidateOutcome" o ON o."id" = p."candidateOutcomeId"
+      WHERE p."deskId" = ${FDSA_DESK_ID} AND p."openedAt" > ${since}`,
+    prisma.fdsaPosition.findMany({
+      where: { deskId: FDSA_DESK_ID, status: { not: "open" }, openedAt: { gt: since } },
+      select: {
+        swapInLamports: true,
+        feesLamports: true,
+        proceedsLamports: true,
+        candidateOutcomeId: true,
+      },
+    }),
+    prisma.$queryRaw<
+      { n: bigint; verdict_p50: number | null; fill_p50: number | null; fill_p90: number | null }[]
+    >`
+      SELECT count(*) AS n,
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM p."verdictAt" - p."signalAt") * 1000) AS verdict_p50,
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM p."openedAt" - p."signalAt") * 1000) AS fill_p50,
+             percentile_cont(0.9) WITHIN GROUP (ORDER BY extract(epoch FROM p."openedAt" - p."signalAt") * 1000) AS fill_p90
+      FROM "FdsaPosition" p
+      WHERE p."deskId" = ${FDSA_DESK_ID} AND p."openedAt" > ${since}`,
+  ]);
+
+  const sum = (rows: typeof byVerdict) =>
+    rate(
+      rows.reduce((s, r) => s + num(r.total), 0),
+      rows.reduce((s, r) => s + num(r.graded), 0),
+      rows.reduce((s, r) => s + num(r.wins), 0),
+      rows.reduce((s, r) => s + num(r.wins4x), 0),
+    );
+  const screen = byVerdict.filter((r) => r.stage === "screen");
+  const decide = byVerdict.filter((r) => r.stage === "decide");
+  const t = trades[0];
+
+  // Paired: only closed trades whose alert has a ladder return. FDSA's is net of the paper fill
+  // penalty and fees, from its own (later) fill; the ladder's is gross, from the alert price.
+  const ladderOutcomes = await outcomesById(ladder.map((p) => p.candidateOutcomeId));
+  const paired = ladder.flatMap((p) => {
+    const sim = ladderOutcomes.get(p.candidateOutcomeId ?? "")?.simReturnPct;
+    return sim === null || sim === undefined ? [] : [{ fdsa: pnl(p).pnlPct ?? 0, ladder: sim }];
+  });
+  const fdsaPct = paired.map((p) => p.fdsa);
+  const ladderPct = paired.map((p) => p.ladder);
+  const mean = (xs: number[]) => (xs.length > 0 ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
+  const l = latency[0];
+
+  return {
+    days: days,
+    promptVersion: FDSA_PROMPT_VERSION,
+    // The pool: every alert FDSA screened, graded on the same label.
+    pool: sum(screen),
+    screen: {
+      shortlisted: sum(screen.filter((r) => r.decision === "shortlist")),
+      dropped: sum(screen.filter((r) => r.decision === "drop")),
+      failed: sum(screen.filter((r) => r.decision === null)),
+    },
+    decide: {
+      trade: sum(decide.filter((r) => r.decision === "trade")),
+      pass: sum(decide.filter((r) => r.decision === "pass")),
+      failed: sum(decide.filter((r) => r.decision === null)),
+    },
+    trades: rate(num(t?.total), num(t?.graded), num(t?.wins), num(t?.wins4x)),
+    target: 0.75,
+    ladder: {
+      summary: describeExitPlan(EXIT_PLAN),
+      closedTrades: ladder.length,
+      paired: paired.length,
+      fdsaAvgPct: mean(fdsaPct),
+      ladderAvgPct: mean(ladderPct),
+      fdsaBetter: paired.filter((_, i) => fdsaPct[i]! > ladderPct[i]!).length,
+    },
+    latency: {
+      trades: num(l?.n),
+      verdictP50Ms: l?.verdict_p50 ?? null,
+      fillP50Ms: l?.fill_p50 ?? null,
+      fillP90Ms: l?.fill_p90 ?? null,
+    },
   };
 }
