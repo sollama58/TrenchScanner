@@ -8,12 +8,14 @@ import {
   type Env,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import { createFdsaDeskRunner } from "./fdsaDeskJob.js";
 
 /**
  * Paper trading (packages/core/src/trading/paper.ts): admins' strategies run on live signals and
  * live Jupiter quotes with simulated SOL. It reads (quotes, prices, mint accounts) and never signs
  * or sends, so it runs on the scanner whether or not the real bot is on, and does nothing until an
- * admin starts a strategy.
+ * admin starts a strategy. The FDSA paper desk runs after the strategies in the same job
+ * (fdsaDeskJob.ts), on the same clients.
  */
 export function createPaperTradingRunner(env: Env): () => Promise<JobRunMeta> {
   const admins = adminWalletSet(env);
@@ -32,8 +34,14 @@ export function createPaperTradingRunner(env: Env): () => Promise<JobRunMeta> {
     ? async (notes: Parameters<typeof sendTradeNotes>[0]) =>
         void (await sendTradeNotes(notes, { telegram, admins }))
     : undefined;
+  const runFdsa = createFdsaDeskRunner(env, { swap, rpc, telegram, admins });
   return async () => {
     const summary = await runPaperTrading({ swap, rpc, canTrade: (wallet) => admins.has(wallet), notify });
-    return { ...summary };
+    // Its own failure is its own: it never fails the strategies' run, nor theirs it.
+    const fdsa = await runFdsa().catch((err: unknown) => ({
+      fdsaErrors: 1,
+      fdsaError: String(err instanceof Error ? err.message : err).slice(0, 200),
+    }));
+    return { ...summary, ...fdsa };
   };
 }
