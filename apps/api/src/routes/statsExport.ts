@@ -44,6 +44,7 @@ export const EXPORT_DATASETS = [
   "narratives",
   "wallets",
   "wallet-activity",
+  "tape",
   "top-models",
   "telegram-sent",
   "push-sent",
@@ -900,6 +901,72 @@ async function* walletActivityPages(since: Date, until: Date, pageSize = EXPORT_
 }
 
 /**
+ * The per-trade tape (TokenWalletActivity.trades, written by the worker's trade-tape job): one
+ * record per stored trade, with the wallet-activity row's keys and the tape's grade beside it, so
+ * trade-level behaviour can be measured off the database (round trips, buys and sells that match
+ * another wallet's, groups selling in one second, buy-size sequences). Windowed on when the tape
+ * was read (createdAt), like wallet-activity. A wallet keeps TAPE_TRADES_PER_WALLET trades at most
+ * (its first and last halves when it had more), and a trade's time is its block time, to the
+ * second; no transaction signature is stored (data-uses evaluation 2026-11-01).
+ */
+const TAPE_COLUMNS = [
+  "wallet",
+  "tokenId",
+  "mintAddress",
+  "symbol",
+  "readAt",
+  "tapeStatus",
+  "tapeReason",
+  "anchorAt",
+  "hit2xIn15m",
+  "disqualified",
+  "stoppedAt",
+  "hit2xAt",
+  "at",
+  "side",
+  "sol",
+  "tokens",
+] as const;
+
+type TapeRow = Rec & { id: string; readAt: Date; trades: unknown };
+
+/** One stored trade as the export writes it; a malformed entry is skipped rather than failing the export. */
+function tapeRecords({ trades, id: _id, ...keys }: TapeRow): Rec[] {
+  if (!Array.isArray(trades)) return [];
+  const out: Rec[] = [];
+  for (const t of trades) {
+    if (!Array.isArray(t) || t.length < 4) continue;
+    const [atMs, side, sol, tokens] = t as unknown[];
+    if (typeof atMs !== "number" || (side !== 1 && side !== -1)) continue;
+    out.push({ ...keys, at: new Date(atMs), side: side === 1 ? "buy" : "sell", sol, tokens });
+  }
+  return out;
+}
+
+async function* tapePages(since: Date, until: Date, pageSize = EXPORT_PAGE_SIZE) {
+  let last: { at: Date; id: string } | null = null;
+  for (;;) {
+    const rows: TapeRow[] = await prisma.$queryRaw`
+      SELECT a."id", a."wallet", a."tokenId", tk."mintAddress", tk."symbol",
+             a."createdAt" AS "readAt", t."status" AS "tapeStatus", t."reason" AS "tapeReason", t."anchorAt",
+             co."hit2xIn15m", co."disqualified", co."stoppedAt", co."hit2xAt", a."trades"
+      FROM "TokenWalletActivity" a
+      JOIN "Token" tk ON tk."id" = a."tokenId"
+      LEFT JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId"
+      LEFT JOIN "CandidateOutcome" co ON co."id" = t."outcomeId"
+      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND a."trades" IS NOT NULL
+        AND (${last === null} OR (a."createdAt", a."id") > (${last?.at ?? since}, ${last?.id ?? ""}))
+      ORDER BY a."createdAt" ASC, a."id" ASC
+      LIMIT ${pageSize}`;
+    if (rows.length === 0) return;
+    yield rows.flatMap(tapeRecords);
+    const tail = rows[rows.length - 1]!;
+    last = { at: tail.readAt, id: tail.id };
+    if (rows.length < pageSize) return;
+  }
+}
+
+/**
  * The stored Top Models pick per refresh slot (TopModelsPick, curation/topModels.ts): the models
  * the default feed followed from slotStart, as first decided for that slot. Windowed on slotStart.
  * A model that later left the roster is still listed here; readers drop it when they read the pick.
@@ -1125,6 +1192,8 @@ function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): 
       return walletPages(pageSize);
     case "wallet-activity":
       return walletActivityPages(since, until, pageSize);
+    case "tape":
+      return tapePages(since, until, pageSize);
     case "top-models":
       return topModelsPages(since, until, pageSize);
     case "telegram-sent":
@@ -1215,6 +1284,8 @@ export function csvColumns(dataset: ExportDataset): string[] {
       return [...WALLET_COLUMNS];
     case "wallet-activity":
       return [...WALLET_ACTIVITY_COLUMNS];
+    case "tape":
+      return [...TAPE_COLUMNS];
     case "top-models":
       return [...TOP_MODELS_COLUMNS];
     case "telegram-sent":
