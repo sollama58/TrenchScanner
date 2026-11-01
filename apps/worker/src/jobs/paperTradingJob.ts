@@ -36,12 +36,22 @@ export function createPaperTradingRunner(env: Env): () => Promise<JobRunMeta> {
     : undefined;
   const runFdsa = createFdsaDeskRunner(env, { swap, rpc, telegram, admins });
   return async () => {
-    const summary = await runPaperTrading({ swap, rpc, canTrade: (wallet) => admins.has(wallet), notify });
-    // Its own failure is its own: it never fails the strategies' run, nor theirs it.
+    // Each pass's failure is its own. A strategies pass that throws (a pool timeout, a rate limit)
+    // must not skip the FDSA pass behind it: FDSA's open positions hold their -50% stop only while
+    // its pass runs (owner decision 2026-10-31, decision 8; FDSA wiring check 2026-11-01). The
+    // strategies' error is rethrown after FDSA has run, so the job still records the failure.
+    let strategies: Awaited<ReturnType<typeof runPaperTrading>> | null = null;
+    let strategiesError: unknown = null;
+    try {
+      strategies = await runPaperTrading({ swap, rpc, canTrade: (wallet) => admins.has(wallet), notify });
+    } catch (err) {
+      strategiesError = err;
+    }
     const fdsa = await runFdsa().catch((err: unknown) => ({
       fdsaErrors: 1,
       fdsaError: String(err instanceof Error ? err.message : err).slice(0, 200),
     }));
-    return { ...summary, ...fdsa };
+    if (strategiesError !== null) throw strategiesError;
+    return { ...strategies, ...fdsa };
   };
 }
