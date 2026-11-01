@@ -124,6 +124,8 @@ describe.skipIf(!dbAvailable)("admin wallet routes", () => {
 
     const wallet = (await call(`/admin/wallets/${RISKY}`, "admin")).json();
     expect(wallet.risk.score).toBe(99.5);
+    expect(wallet.risk.walletScore).toBeUndefined();
+    expect(wallet.cohort).toBeNull();
     expect(wallet.coins[0]).toMatchObject({ mint: MINT, roles: ["sniper", "buyer #1", "sold into stop"] });
 
     const coin = (await call(`/admin/wallets/coin/${MINT}`, "admin")).json();

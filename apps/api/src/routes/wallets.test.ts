@@ -78,6 +78,9 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
           snipes: 1,
           solIn: 3,
           solOut: 4,
+          medianHoldSec: 95,
+          churnCoins: 2,
+          exitsBeforeStop: 3,
           lastSeenAt: new Date(),
           computedAt: new Date(),
         },
@@ -94,6 +97,17 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
           computedAt: new Date(),
         },
       ],
+    });
+    await prisma.walletCohort.create({
+      data: {
+        wallet: WALLET,
+        cohortId: SIBLING,
+        size: 4,
+        coins: 7,
+        creatorCoins: 1,
+        lastSeenAt: new Date(),
+        computedAt: new Date(),
+      },
     });
     await prisma.walletFunder.createMany({
       data: [
@@ -124,6 +138,7 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
 
   afterAll(async () => {
     await prisma.walletRisk.deleteMany({ where: { wallet: { in: WALLETS } } });
+    await prisma.walletCohort.deleteMany({ where: { wallet: { in: WALLETS } } });
     await prisma.walletFunder.deleteMany({ where: { wallet: { in: WALLETS } } });
     await prisma.whitelist.deleteMany({ where: { walletAddress: `${TAG}-user` } });
     await prisma.burnCreditEntry.deleteMany({ where: { wallet: `${TAG}-user` } });
@@ -144,7 +159,18 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
     expect(res.statusCode).toBe(200);
     const p = res.json<WalletProfile>();
     expect(p.live).toBeNull();
-    expect(p.risk).toMatchObject({ score: 81, coins: 6, dumps: 5, dumper: true, winner: false });
+    expect(p.risk).toMatchObject({
+      score: 81,
+      coins: 6,
+      dumps: 5,
+      dumper: true,
+      winner: false,
+      medianHoldSec: 95,
+      churnCoins: 2,
+      exitsBeforeStop: 3,
+      roundTrips: null,
+    });
+    expect(p.cohort).toMatchObject({ id: SIBLING, size: 4, coins: 7, creatorCoins: 1 });
     expect(p.funder).toMatchObject({ status: "found", wallet: FUNDER, amountSol: 1.5, label: null });
     expect(p.labels.map((l) => l.text)).toEqual(["Dev", "Risky", "Known dumper"]);
     expect(p.linked).toEqual([

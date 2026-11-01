@@ -358,6 +358,20 @@ export interface Snapshot {
   blockZeroHeldPct?: number | null;
   blockZeroBuyers?: number | null;
   blockZeroBoughtPct?: number | null;
+  /**
+   * The live-tape group readings (2026-11-01, the Cohort tile): the largest group of single-buy
+   * wallets that paid the same SOL in one second among the newest trades and its share of the
+   * recent buy SOL (0-1); the same at launch; the newest buyers' mean hold time in seconds; and the
+   * recurring-cohort reading: % of the newest buyers in a cohort, the largest cohort's size, and
+   * whether a cohort includes a coin's creator. Null or absent where not read, and on scans before.
+   */
+  sameSizeGroupWallets?: number | null;
+  sameSizeGroupSolShare?: number | null;
+  launchSameSizeWallets?: number | null;
+  recentBuyersHoldMean?: number | null;
+  cohortRecentBuyersPct?: number | null;
+  cohortRecentMaxSize?: number | null;
+  cohortCreatorLinked?: boolean | null;
   /** How many of the top 25 holders (pools and the creator aside) are on fresh wallets, of how many read; null when not checked. */
   freshTopHolderCount?: number | null;
   freshTopHoldersChecked?: number | null;
@@ -1791,6 +1805,7 @@ export type CardField =
   | "snipers"
   | "sniperTop10"
   | "blockZero"
+  | "cohort"
   | "linked"
   | "cexFunded"
   | "kolBundled"

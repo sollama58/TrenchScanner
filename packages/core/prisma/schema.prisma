@@ -1540,6 +1540,21 @@ model TokenSnapshot {
   blockZeroHeldPct        Float?
   blockZeroBuyers         Int?
   blockZeroBoughtPct      Float?
+  /// The live-tape group readings (user ask 2026-11-01, shown on the card's Cohort tile): the
+  /// largest group of single-buy wallets that paid the same SOL in one second among the coin's
+  /// newest trades, their share of the recent buy SOL (0-1), the same at launch (the create's own
+  /// slot, launchSnipers.ts); the newest buyers' mean median hold time in seconds from the wallet
+  /// book; and the recurring-cohort reading (wallets/cohorts.ts): the % of the newest buyers in a
+  /// cohort, the largest cohort's size, and whether a cohort includes a coin's creator. Written by
+  /// the scan from 2026-11-01; null on older rows, the fast lane's rows, and where the reading had
+  /// no page or no book. Display and record only: no filter or model reads them from here.
+  sameSizeGroupWallets    Int?
+  sameSizeGroupSolShare   Float?
+  launchSameSizeWallets   Int?
+  recentBuyersHoldMean    Int?
+  cohortRecentBuyersPct   Float?
+  cohortRecentMaxSize     Int?
+  cohortCreatorLinked     Boolean?
   /// How many of the chain's top 25 holders (pools and the creator aside) are on fresh wallets, of
   /// how many holders read (Fresh as "N/25", user decision 2026-10-14). Null until the top-25 list
   /// and every one of its wallets is read, and on scans before then; freshTop10WalletPct stands in.

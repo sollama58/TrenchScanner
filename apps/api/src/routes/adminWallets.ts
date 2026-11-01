@@ -181,8 +181,10 @@ const roleList = (a: {
   ].filter((r): r is string => typeof r === "string");
 
 async function walletDetail(wallet: string) {
-  const [risk, activity] = await Promise.all([
+  const [risk, cohort, activity] = await Promise.all([
     prisma.walletRisk.findUnique({ where: { wallet } }),
+    // The recurring cohort it is in (the hourly cohort book, 2026-11-01); null when in none.
+    prisma.walletCohort.findUnique({ where: { wallet } }),
     prisma.tokenWalletActivity.findMany({
       where: { wallet },
       orderBy: { createdAt: "desc" },
@@ -204,6 +206,9 @@ async function walletDetail(wallet: string) {
   return {
     wallet,
     risk: shown,
+    cohort: cohort
+      ? { id: cohort.cohortId, size: cohort.size, coins: cohort.coins, creatorCoins: cohort.creatorCoins }
+      : null,
     coins: activity.map((a) => {
       const o = a.token.tradeTape?.outcomeId ? outcomes.get(a.token.tradeTape.outcomeId) : undefined;
       return {

@@ -151,6 +151,43 @@ describe("snapshotDataFor: the holder reading", () => {
     ).toBe("dexscreener_live");
   });
 
+  it("records the group readings, creator-linked as a boolean, and leaves unread ones null", () => {
+    const read = snapshotDataFor(
+      "t1",
+      {
+        ...scored,
+        sameSizeGroupWallets: 4,
+        sameSizeGroupSolShare: 0.31,
+        launchSameSizeWallets: 3,
+        recentBuyersHoldMean: 95,
+        cohortRecentBuyersPct: 12.5,
+        cohortRecentMaxSize: 5,
+        cohortCreatorLinked: 1,
+      } as ScoredToken,
+      "scan",
+    );
+    expect(read).toMatchObject({
+      sameSizeGroupWallets: 4,
+      sameSizeGroupSolShare: 0.31,
+      launchSameSizeWallets: 3,
+      recentBuyersHoldMean: 95,
+      cohortRecentBuyersPct: 12.5,
+      cohortRecentMaxSize: 5,
+      cohortCreatorLinked: true,
+    });
+    expect(
+      snapshotDataFor(
+        "t1",
+        { ...scored, cohortRecentMaxSize: 2, cohortCreatorLinked: 0 } as ScoredToken,
+        "scan",
+      ).cohortCreatorLinked,
+    ).toBe(false);
+    const unread = snapshotDataFor("t1", scored, "fast");
+    expect(unread.sameSizeGroupWallets).toBeUndefined();
+    expect(unread.cohortRecentMaxSize).toBeUndefined();
+    expect(unread.cohortCreatorLinked).toBeUndefined();
+  });
+
   it("leaves the three lists off when the writer says the reading is unchanged", () => {
     const data = snapshotDataFor("t1", scored, "scan", { holderReading: false });
     expect(data.linkedHolders).toBeUndefined();

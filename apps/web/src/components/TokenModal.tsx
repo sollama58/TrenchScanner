@@ -67,6 +67,7 @@ import {
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   SniperTile,
   BlockZeroTile,
+  CohortTile,
   WalletStat,
   ageNow,
   walletFee,
@@ -3307,6 +3308,11 @@ function StatsCard({ card, liquidity = false }: { card: Card; liquidity?: boolea
           waitTile("Block 0")
         ) : (
           <BlockZeroTile pct={r.blockZeroPct} buyers={r.blockZeroBuyers} atAlert={r.blockZeroAtAlert} />
+        )}
+        {pending && r.cohort === null ? (
+          waitTile("Cohort")
+        ) : (
+          <CohortTile reading={r.cohort} atAlert={r.cohortAtAlert} />
         )}
         <div
           className={

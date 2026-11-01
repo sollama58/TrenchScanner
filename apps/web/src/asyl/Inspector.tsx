@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ago, usd } from "../format";
+import { ago, holdTimeText, usd } from "../format";
 import { LinkSwatch, imageSources } from "./GraphView";
 import { asylApi, avatarUrl, type AsylMe, type BridgeMove, type Dossier } from "./asylApi";
 import { dashboardUrl } from "../returnTo";
@@ -387,6 +387,40 @@ export function Inspector({
                     <dt>Risk</dt>
                     <dd>
                       {dossier.risk.score}/100 · {dossier.risk.dumps} dumps · {dossier.risk.snipes} snipes
+                    </dd>
+                  </>
+                )}
+                {dossier.risk &&
+                  (dossier.risk.medianHoldSec != null ||
+                    dossier.risk.exitsBeforeStop != null ||
+                    dossier.risk.churnCoins != null) && (
+                    <>
+                      <dt title="Typical hold: median time from first buy to first sell. Exits: coins it held at an alert and sold before its stop. Churn: coins it bought and sold twice or more on a clean trade.">
+                        Behaviour
+                      </dt>
+                      <dd>
+                        {[
+                          dossier.risk.medianHoldSec != null
+                            ? `holds ${holdTimeText(dossier.risk.medianHoldSec)}`
+                            : null,
+                          dossier.risk.exitsBeforeStop != null
+                            ? `${dossier.risk.exitsBeforeStop} exits before stop`
+                            : null,
+                          dossier.risk.churnCoins != null ? `${dossier.risk.churnCoins} churned` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </dd>
+                    </>
+                  )}
+                {dossier.cohort && (
+                  <>
+                    <dt title="Wallets that keep first-buying the same launches within seconds of each other">
+                      Cohort
+                    </dt>
+                    <dd>
+                      {dossier.cohort.size} wallets · {dossier.cohort.coins} coins together
+                      {dossier.cohort.creatorCoins > 0 ? ` · ${dossier.cohort.creatorCoins} by a member` : ""}
                     </dd>
                   </>
                 )}

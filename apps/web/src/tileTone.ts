@@ -56,5 +56,10 @@ export const TILE_RED_KOL_BUNDLED_PCT = 30;
 /** Transferred Supply %: red once a tenth of supply moved holder to holder (user ask 2026-10-16). */
 export const TILE_RED_TRANSFERRED_PCT = 10;
 export const TILE_RED_FIRST_BUYERS = 20;
+/**
+ * Cohort: red once half the newest buyers belong to a recurring cohort, and at once when a cohort
+ * includes a coin's creator (2026-11-01). No safety screen cut reads it.
+ */
+export const TILE_RED_COHORT_PCT = 50;
 /** The first-buyers count the bound is set on; a launch read over fewer scales it the same way. */
 export const TILE_FIRST_BUYERS_OF = 25;

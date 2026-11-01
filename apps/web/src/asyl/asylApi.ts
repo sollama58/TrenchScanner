@@ -242,7 +242,13 @@ export interface Dossier {
     earlyWins: number;
     winScore: number;
     pnl: { coins: number; medianSol: number | null; medianPct: number | null } | null;
+    /** The behaviour counters (2026-11-01); null before the rebuild that added them. */
+    medianHoldSec?: number | null;
+    churnCoins?: number | null;
+    exitsBeforeStop?: number | null;
   } | null;
+  /** The recurring cohort it is in (2026-11-01); null when in none. */
+  cohort?: { id: string; size: number; coins: number; creatorCoins: number } | null;
   totals: { coins: number; wins: number; solIn: number; solOut: number; netSol: number; profitable: number };
 }
 
