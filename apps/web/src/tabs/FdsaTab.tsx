@@ -74,7 +74,11 @@ interface FdsaState {
     resetsAt: string;
   };
   reviews: { today: ReviewCounts; last24h: ReviewCounts };
-  worker: { scanAt: string | null };
+  worker: {
+    scanAt: string | null;
+    /** The scanner's FDSA heartbeat line (worker fdsa/review.ts fdsaHeartbeat); null before it reports. */
+    fdsa: Record<string, string | number | boolean | null> | null;
+  };
 }
 
 interface ReviewCounts {
@@ -171,6 +175,7 @@ interface Review {
   createdAt: string;
 }
 
+const numOrNull = (v: unknown) => (typeof v === "number" ? v : null);
 const errorText = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : String(e));
 const pct = (v: number | null) => (v === null ? "–" : `${Math.round(v * 100)}%`);
 const multiple = (v: number | null | undefined) => (v === null || v === undefined ? "–" : `${v.toFixed(2)}x`);
@@ -344,6 +349,16 @@ function DeskPanel({ s, reload }: { s: FdsaState; reload: () => void }) {
           sub={`${fdsaSol(d.cashLamports, 2)} cash`}
         />
       </div>
+      {s.worker.fdsa?.enabled === true && (
+        <p className="muted small">
+          Worker: {String(s.worker.fdsa.queued ?? 0)} queued, {String(s.worker.fdsa.inFlight ?? 0)} in flight;
+          alert to verdict {ms(numOrNull(s.worker.fdsa.alertToVerdictP50Ms))} median
+          {Number(s.worker.fdsa.staleTrades ?? 0) > 0 &&
+            `; ${String(s.worker.fdsa.staleTrades)} trade verdicts landed after the alert went stale`}
+          {typeof s.worker.fdsa.lastError === "string" && `; last error: ${s.worker.fdsa.lastError}`}.
+          Reported {when(s.worker.scanAt)}.
+        </p>
+      )}
       <p className="muted small">
         Screen: {s.settings.screenModel}, shortlists at {s.settings.screenMinScore}. Decide:{" "}
         {s.settings.decideModel} at {s.settings.decideEffort} effort. Prompt {s.settings.promptVersion}.

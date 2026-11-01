@@ -203,7 +203,14 @@ export async function registerFdsaRoutes(app: FastifyInstance, { env }: { env: E
       },
       settings: {
         // null when the scanner hasn't reported it (an older worker, or no scan yet).
-        enabled: worker && "fdsaEnabled" in worker.settings ? setting("fdsaEnabled", false) : null,
+        // The review pipeline's own heartbeat line (worker fdsa/review.ts fdsaHeartbeat) first,
+        // then the scanner's reported env.
+        enabled:
+          typeof workerFdsa?.enabled === "boolean"
+            ? workerFdsa.enabled
+            : worker && "fdsaEnabled" in worker.settings
+              ? setting("fdsaEnabled", false)
+              : null,
         apiKeySet: worker?.credentials.anthropicApiKey ?? null,
         screenModel: setting("fdsaScreenModel", env.FDSA_SCREEN_MODEL),
         screenMinScore: setting("fdsaScreenMinScore", env.FDSA_SCREEN_MIN_SCORE),

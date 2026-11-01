@@ -192,6 +192,27 @@ describe.skipIf(!dbAvailable)("FDSA routes", () => {
     expect(body.reviews.today).toMatchObject({ screened: 0, shortlistRate: null });
   });
 
+  it("reads whether FDSA runs from the scanner's heartbeat, not the API's env", async () => {
+    const before = await prisma.systemHeartbeat.findUnique({ where: { job: "scan" } });
+    try {
+      await prisma.systemHeartbeat.upsert({
+        where: { job: "scan" },
+        update: { meta: { fdsa: { enabled: true, queued: 2 } } },
+        create: { job: "scan", lastRunAt: new Date(), meta: { fdsa: { enabled: true, queued: 2 } } },
+      });
+      const body = (await call("GET", "/fdsa", "admin")).json();
+      expect(body.settings.enabled).toBe(true);
+      expect(body.worker.fdsa).toMatchObject({ enabled: true, queued: 2 });
+    } finally {
+      if (before) {
+        await prisma.systemHeartbeat.update({
+          where: { job: "scan" },
+          data: { meta: before.meta ?? undefined, lastRunAt: before.lastRunAt },
+        });
+      } else await prisma.systemHeartbeat.deleteMany({ where: { job: "scan" } });
+    }
+  });
+
   it("refuses Live, and resumes, pauses and edits the paper limits", async () => {
     const live = await call("PATCH", "/fdsa", "admin", { mode: "live" });
     expect(live.statusCode).toBe(400);
