@@ -28,6 +28,7 @@ export type HeartbeatJob =
   | "wallet-risk"
   | "dev-launch-risk"
   | "kol-side-wallets"
+  | "wallet-cohorts"
   | "kol-wallets"
   | "telegram-dispatch"
   | "web-push-dispatch"
@@ -100,6 +101,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "dev-launch-risk": "trainer",
   // Batch SQL over the trade tape, like wallet-risk.
   "kol-side-wallets": "trainer",
+  // Batch SQL over the trade tape, like wallet-risk (walletCohortJob.ts).
+  "wallet-cohorts": "trainer",
   // The scanner: the service SOLANA_TRACKER_API_KEY is set on, beside the other provider keys.
   "kol-wallets": "scanner",
 };
@@ -248,6 +251,7 @@ export const JOB_LOCKED_JOBS: readonly HeartbeatJob[] = [
   "trade-tape",
   "wallet-risk",
   "dev-launch-risk",
+  "wallet-cohorts",
 ];
 
 /**

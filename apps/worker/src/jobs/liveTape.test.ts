@@ -5,6 +5,7 @@ import {
   liveFlagsOf,
   liveLaunchBagsOf,
   livePageOf,
+  liveCohortOn,
   liveRecentBuyersHoldOn,
   liveSameSizeGroupOn,
   liveWalletScoreOf,
@@ -234,6 +235,17 @@ describe("live tape", () => {
     expect(liveRecentBuyersHoldOn(page, book, new Set([RISKY]))).toBe(210);
     expect(liveRecentBuyersHoldOn(page, undefined, undefined)).toBeNull();
     expect(liveRecentBuyersHoldOn(undefined, book, undefined)).toBeNull();
+    // The cohort reading, against the cohort book, with the coin's creator in cohort `a`.
+    const cohorts = (w: string) =>
+      w === "a" || w === "dev" ? { cohortId: "a", size: 4, creatorCoins: 0 } : undefined;
+    expect(liveCohortOn(page, cohorts, "dev")).toEqual({
+      cohortRecentBuyersPct: 25,
+      cohortRecentMaxSize: 4,
+      cohortCreatorLinked: 1,
+    });
+    expect(liveCohortOn(page, cohorts, null)?.cohortCreatorLinked).toBe(0);
+    expect(liveCohortOn(page, undefined, null)).toBeNull();
+    expect(liveCohortOn(undefined, cohorts, null)).toBeNull();
   });
 
   it("scores the page it was handed, whose buyers the own-tape read saw, when a newer page lands after", async () => {

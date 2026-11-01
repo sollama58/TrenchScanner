@@ -261,6 +261,14 @@ export interface OnChainProfile {
    */
   recentBuyersHoldMean?: number;
   /**
+   * The recurring wallet cohorts (wallets/cohorts.ts, the trainer's hourly WalletCohort book) among
+   * the newest buyers: % of them in a cohort, the largest cohort's size, and 1 when a cohort has a
+   * creator among its members. Undefined without the page or the book. Recorded as model inputs only.
+   */
+  cohortRecentBuyersPct?: number;
+  cohortRecentMaxSize?: number;
+  cohortCreatorLinked?: number;
+  /**
    * How many of the chain's top 25 holders (pools and the creator aside) are on fresh wallets
    * (first used, or used again after a week idle, within the last day), and how many holders that
    * read (user decision 2026-10-14: Fresh as "N/25"). Undefined until the top-25 list is in and

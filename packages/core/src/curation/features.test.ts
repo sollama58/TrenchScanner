@@ -64,6 +64,7 @@ import {
   WALLET_RISK_COVERAGE_FEATURES,
   LIVE_FLAG_FEATURES,
   GROUP_HOLD_FEATURES,
+  COHORT_FEATURES,
   WALLET_WIN_FEATURES,
   WALLET_RISK_FEATURES,
   TRADE_FLOW_FEATURES,
@@ -449,7 +450,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("recentBuyersHoldMean");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("cohortCreatorLinked");
     expect(CANDIDATE_FEATURE_NAMES).toContain("pathRet30mPerMin");
     expect(CANDIDATE_FEATURE_NAMES).toContain("devLaunchFamilyLaunches");
     // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
@@ -604,6 +605,19 @@ describe("scoredFromFeatures - replay round trip", () => {
     });
     const none = buildCandidateFeatures(scored());
     for (const name of GROUP_HOLD_FEATURES) {
+      expect(none[name]).toBeNull();
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
+  });
+
+  it("records the cohort readings, recorded only, unknown without them", () => {
+    const f = buildCandidateFeatures(
+      scored({ cohortRecentBuyersPct: 40, cohortRecentMaxSize: 6, cohortCreatorLinked: 1 }),
+    );
+    expect(f).toMatchObject({ cohortRecentBuyersPct: 40, cohortRecentMaxSize: 6, cohortCreatorLinked: 1 });
+    const none = buildCandidateFeatures(scored());
+    for (const name of COHORT_FEATURES) {
       expect(none[name]).toBeNull();
       expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);

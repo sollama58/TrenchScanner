@@ -3589,6 +3589,41 @@ model KolSideWallets {
   @@index([coins30d])
 }
 
+/// Recurring wallet cohorts (data-uses evaluation 2026-11-01, core's wallets/cohorts.ts): wallets that
+/// keep first-buying the same launches within two seconds of each other in the launch's first two
+/// minutes, in 2+ coins that are a quarter or more of everything either did. Rebuilt whole every
+/// hour by the trainer's walletCohortJob.ts from the trade tape (TokenWalletActivity). Read by the
+/// scanner for the recorded-only cohort inputs (COHORT_FEATURES); shown nowhere yet.
+model WalletCohort {
+  wallet       String   @id
+  /// The cohort's smallest wallet address: the same id from one rebuild to the next.
+  cohortId     String
+  /// Wallets in the cohort.
+  size         Int
+  /// Coins this wallet first-bought with a cohort-mate.
+  coins        Int
+  /// Of the cohort's coins, those whose creator is a member: a dev's own row of wallets.
+  creatorCoins Int
+  lastSeenAt   DateTime
+  computedAt   DateTime
+
+  @@index([cohortId])
+}
+
+/// The kept pairs behind WalletCohort: two cohort wallets and the coins they first-bought together.
+model WalletCohortPair {
+  /// "a:b" with a < b.
+  id         String   @id
+  a          String
+  b          String
+  coins      Int
+  lastAt     DateTime
+  computedAt DateTime
+
+  @@index([a])
+  @@index([b])
+}
+
 /// Likely side wallets of a KOL (user ask 2026-10-14): a wallet that, over the last 24 hours, first
 /// bought more than POSSIBLE_SIDE_MIN_PCT of the KOL's tracked coins within a few minutes of it,
 /// on more than POSSIBLE_SIDE_MIN_SHARED coins (kolSideWalletsJob.ts). Rebuilt whole every hour.

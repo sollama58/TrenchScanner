@@ -1,6 +1,7 @@
 import {
   chainLaunchBags,
   chainWindowFlow,
+  cohortReading,
   createLogger,
   liveFlags,
   liveTraders,
@@ -10,6 +11,8 @@ import {
   tradesFromChainTransactionsPriced,
   walletScoreReading,
   winnerFollowReading,
+  type CohortReading,
+  type CohortRow,
   type HeliusClient,
   type LaunchBags,
   type LiveFlagsReading,
@@ -315,6 +318,19 @@ export function liveRecentBuyersHoldOn(
 ): number | null {
   if (!lookup || !page) return null;
   return recentBuyersHoldMean(page.trades, (wallet) => lookup(wallet)?.medianHoldSec, ownTape);
+}
+
+/**
+ * The recurring-cohort reading of a page's buyers (core's cohortReading) against the cohort book,
+ * or null without the page or before the book's first load. `creator` is the coin's creator when known.
+ */
+export function liveCohortOn(
+  page: LiveTapePage | undefined,
+  lookup: ((wallet: string) => Pick<CohortRow, "cohortId" | "size" | "creatorCoins"> | undefined) | undefined,
+  creator: string | null | undefined,
+): CohortReading | null {
+  if (!lookup || !page) return null;
+  return cohortReading(page.trades, lookup, creator);
 }
 
 /**

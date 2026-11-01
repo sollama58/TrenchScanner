@@ -96,6 +96,7 @@ import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from ".
 import { resolveEarliestActivity } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import { ownTapesOf, refreshWalletRiskBook, walletRiskLookup, walletRiskScale } from "./walletRiskBook.js";
+import { cohortLookup, refreshCohortBook } from "./cohortBook.js";
 import { devLaunchReadings, refreshDevLaunchBook } from "./devLaunchBook.js";
 import { kolLookup, refreshKolWalletBook } from "./kolWalletBook.js";
 import { kolBundledByMint, type KolBundledReading } from "./kolBundled.js";
@@ -122,6 +123,7 @@ import {
   liveLaunchBagsOf,
   livePageOf,
   liveTradersOn,
+  liveCohortOn,
   liveRecentBuyersHoldOn,
   liveSameSizeGroupOn,
   liveWalletScoreOn,
@@ -1290,6 +1292,7 @@ async function scanCycle(
   await refreshScoreWeights();
   // The wallet risk scores the decision moments record (background reload, never waited on).
   refreshWalletRiskBook();
+  refreshCohortBook();
   // The dev launch scores, the same way (devLaunchBook.ts).
   refreshDevLaunchBook();
   refreshKolWalletBook();
@@ -2730,6 +2733,11 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
             // mean is left off with the Wallet Score when the own-tape read failed.
             {
               sameSize: liveSameSizeGroupOn(livePages.get(candidate.mintAddress)),
+              cohort: liveCohortOn(
+                livePages.get(candidate.mintAddress),
+                cohortLookup(),
+                (onChainByMint.get(candidate.mintAddress) as { creator?: string } | undefined)?.creator,
+              ),
               recentBuyersHoldMean:
                 ownTapes === null
                   ? null
