@@ -7,18 +7,38 @@ import type { Env } from "../config/env.js";
  * runs and is trued up to the real cost from the response's usage afterwards, so the scanner
  * (live reviews, text reads) and the trainer (playbook reviews, replay batches) draw on one
  * AI_DAILY_BUDGET_USD per UTC day. The API reads the same rows for /health/worker and the Admin
- * tab.
+ * tab. FDSA's calls (fdsa/) go in the same table under their own ledger ("fdsa") and cap,
+ * FDSA_DAILY_BUDGET_USD; the reviewer's reads never count them and FDSA's never count the
+ * reviewer's (owner decision 2026-10-31).
  */
 
-/** Where the spend goes. "review-spare" is a review of a standard (not high-conviction) pick. */
-export type AiSpendSource = "review" | "review-spare" | "text" | "playbook" | "replay";
-export const AI_SPEND_SOURCES: readonly AiSpendSource[] = [
+/** Where the reviewer's spend goes. "review-spare" is a review of a standard (not high-conviction) pick. */
+export type ReviewerSpendSource = "review" | "review-spare" | "text" | "playbook" | "replay";
+/**
+ * Where FDSA's spend goes (fdsa/, owner decision 2026-10-31): its screen of every alert, its
+ * decide on the shortlist, and exit-plan revisions on open positions.
+ */
+export type FdsaSpendSource = "fdsa-screen" | "fdsa-decide" | "fdsa-exit";
+export type AiSpendSource = ReviewerSpendSource | FdsaSpendSource;
+export const AI_SPEND_SOURCES: readonly ReviewerSpendSource[] = [
   "review",
   "review-spare",
   "text",
   "playbook",
   "replay",
 ];
+export const FDSA_SPEND_SOURCES: readonly FdsaSpendSource[] = ["fdsa-screen", "fdsa-decide", "fdsa-exit"];
+
+/**
+ * Which daily cap a source counts against (AiSpend.ledger). FDSA has its own cap,
+ * FDSA_DAILY_BUDGET_USD, separate from the reviewer's AI_DAILY_BUDGET_USD, and the two never draw
+ * on each other (owner decision 2026-10-31): every reviewer read of the ledger is scoped to
+ * "reviewer", every FDSA read to "fdsa".
+ */
+export type AiSpendLedger = "reviewer" | "fdsa";
+export function aiSpendLedger(source: string): AiSpendLedger {
+  return source.startsWith("fdsa-") ? "fdsa" : "reviewer";
+}
 
 /**
  * Who gets the money first. "live" (reviews of high-conviction picks) may spend up to the cap;
@@ -148,8 +168,8 @@ export async function addAiSpend(
   const calls = delta.calls ?? 0;
   const refused = delta.refused ?? 0;
   await prisma.$executeRaw`
-    INSERT INTO "AiSpend" ("day", "source", "costUsd", "calls", "refused", "capUsd", "updatedAt")
-    VALUES (${day}, ${source}, ${cost}, ${calls}, ${refused}, ${capUsd}, now())
+    INSERT INTO "AiSpend" ("day", "source", "ledger", "costUsd", "calls", "refused", "capUsd", "updatedAt")
+    VALUES (${day}, ${source}, ${aiSpendLedger(source)}, ${cost}, ${calls}, ${refused}, ${capUsd}, now())
     ON CONFLICT ("day", "source") DO UPDATE SET
       "costUsd" = "AiSpend"."costUsd" + EXCLUDED."costUsd",
       "calls" = "AiSpend"."calls" + EXCLUDED."calls",
@@ -158,10 +178,30 @@ export async function addAiSpend(
       "updatedAt" = now()`;
 }
 
-/** Everything spent on `day`, in USD. */
-export async function aiSpentUsd(day: string): Promise<number> {
-  const agg = await prisma.aiSpend.aggregate({ where: { day }, _sum: { costUsd: true } });
+/** Everything one ledger spent on `day`, in USD (the reviewer's unless told otherwise). */
+export async function aiSpentUsd(day: string, ledger: AiSpendLedger = "reviewer"): Promise<number> {
+  const agg = await prisma.aiSpend.aggregate({ where: { day, ledger }, _sum: { costUsd: true } });
   return agg._sum.costUsd ?? 0;
+}
+
+/** What one FDSA source spent on `day`, in USD - for the exit reserve (fdsaSpendLimitUsd). */
+export async function fdsaSourceSpentUsd(day: string, source: FdsaSpendSource): Promise<number> {
+  const row = await prisma.aiSpend.findUnique({ where: { day_source: { day, source } } });
+  return row?.costUsd ?? 0;
+}
+
+/**
+ * The USD FDSA may have spent today before a call of `source` is refused (owner decision
+ * 2026-10-31, decision 2). Reviews (screen and decide) stop at the cap less FDSA_EXIT_RESERVE_PCT;
+ * exit revisions may spend up to the whole cap, so a check-in on an open position is never blocked
+ * by the day's reviews. Compared against FDSA's whole-day spend (aiSpentUsd(day, "fdsa")).
+ */
+export function fdsaSpendLimitUsd(
+  env: Pick<Env, "FDSA_DAILY_BUDGET_USD" | "FDSA_EXIT_RESERVE_PCT">,
+  source: FdsaSpendSource,
+): number {
+  const cap = env.FDSA_DAILY_BUDGET_USD;
+  return source === "fdsa-exit" ? cap : cap * (1 - env.FDSA_EXIT_RESERVE_PCT / 100);
 }
 
 export interface AiBudgetStatus {
@@ -188,7 +228,11 @@ export async function readAiBudget(
   now: Date = new Date(),
 ): Promise<AiBudgetStatus> {
   const day = aiSpendDay(now);
-  const rows = await prisma.aiSpend.findMany({ where: { day }, orderBy: { source: "asc" } });
+  // The reviewer's rows only: FDSA's spend has its own cap and its own status (fdsaBudget).
+  const rows = await prisma.aiSpend.findMany({
+    where: { day, ledger: "reviewer" },
+    orderBy: { source: "asc" },
+  });
   return summarizeAiBudget(env, day, rows, now);
 }
 
@@ -236,4 +280,73 @@ export function summarizeAiBudget(
       refused: r.refused,
     })),
   };
+}
+
+export interface FdsaBudgetStatus {
+  day: string;
+  capUsd: number;
+  spentUsd: number;
+  remainingUsd: number;
+  /** The share of the cap kept for exit revisions on open positions. */
+  exitReservePct: number;
+  /** New alerts are no longer reviewed today: reviews reached the cap less the exit reserve. */
+  reviewsStopped: boolean;
+  /** Exit revisions have stopped too: the whole cap is spent. Exits keep running their last plan. */
+  exitsStopped: boolean;
+  resetsAt: string;
+  bySource: { source: string; costUsd: number; calls: number; refused: number }[];
+}
+
+/** FDSA's budget for one day's ledger rows (ledger "fdsa") - pure, see readFdsaBudget. */
+export function summarizeFdsaBudget(
+  env: Pick<Env, "FDSA_DAILY_BUDGET_USD" | "FDSA_EXIT_RESERVE_PCT">,
+  day: string,
+  rows: {
+    source: string;
+    costUsd: number;
+    calls: number;
+    refused: number;
+    capUsd: number;
+    updatedAt: Date;
+  }[],
+  now: Date = new Date(),
+): FdsaBudgetStatus {
+  const latest = rows.reduce<(typeof rows)[number] | null>(
+    (a, r) => (a === null || r.updatedAt > a.updatedAt ? r : a),
+    null,
+  );
+  const capUsd = latest?.capUsd ?? env.FDSA_DAILY_BUDGET_USD;
+  const limits = { FDSA_DAILY_BUDGET_USD: capUsd, FDSA_EXIT_RESERVE_PCT: env.FDSA_EXIT_RESERVE_PCT };
+  const spentUsd = rows.reduce((s, r) => s + r.costUsd, 0);
+  const refused = (sources: string[]) => rows.some((r) => sources.includes(r.source) && r.refused > 0);
+  const exitsStopped = capUsd <= 0 || spentUsd >= capUsd || refused(["fdsa-exit"]);
+  return {
+    day,
+    capUsd,
+    spentUsd: round(spentUsd),
+    remainingUsd: round(Math.max(0, capUsd - spentUsd)),
+    exitReservePct: env.FDSA_EXIT_RESERVE_PCT,
+    reviewsStopped:
+      exitsStopped ||
+      spentUsd >= fdsaSpendLimitUsd(limits, "fdsa-screen") ||
+      refused(["fdsa-screen", "fdsa-decide"]),
+    exitsStopped,
+    resetsAt: aiBudgetResetsAt(now).toISOString(),
+    bySource: rows.map((r) => ({
+      source: r.source,
+      costUsd: round(r.costUsd),
+      calls: r.calls,
+      refused: r.refused,
+    })),
+  };
+}
+
+/** Today's (UTC) FDSA budget as the ledger has it. */
+export async function readFdsaBudget(
+  env: Pick<Env, "FDSA_DAILY_BUDGET_USD" | "FDSA_EXIT_RESERVE_PCT">,
+  now: Date = new Date(),
+): Promise<FdsaBudgetStatus> {
+  const day = aiSpendDay(now);
+  const rows = await prisma.aiSpend.findMany({ where: { day, ledger: "fdsa" }, orderBy: { source: "asc" } });
+  return summarizeFdsaBudget(env, day, rows, now);
 }

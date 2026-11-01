@@ -137,4 +137,5 @@ export * from "./wallets/kolBundled.js";
 export * from "./wallets/holderTransfers.js";
 export * from "./wallets/bubbleMoments.js";
 export * from "./trading/index.js";
+export * from "./fdsa/index.js";
 export * from "./candles/index.js";

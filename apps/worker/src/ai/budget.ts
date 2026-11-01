@@ -8,7 +8,7 @@ import {
   estimateCostUsd,
   usageCostUsd,
   type AiSpendPriority,
-  type AiSpendSource,
+  type ReviewerSpendSource,
   type AiUsage,
   type Env,
 } from "@trenchscanner/core";
@@ -33,7 +33,7 @@ const logger = createLogger("ai-budget");
 
 export interface AiSpendReservation {
   day: string;
-  source: AiSpendSource;
+  source: ReviewerSpendSource;
   estimateUsd: number;
   capUsd: number;
 }
@@ -95,7 +95,7 @@ function held(priority: AiSpendPriority, day: string, now: number): boolean {
  */
 export async function reserveAiSpend(
   env: Env,
-  source: AiSpendSource,
+  source: ReviewerSpendSource,
   estimateUsd: number,
   priority: AiSpendPriority,
 ): Promise<AiSpendReservation | null> {

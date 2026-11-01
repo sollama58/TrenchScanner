@@ -32,6 +32,8 @@
 #         "Live" applies AI_REVIEW_MODE in full. No redeploy to flip it.
 #         All three share a hard daily cap, AI_DAILY_BUDGET_USD ($15/day by default); once it is
 #         reached the AI stops until midnight UTC (see /health/worker and Admin > AI).
+#         FDSA (FDSA_ENABLED, worker only, "false" by default) uses the same key under its own
+#         cap, FDSA_DAILY_BUDGET_USD ($20/day), and never draws on AI_DAILY_BUDGET_USD.
 #   - TOKENSAGE_API_URL, TOKENSAGE_API_KEY (worker)  optional: the user's TokenSage service
 #         TokenSage says what each scanned coin is about (tokensage/prefetch.ts), stored in
 #         TokenNarrative. Off until TOKENSAGE_ENABLED=true is also set; nothing waits on it.
@@ -376,6 +378,13 @@ services:
         value: scanner
       - key: ANTHROPIC_API_KEY
         sync: false
+      # FDSA, the AI desk that reviews every alert and paper-trades its picks (packages/core/src/
+      # fdsa, owner decision 2026-10-31). Off until the owner sets "true" here; even then it waits
+      # for Resume in the hidden #fdsa tab. Paper only. Its own cap, apart from AI_DAILY_BUDGET_USD.
+      - key: FDSA_ENABLED
+        value: "false"
+      - key: FDSA_DAILY_BUDGET_USD
+        value: "20"
       - key: TOKENSAGE_API_URL
         sync: false
       - key: TOKENSAGE_API_KEY
