@@ -82,6 +82,7 @@ import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { aiReviewEnabled, reviewTimeoutMs } from "./ai/reviewer.js";
 import { drainShadowReviews } from "./jobs/curatedAlerts.js";
+import { drainFdsaReviews, fdsaHeartbeat } from "./fdsa/review.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch, TRAINING_DEADLINE_MINUTES } from "./jobs/pipelineWatchJob.js";
@@ -642,7 +643,14 @@ async function main() {
     scheduleInterval(
       "scan",
       // The process's event-loop stalls ride on the scan's row, so /health/worker shows them.
-      async () => ({ ...(await runScanCycle(deps, env)), ...configMeta, loopStalls: loopStallMeta() }),
+      // FDSA's state rides on it too: on or off, whether its cap has stopped reviews, its queue and
+      // latency (owner decision 2026-10-31).
+      async () => ({
+        ...(await runScanCycle(deps, env)),
+        ...configMeta,
+        loopStalls: loopStallMeta(),
+        fdsa: await fdsaHeartbeat(env),
+      }),
       env.SCAN_INTERVAL_MINUTES,
       // No early runs: a young launch crossing into the band gets its own first scan from the
       // entry fast path instead of starting the whole cycle early (user decision 2026-10-22).
@@ -1383,16 +1391,19 @@ async function main() {
     stopNarrativePolling?.();
     // Detached shadow AI reviews get their whole timeout (see REVIEW_DRAIN_SLACK_MS): one cut off
     // is paid for and never recorded.
-    const [outcomes, reviewsLeft] = await Promise.all([
+    const [outcomes, reviewsLeft, fdsaLeft] = await Promise.all([
       Promise.all(
         jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
       ),
       drainShadowReviews(reviewGraceMs),
+      // FDSA's detached reviews likewise (fdsa/review.ts).
+      drainFdsaReviews(reviewGraceMs),
       // A fast scan in flight is a coin's first decision: given the runs' grace to finish.
       entryFastPath?.settle(SHUTDOWN_GRACE_MS),
     ]);
     if (reviewsLeft > 0)
       logger.warn("shadow ai reviews still in flight at shutdown", { reviews: reviewsLeft });
+    if (fdsaLeft > 0) logger.warn("FDSA reviews still in flight at shutdown", { reviews: fdsaLeft });
     // The run that passed its deadline already says so on its row; "interrupted" would hide it.
     const interrupted = outcomes
       .filter((o) => o.outcome === "interrupted" && o.name !== keepHeartbeatOf)

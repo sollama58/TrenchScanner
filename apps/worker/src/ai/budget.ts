@@ -5,9 +5,12 @@ import {
   aiSpendLimitUsd,
   aiSpentUsd,
   createLogger,
+  fdsaSpendLimitUsd,
   estimateCostUsd,
   usageCostUsd,
   type AiSpendPriority,
+  type AiSpendSource,
+  type FdsaSpendSource,
   type ReviewerSpendSource,
   type AiUsage,
   type Env,
@@ -33,13 +36,14 @@ const logger = createLogger("ai-budget");
 
 export interface AiSpendReservation {
   day: string;
-  source: ReviewerSpendSource;
+  /** A reviewer source (reserveAiSpend) or an FDSA one (reserveFdsaSpend); settled the same way. */
+  source: AiSpendSource;
   estimateUsd: number;
   capUsd: number;
 }
 
 /** The call shapes the worker makes, for estimates before any have been measured. */
-export type AiCallKind = "review" | "text" | "playbook";
+export type AiCallKind = "review" | "text" | "playbook" | FdsaSpendSource;
 /**
  * Rough token counts per call (input including the cached system prompt, output including
  * thinking). Only the first estimates use these; after that the running average of real costs
@@ -49,6 +53,12 @@ const CALL_PROFILES: Record<AiCallKind, { input: number; output: number }> = {
   review: { input: 6_000, output: 2_500 },
   text: { input: 1_000, output: 800 },
   playbook: { input: 60_000, output: 12_000 },
+  // FDSA (fdsa/reviewer.ts): the screen reads the reviewer's brief without its comparables at low
+  // effort; the decide reads the full brief and writes an exit plan; a revision reads a short
+  // position brief.
+  "fdsa-screen": { input: 4_000, output: 800 },
+  "fdsa-decide": { input: 8_000, output: 3_000 },
+  "fdsa-exit": { input: 2_500, output: 1_500 },
 };
 const EWMA_ALPHA = 0.2;
 const observedUsd = new Map<AiCallKind, number>();
@@ -68,6 +78,7 @@ let queue: Promise<unknown> = Promise.resolve();
 export function resetAiBudget(): void {
   observedUsd.clear();
   heldUntil.clear();
+  fdsaHeldUntil.clear();
   announced.clear();
   queue = Promise.resolve();
 }
@@ -131,6 +142,70 @@ export async function reserveAiSpend(
       return null;
     }
   });
+}
+
+/** FDSA's own refusal holds, by what was refused: reviews of new alerts, or exit revisions. */
+type FdsaHold = "review" | "exit";
+const fdsaHeldUntil = new Map<FdsaHold, { day: string; until: number }>();
+
+function fdsaHeld(hold: FdsaHold, day: string, now: number): boolean {
+  // A refused exit revision means the whole cap is spent, so reviews can't fit either.
+  const keys: FdsaHold[] = hold === "review" ? ["review", "exit"] : ["exit"];
+  return keys.some((k) => {
+    const h = fdsaHeldUntil.get(k);
+    return h !== undefined && h.day === day && now < h.until;
+  });
+}
+
+/**
+ * Reserves `estimateUsd` for one FDSA call against FDSA's own daily cap, FDSA_DAILY_BUDGET_USD
+ * (owner decision 2026-10-31, decision 2) - never the reviewer's AI_DAILY_BUDGET_USD: the spend is
+ * read and written on the ledger "fdsa" (core's aiSpend.ts), so neither budget draws on the other.
+ * Screens and decides stop at the cap less FDSA_EXIT_RESERVE_PCT; exit revisions on open
+ * positions may use the whole cap, so a check-in is never blocked by the day's reviews
+ * (fdsaSpendLimitUsd). Same contract as reserveAiSpend: null means skip the call, and a ledger
+ * that can't be read or written is a null too. Shares its one-at-a-time queue.
+ */
+export async function reserveFdsaSpend(
+  env: Env,
+  source: FdsaSpendSource,
+  estimateUsd: number,
+): Promise<AiSpendReservation | null> {
+  return serially(async () => {
+    const now = Date.now();
+    const day = aiSpendDay(new Date(now));
+    const capUsd = env.FDSA_DAILY_BUDGET_USD;
+    const hold: FdsaHold = source === "fdsa-exit" ? "exit" : "review";
+    try {
+      if (capUsd <= 0 || fdsaHeld(hold, day, now)) return null;
+      const spent = await aiSpentUsd(day, "fdsa");
+      if (spent + estimateUsd > fdsaSpendLimitUsd(env, source)) {
+        fdsaHeldUntil.set(hold, { day, until: now + REFUSAL_HOLD_MS });
+        const key = `fdsa:${day}:${hold}`;
+        if (!announced.has(key)) {
+          announced.add(key);
+          logger.warn(
+            hold === "exit"
+              ? "FDSA daily budget reached - exit revisions stop until midnight UTC; open positions keep their last plan"
+              : "FDSA daily budget down to the exit reserve - no new alerts reviewed until midnight UTC",
+            { day, spentUsd: Math.round(spent * 100) / 100, capUsd, source },
+          );
+        }
+        await addAiSpend(day, source, { refused: 1 }, capUsd);
+        return null;
+      }
+      await addAiSpend(day, source, { costUsd: estimateUsd, calls: 1 }, capUsd);
+      return { day, source, estimateUsd, capUsd };
+    } catch (err) {
+      logger.warn("could not check the FDSA budget - skipping the call", { source, error: String(err) });
+      return null;
+    }
+  });
+}
+
+/** Whether FDSA's reviews of new alerts are held by a refusal right now (for the heartbeat). */
+export function fdsaReviewsHeld(now = Date.now()): boolean {
+  return fdsaHeld("review", aiSpendDay(new Date(now)), now);
 }
 
 /**

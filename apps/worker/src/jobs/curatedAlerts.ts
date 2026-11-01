@@ -97,6 +97,7 @@ import {
   type AiReviewResult,
 } from "../ai/reviewer.js";
 import { blendVetoes, usableAiBlend } from "../ai/blend.js";
+import { enqueueFdsaAlert } from "../fdsa/review.js";
 
 /** Gate-mode AI reviews in flight at once per ledger pass. */
 const GATE_REVIEW_CONCURRENCY = 3;
@@ -1325,6 +1326,21 @@ async function emitForModel(
     if (!result) continue;
     anchors.set(pick.token.id, result.anchor);
     emitted += 1;
+    // FDSA (owner decision 2026-10-31) reviews every curated alert, one per token, alongside the
+    // AI reviewer and without touching it. Detached: the alert is already out, and nothing FDSA
+    // decides changes the feed. Off (FDSA_ENABLED false, or the desk paused) it does nothing.
+    enqueueFdsaAlert(
+      {
+        tokenId: pick.token.id,
+        mint: pick.token.mintAddress,
+        scored: pick.scored,
+        decision: pick.decision,
+        candidateOutcomeId: result.anchor.id,
+        curatedAlertId: result.alertId,
+        alertAt: new Date(),
+      },
+      env,
+    );
 
     if (review) {
       if (gateFresh[i]) {
