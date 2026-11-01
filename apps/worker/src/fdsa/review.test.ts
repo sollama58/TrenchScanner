@@ -116,6 +116,8 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
         ANTHROPIC_API_KEY: "test-key",
         FDSA_ENABLED: true,
         FDSA_SCREEN_MIN_SCORE: 0.7,
+        // The fixed bar and the model's own "trade"; the ranked desk has its own test below.
+        FDSA_TRADE_TOP_PCT: 0,
         FDSA_DAILY_BUDGET_USD: 1,
         FDSA_EXIT_RESERVE_PCT: 25,
         AI_DAILY_BUDGET_USD: 1,
@@ -477,6 +479,55 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
         screenLine: 0.7,
         screenLineRanked: false,
       });
+    } finally {
+      await prisma.fdsaReview.deleteMany({ where: { tokenId: seedToken.id } });
+    }
+  });
+  it("trades the top of the last day's decide odds, whatever the answer says (owner decision 2026-11-01)", async () => {
+    const ranked: Env = { ...env, FDSA_TRADE_TOP_PCT: 20 };
+    vi.setSystemTime(new Date("2001-03-25T12:00:00Z"));
+    const seedToken = await prisma.token.create({ data: { mintAddress: `${TAG}-seed-decide`, symbol: "S" } });
+    // 25 decides as production saw them (Opus at 12-20%); the top 20% is 5 rows, the five at 20%.
+    const odds = [...Array<number>(20).fill(0.12), ...Array<number>(5).fill(0.2)];
+    await prisma.fdsaReview.createMany({
+      data: odds.map((p) => ({
+        tokenId: seedToken.id,
+        stage: "decide",
+        model: env.FDSA_DECIDE_MODEL,
+        effort: "medium",
+        promptVersion: FDSA_PROMPT_VERSIONS.decide,
+        decision: "pass",
+        probability2x: p,
+        alertAt: new Date(),
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 85_000,
+        latencyMs: 1,
+        // On the test's clock: the database's own now() is the real one.
+        createdAt: new Date(),
+      })),
+    });
+    try {
+      // A "pass" at the line, with no plan: traded, under the default plan.
+      const top = await alertFor();
+      replies.push(
+        screenReply(0.9),
+        decideReply({ ...tradeAnswer, decision: "pass", probability2x: 0.2, exitPlan: null }),
+      );
+      const out = await reviewFdsaAlert(top, ranked);
+      expect(out.decide?.decision).toBe("trade");
+      expect(out.decide?.exitPlan?.maxHoldMinutes).toBe(FDSA_DEFAULT_EXIT_PLAN.maxHoldMinutes);
+      // The decide is told the desk ranks on its odds, not to clear 50%.
+      const system = (requests.at(-1) as { system: { text: string }[] }).system[0]!.text;
+      expect(system).toContain("among the top 20% of the day's decided alerts");
+      expect(system).not.toContain("at 50% or more");
+
+      // A "trade" under the line: a pass, the line named in its risks.
+      const under = await alertFor();
+      replies.push(screenReply(0.9), decideReply({ ...tradeAnswer, probability2x: 0.15 }));
+      const low = await reviewFdsaAlert(under, ranked);
+      expect(low.decide?.decision).toBe("pass");
+      expect(low.decide?.risks[0]).toBe("2x odds under the desk's 20% bar");
+      expect(await fdsaHeartbeat(ranked)).toMatchObject({ tradeLine: 0.2, tradeLineRanked: true });
     } finally {
       await prisma.fdsaReview.deleteMany({ where: { tokenId: seedToken.id } });
     }

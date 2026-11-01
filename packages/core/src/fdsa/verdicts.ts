@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { clampProbability, clip } from "../curation/aiReview.js";
-import { clampFdsaExitPlan, FdsaExitPlanAnswerSchema, type FdsaExitPlan } from "./exitPlan.js";
+import {
+  clampFdsaExitPlan,
+  FDSA_DEFAULT_EXIT_PLAN,
+  FdsaExitPlanAnswerSchema,
+  type FdsaExitPlan,
+} from "./exitPlan.js";
 
 /**
  * What FDSA's Claude calls return, and how an answer becomes a stored verdict (owner decision
@@ -38,10 +43,12 @@ export type FdsaStage = (typeof FDSA_STAGES)[number];
  *   enforced in code (FDSA_TRADE_MIN_P2X).
  *   v3 (2026-11-01): screen and decide no longer count a copied name as a reason to drop or pass
  *   on its own (prompts.ts COPY_GUIDANCE; user ask). The revise prompt is unchanged.
+ *   decide v4 (2026-11-01): with FDSA_TRADE_TOP_PCT set, the decide is told the desk trades the
+ *   day's top share by its probability2x, to give honest odds and an exit plan on every answer.
  */
 export const FDSA_PROMPT_VERSIONS: Readonly<Record<FdsaStage, string>> = {
   screen: "fdsa-screen-v3",
-  decide: "fdsa-decide-v3",
+  decide: "fdsa-decide-v4",
   revise: "fdsa-revise-v2",
 };
 /** The decide stage's version: the one the tab's settings and record name. */
@@ -189,6 +196,7 @@ export function readFdsaDecideAnswer(
   raw: unknown,
   meta: FdsaAnswerMeta,
   minProbability2x: number = 0,
+  opts: { ranked?: boolean } = {},
 ): FdsaRead<FdsaDecideVerdict> {
   const pass = (error: string): FdsaRead<FdsaDecideVerdict> => ({
     verdict: PASS,
@@ -210,6 +218,7 @@ export function readFdsaDecideAnswer(
     reasoning: clipText(a.reasoning, REASONING_CHARS),
     risks: clipRisks(a.risks),
   };
+  if (opts.ranked) return readRanked(verdict, a.exitPlan, minProbability2x);
   if (a.decision === "pass") return { verdict, error: null, refused: false };
   if (probability2x < minProbability2x) {
     return {
@@ -230,6 +239,33 @@ export function readFdsaDecideAnswer(
       refused: false,
     };
   return { verdict: { ...verdict, exitPlan: plan }, error: null, refused: false };
+}
+
+/**
+ * The ranked reading (owner decision 2026-11-01, FDSA_TRADE_TOP_PCT): Opus's odds sat at 12-20% on
+ * every decide, under a pool that doubles about 22% of the time, so a fixed 50% bar never traded.
+ * The desk now paper-trades the decides its odds rank highest: the answer's own "trade"/"pass" is
+ * advisory, and a decide trades when its probability2x is at or above `line` (the worker's
+ * tradeLine: the top share of the last day's decides). The model gives its exit plan on every
+ * answer; one that is missing or can't be made valid falls back to the default plan, so a ranked
+ * trade always runs under a plan that is safe.
+ */
+function readRanked(verdict: FdsaDecideVerdict, rawPlan: unknown, line: number): FdsaRead<FdsaDecideVerdict> {
+  if (verdict.probability2x < line) {
+    return {
+      verdict: {
+        ...verdict,
+        decision: "pass",
+        risks: [fdsaTradeBarRisk(line), ...verdict.risks].slice(0, MAX_RISKS),
+      },
+      error: null,
+      refused: false,
+    };
+  }
+  const plan = clampFdsaExitPlan(rawPlan) ?? clampFdsaExitPlan(FDSA_DEFAULT_EXIT_PLAN);
+  if (!plan)
+    return { verdict: { ...verdict, decision: "pass" }, error: "no usable exit plan", refused: false };
+  return { verdict: { ...verdict, decision: "trade", exitPlan: plan }, error: null, refused: false };
 }
 
 // ── Revise ────────────────────────────────────────────────────────────────

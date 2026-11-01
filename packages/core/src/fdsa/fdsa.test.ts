@@ -499,6 +499,32 @@ describe("FDSA verdicts", () => {
     expect(DEFAULT_FDSA_TRADE_MIN_P2X).toBe(0.5);
   });
 
+  it("ranked: trades on the odds against the line whatever the answer says, under a safe plan", () => {
+    const at = readFdsaDecideAnswer(
+      { ...trade, decision: "pass", probability2x: 0.2, exitPlan: null },
+      ok,
+      0.2,
+      {
+        ranked: true,
+      },
+    );
+    expect(at.error).toBeNull();
+    expect(at.verdict.decision).toBe("trade");
+    expect(at.verdict.exitPlan).toEqual(clampFdsaExitPlan(FDSA_DEFAULT_EXIT_PLAN));
+    // The model's own plan when it is usable.
+    const own = readFdsaDecideAnswer({ ...trade, decision: "pass", probability2x: 0.3 }, ok, 0.2, {
+      ranked: true,
+    });
+    expect(own.verdict.exitPlan).toEqual(clampFdsaExitPlan(trade.exitPlan));
+    const under = readFdsaDecideAnswer({ ...trade, probability2x: 0.15 }, ok, 0.2, { ranked: true });
+    expect(under.verdict).toMatchObject({ decision: "pass", exitPlan: null });
+    expect(under.verdict.risks[0]).toBe(fdsaTradeBarRisk(0.2));
+    // An unusable answer is still never a trade.
+    expect(readFdsaDecideAnswer(trade, { stopReason: "refusal" }, 0, { ranked: true }).verdict.decision).toBe(
+      "pass",
+    );
+  });
+
   it("names one prompt version per stage", () => {
     expect(Object.keys(FDSA_PROMPT_VERSIONS).sort()).toEqual(["decide", "revise", "screen"]);
     expect(new Set(Object.values(FDSA_PROMPT_VERSIONS)).size).toBe(3);

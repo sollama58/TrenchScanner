@@ -227,6 +227,45 @@ export async function screenLine(
   return state;
 }
 
+// ── The decide's trade line ───────────────────────────────────────────────
+
+const TRADE_LINE_MIN_SAMPLE = 20;
+let tradeLineCache: { at: number; line: number; ranked: boolean } | null = null;
+
+/**
+ * Where a decide's probability2x trades from (owner decision 2026-11-01). Opus put every decide
+ * at 12-20% against the fixed 50% bar, under the pool's own ~22%, so nothing ever traded. With
+ * FDSA_TRADE_TOP_PCT set the desk paper-trades the decides its odds rank highest: the lowest
+ * probability2x that keeps trades within that share of the last day's usable decides (ties count
+ * against the share, as the screen's line). Fixed at FDSA_TRADE_MIN_P2X when the share is 0, or
+ * while fewer than 20 decides are on record. Read at most every 5 minutes.
+ */
+export async function tradeLine(
+  env: Pick<Env, "FDSA_TRADE_MIN_P2X" | "FDSA_TRADE_TOP_PCT">,
+): Promise<{ line: number; ranked: boolean }> {
+  const fixed = { line: env.FDSA_TRADE_MIN_P2X, ranked: false };
+  if (env.FDSA_TRADE_TOP_PCT <= 0) return fixed;
+  if (tradeLineCache && Date.now() - tradeLineCache.at < SCREEN_LINE_CACHE_MS) return tradeLineCache;
+  const rows = await prisma.fdsaReview.groupBy({
+    by: ["probability2x"],
+    where: {
+      stage: "decide",
+      createdAt: { gt: new Date(Date.now() - SCREEN_LINE_WINDOW_MS), lte: new Date() },
+      probability2x: { not: null },
+      error: null,
+    },
+    _count: { _all: true },
+  });
+  const counts = rows.flatMap((r) =>
+    r.probability2x === null ? [] : [{ score: r.probability2x, n: r._count._all }],
+  );
+  const total = counts.reduce((s, c) => s + c.n, 0);
+  const ranked = total >= TRADE_LINE_MIN_SAMPLE ? screenLineFrom(counts, env.FDSA_TRADE_TOP_PCT) : null;
+  const state = ranked === null ? fixed : { line: ranked, ranked: true };
+  tradeLineCache = { at: Date.now(), ...state };
+  return state;
+}
+
 // ── Slots ─────────────────────────────────────────────────────────────────
 
 /**
@@ -318,6 +357,7 @@ export function resetFdsaReviews(): void {
   stats = emptyStats();
   deskCache = null;
   screenLineCache = null;
+  tradeLineCache = null;
   pendingTokens.clear();
   pending.clear();
   inFlight = 0;
@@ -331,10 +371,11 @@ export function resetFdsaReviews(): void {
  */
 export async function fdsaHeartbeat(env: Env): Promise<Record<string, string | number | boolean | null>> {
   if (!fdsaEnabled(env)) return { enabled: false };
-  const [desk, budget, line] = await Promise.all([
+  const [desk, budget, line, trade] = await Promise.all([
     deskState().catch(() => null),
     readFdsaBudget(env).catch(() => null),
     screenLine(env).catch(() => null),
+    tradeLine(env).catch(() => null),
   ]);
   return {
     enabled: true,
@@ -366,6 +407,9 @@ export async function fdsaHeartbeat(env: Env): Promise<Record<string, string | n
     // The score a screen needs to be shortlisted now, and whether it is ranked on the last day.
     screenLine: line?.line ?? null,
     screenLineRanked: line?.ranked ?? null,
+    // The 2x odds a decide needs to trade now, and whether it is ranked on the last day.
+    tradeLine: trade?.line ?? null,
+    tradeLineRanked: trade?.ranked ?? null,
     lastError: stats.lastError,
     lastErrorAt: stats.lastErrorAt,
   };
@@ -719,8 +763,8 @@ async function decideFdsaAlert(
       model: env.FDSA_DECIDE_MODEL,
       effort: env.FDSA_DECIDE_EFFORT,
       timeoutMs: env.FDSA_DECIDE_TIMEOUT_MS,
-      // Fixed per process: the bar is an env value, so the prefix is still one cached string.
-      system: fdsaDecideSystemPrompt(env.FDSA_TRADE_MIN_P2X),
+      // Fixed per process: the bar and the share are env values, so the prefix is one cached string.
+      system: fdsaDecideSystemPrompt(env.FDSA_TRADE_MIN_P2X, env.FDSA_TRADE_TOP_PCT),
       brief,
       schema: FdsaDecideAnswerSchema,
     }),
@@ -729,7 +773,10 @@ async function decideFdsaAlert(
     stats.skippedBudget += 1;
     return { decide: null, decideReviewId: null, stoppedAt: "budget" };
   }
-  const read: FdsaRead<FdsaDecideVerdict> = readFdsaDecideAnswer(call.raw, call.meta, env.FDSA_TRADE_MIN_P2X);
+  const bar = await tradeLine(env);
+  const read: FdsaRead<FdsaDecideVerdict> = readFdsaDecideAnswer(call.raw, call.meta, bar.line, {
+    ranked: env.FDSA_TRADE_TOP_PCT > 0,
+  });
   const v = read.verdict;
   stats.decided += 1;
   sample(stats.decideMs, call.latencyMs);

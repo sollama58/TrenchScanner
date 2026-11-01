@@ -50,6 +50,7 @@ export function workerConfigMeta(env: Env): {
       fdsaScreenModel: env.FDSA_SCREEN_MODEL,
       fdsaScreenMinScore: env.FDSA_SCREEN_MIN_SCORE,
       fdsaScreenShortlistPct: env.FDSA_SCREEN_SHORTLIST_PCT,
+      fdsaTradeTopPct: env.FDSA_TRADE_TOP_PCT,
       fdsaDecideModel: env.FDSA_DECIDE_MODEL,
       fdsaDecideEffort: env.FDSA_DECIDE_EFFORT,
     },

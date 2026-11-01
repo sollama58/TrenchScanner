@@ -1269,6 +1269,12 @@ const envSchema = z.object({
   // trades at 50% odds wins about half the time, so the 75% goal wants this nearer 0.65-0.7 once
   // the tab's calibration bands show what the model's odds are worth.
   FDSA_TRADE_MIN_P2X: z.coerce.number().min(0).max(1).default(0.5),
+  // Ranked trades (owner decision 2026-11-01): Opus's odds sat at 12-20% on every decide, so the
+  // fixed bar above never traded. With this share set, the desk paper-trades the decides whose
+  // probability2x is in the top FDSA_TRADE_TOP_PCT percent of the last day's (worker fdsa/review.ts
+  // tradeLine), and FDSA_TRADE_MIN_P2X is only the bar until 20 decides are on record. 0 goes back
+  // to the fixed bar and the model's own "trade".
+  FDSA_TRADE_TOP_PCT: z.coerce.number().min(0).max(100).default(20),
   // Exit-plan revisions on open positions (decision 3), only at named triggers: crossing 2x,
   // crossing 4x, a fall of FDSA_REVISION_DRAWDOWN_PCT from the high, and every
   // FDSA_REVISION_TIMER_MINUTES while held; never two on one position within
