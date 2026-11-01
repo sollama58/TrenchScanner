@@ -62,6 +62,11 @@ export const MANUAL_RUN_JOBS: readonly ManualRunJob[] = [
     heavy: false,
   },
   {
+    job: "wallet-cohorts",
+    does: "Rebuilds the recurring wallet cohorts from the trade tape.",
+    heavy: false,
+  },
+  {
     job: "kol-wallets",
     does: "Re-reads Solana Tracker's KOL roster.",
     heavy: false,

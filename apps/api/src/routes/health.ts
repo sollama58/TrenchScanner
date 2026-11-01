@@ -101,6 +101,8 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "dev-launch-risk": 3 * 3_600_000,
   // Hourly: the Side Wallet Checker's lists, from the trade tape (kolSideWalletsJob.ts).
   "kol-side-wallets": 3 * 3_600_000,
+  // Hourly: the recurring wallet cohorts, from the trade tape (walletCohortJob.ts). Recorded inputs only.
+  "wallet-cohorts": 3 * 3_600_000,
   // Daily: the KOL roster from Solana Tracker (kolWalletsJob.ts). Nothing user-facing waits on it.
   "kol-wallets": 26 * 3_600_000,
 };

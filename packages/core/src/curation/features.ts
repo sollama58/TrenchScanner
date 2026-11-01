@@ -444,6 +444,25 @@ export const GROUP_HOLD_FEATURES = [
 ] as const;
 
 /**
+ * Added 2026-11-01 (data-uses evaluation, notes/data-uses-2026-11-01/report.md brief 3): the
+ * recurring wallet cohorts (core's wallets/cohorts.ts, the trainer's hourly WalletCohort book) among
+ * the wallets buying in the newest trades read before the decision: the % of the page's buyers in a
+ * cohort, the largest cohort among them, and whether a cohort has a creator among its members (this
+ * coin's, or the creator of one of the cohort's earlier coins). No new call. Null without the page
+ * or the book, and on every row banked before. Never backfilled.
+ *
+ * Recorded only (RETIRED_LEARNER_INPUTS) until a week of decision rows shows the live readings hold
+ * what the point-in-time export measured (13.6% 2x with a cohort against 17.2% without; the
+ * creator-tied cohort the stronger stop-side signal). The onset guard (featureOnset.ts) times their
+ * first run once they are brought in.
+ */
+export const COHORT_FEATURES = [
+  "cohortRecentBuyersPct",
+  "cohortRecentMaxSize",
+  "cohortCreatorLinked",
+] as const;
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -710,6 +729,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...PATH_CLOCK_FEATURES,
   ...BLOCK_ZERO_FEATURES,
   ...GROUP_HOLD_FEATURES,
+  ...COHORT_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -842,6 +862,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // 2026-11-01, data-uses evaluation): recorded first, on the same terms. Bring them in by
   // removing them here once a week of decision rows shows they separate runners live.
   ...GROUP_HOLD_FEATURES,
+  // The recurring-cohort readings (COHORT_FEATURES, added 2026-11-01, data-uses evaluation):
+  // recorded first, on the same terms.
+  ...COHORT_FEATURES,
   // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
   // the same terms (notes/wallet-score-2026-10-16/report.md).
   // The bonding-curve path of a young coin (added 2026-10-17, user ask): recorded first.
@@ -1879,6 +1902,9 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   sameSizeGroupSolShare: "share of recent buy SOL from a same-size group",
   launchSameSizeWallets: "first buyers taking the same size in one slot",
   recentBuyersHoldMean: "recent buyers' usual hold time",
+  cohortRecentBuyersPct: "recent buyers in a recurring cohort",
+  cohortRecentMaxSize: "largest recurring cohort among recent buyers",
+  cohortCreatorLinked: "a recent buyers' cohort includes a creator",
   sniperTopHoldersChecked: "top holders checked for snipers",
   top10WalletsChecked: "top-10 wallets checked",
   freshTopHolderCount: "fresh wallets among the top 25",
@@ -2211,6 +2237,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     sameSizeGroupSolShare: scored.sameSizeGroupSolShare ?? null,
     launchSameSizeWallets: scored.launchSameSizeWallets ?? null,
     recentBuyersHoldMean: scored.recentBuyersHoldMean ?? null,
+    cohortRecentBuyersPct: scored.cohortRecentBuyersPct ?? null,
+    cohortRecentMaxSize: scored.cohortRecentMaxSize ?? null,
+    cohortCreatorLinked: scored.cohortCreatorLinked ?? null,
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,

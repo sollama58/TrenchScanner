@@ -118,6 +118,7 @@ import { HELIUS_SAMPLES_PER_DAY, runTradeTapeJob, saveTradeTapeProgress } from "
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runDevLaunchRiskJob } from "./jobs/devLaunchRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
+import { runWalletCohortJob } from "./jobs/walletCohortJob.js";
 import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
 import { refreshKolAvatars } from "./jobs/kolAvatars.js";
 import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } from "./trainingSchedule.js";
@@ -1153,6 +1154,26 @@ async function main() {
             await lastSuccessfulRunAt("wallet-risk"),
             60 * 60_000,
             30 * 60_000,
+            Date.now(),
+          ),
+      },
+    ),
+  );
+  // The recurring wallet cohorts (walletCohortJob.ts), hourly, three quarters of an hour off
+  // wallet-risk's slot: the fourth whole-tape read, on its own minute like the other three.
+  schedule("wallet-cohorts", () =>
+    scheduleInterval(
+      "wallet-cohorts",
+      takingRunNow("wallet-cohorts", () => withJobLock("wallet-cohorts", () => runWalletCohortJob())),
+      60,
+      {
+        deadlineMinutes: 30,
+        runEarly: onRunNow("wallet-cohorts"),
+        firstRunDelayMs: async () =>
+          offsetCadenceDelayMs(
+            await lastSuccessfulRunAt("wallet-risk"),
+            60 * 60_000,
+            45 * 60_000,
             Date.now(),
           ),
       },

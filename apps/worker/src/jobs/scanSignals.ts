@@ -23,6 +23,7 @@ import {
   type OwnTapeRow,
   type LiveFlagsReading,
   type LiveTraderCounts,
+  type CohortReading,
   type SameSizeGroupReading,
   type WalletScoreReading,
   type WinnerFollowReading,
@@ -653,6 +654,8 @@ function withLinkedReading(
 export interface LiveGroupReading {
   sameSize: SameSizeGroupReading | null;
   recentBuyersHoldMean: number | null;
+  /** The recurring cohorts among the page's buyers; null before the cohort book loads. */
+  cohort?: CohortReading | null;
 }
 
 /** The live flagged-wallet reading on the profile; unknown (left off) without one. Exported for tests. */
@@ -677,6 +680,13 @@ export function withLiveFlags(
       : {}),
     ...(groups && groups.recentBuyersHoldMean !== null
       ? { recentBuyersHoldMean: groups.recentBuyersHoldMean }
+      : {}),
+    ...(groups?.cohort
+      ? {
+          cohortRecentBuyersPct: groups.cohort.cohortRecentBuyersPct ?? undefined,
+          cohortRecentMaxSize: groups.cohort.cohortRecentMaxSize,
+          cohortCreatorLinked: groups.cohort.cohortCreatorLinked ?? undefined,
+        }
       : {}),
     ...(winnerFollow
       ? {
