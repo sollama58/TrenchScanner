@@ -423,6 +423,27 @@ export const DEV_LAUNCH_FEATURES = [
 export const BLOCK_ZERO_FEATURES = ["blockZeroHeldPct", "blockZeroBuyers", "blockZeroBoughtPct"] as const;
 
 /**
+ * Added 2026-11-01 (data-uses evaluation, notes/data-uses-2026-11-01/report.md briefs 4 and 5):
+ * the same-second, same-size buy group on the newest trades read before the decision (core's
+ * wallets/sameSizeGroups.ts: how many wallets, their share of the page's buy SOL), the same print
+ * on the launch read's first buyers (same tokens in the same slot, block zero aside), and the mean
+ * median hold time of the newest buyers that have one on the wallet book (walletScore.ts
+ * recentBuyersHoldMean). No new call: the live page and the launch read are already made. Null
+ * without the page or the read, and on every row banked before. Never backfilled.
+ *
+ * Recorded only (RETIRED_LEARNER_INPUTS) until a week of decision rows shows the live readings
+ * hold what the point-in-time export measured (same-size: 11.7% 2x against 16.0%; hold mean: AUC
+ * 0.527 for the 2x and 0.339 for the stop). The onset guard (featureOnset.ts) times their first
+ * run once they are brought in.
+ */
+export const GROUP_HOLD_FEATURES = [
+  "sameSizeGroupWallets",
+  "sameSizeGroupSolShare",
+  "launchSameSizeWallets",
+  "recentBuyersHoldMean",
+] as const;
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -688,6 +709,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...CLOCK_HONEST_FEATURES,
   ...PATH_CLOCK_FEATURES,
   ...BLOCK_ZERO_FEATURES,
+  ...GROUP_HOLD_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -816,6 +838,10 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // (user decision 2026-10-16, notes/model-retrain-pending.md); null on rows banked before 10-16,
   // which the onset guard and the trainer's missing indicator cover.
   "firstBuyersHolding",
+  // The same-size buy groups and the newest buyers' hold time (GROUP_HOLD_FEATURES, added
+  // 2026-11-01, data-uses evaluation): recorded first, on the same terms. Bring them in by
+  // removing them here once a week of decision rows shows they separate runners live.
+  ...GROUP_HOLD_FEATURES,
   // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
   // the same terms (notes/wallet-score-2026-10-16/report.md).
   // The bonding-curve path of a young coin (added 2026-10-17, user ask): recorded first.
@@ -1849,6 +1875,10 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   blockZeroHeldPct: "supply held by block-zero snipers",
   blockZeroBuyers: "wallets that bought in block zero",
   blockZeroBoughtPct: "supply bought in block zero",
+  sameSizeGroupWallets: "wallets buying the same size in one second",
+  sameSizeGroupSolShare: "share of recent buy SOL from a same-size group",
+  launchSameSizeWallets: "first buyers taking the same size in one slot",
+  recentBuyersHoldMean: "recent buyers' usual hold time",
   sniperTopHoldersChecked: "top holders checked for snipers",
   top10WalletsChecked: "top-10 wallets checked",
   freshTopHolderCount: "fresh wallets among the top 25",
@@ -2177,6 +2207,10 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     blockZeroHeldPct: scored.blockZeroHeldPct ?? null,
     blockZeroBuyers: scored.blockZeroBuyers ?? null,
     blockZeroBoughtPct: scored.blockZeroBoughtPct ?? null,
+    sameSizeGroupWallets: scored.sameSizeGroupWallets ?? null,
+    sameSizeGroupSolShare: scored.sameSizeGroupSolShare ?? null,
+    launchSameSizeWallets: scored.launchSameSizeWallets ?? null,
+    recentBuyersHoldMean: scored.recentBuyersHoldMean ?? null,
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,

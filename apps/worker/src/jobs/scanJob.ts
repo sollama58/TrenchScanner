@@ -122,6 +122,8 @@ import {
   liveLaunchBagsOf,
   livePageOf,
   liveTradersOn,
+  liveRecentBuyersHoldOn,
+  liveSameSizeGroupOn,
   liveWalletScoreOn,
   liveWinnerFollowOn,
   liveWindowFlowOf,
@@ -224,6 +226,7 @@ import {
   withHolderKinds,
   withLiveFlags,
   type ExTransfersReading,
+  type LiveGroupReading,
 } from "./scanSignals.js";
 import {
   selectWatchlist,
@@ -1079,12 +1082,21 @@ export function withChainDevHolding(
  */
 export function withBlockZero(
   profile: OnChainProfile | null,
-  snipers: Pick<LaunchSnipers, "blockZeroHeldPct" | "blockZeroBuyers" | "blockZeroBoughtPct"> | undefined,
+  snipers:
+    | Pick<
+        LaunchSnipers,
+        "blockZeroHeldPct" | "blockZeroBuyers" | "blockZeroBoughtPct" | "launchSameSizeWallets"
+      >
+    | undefined,
 ): OnChainProfile | null {
   if (!profile || !snipers || snipers.blockZeroBuyers === null) return profile;
   return {
     ...profile,
     blockZeroBuyers: snipers.blockZeroBuyers,
+    // The same-size print among the first buyers rides on the same read (recorded only, 2026-11-01).
+    ...(snipers.launchSameSizeWallets !== null && snipers.launchSameSizeWallets !== undefined
+      ? { launchSameSizeWallets: snipers.launchSameSizeWallets }
+      : {}),
     ...(snipers.blockZeroBoughtPct !== null ? { blockZeroBoughtPct: snipers.blockZeroBoughtPct } : {}),
     ...(snipers.blockZeroHeldPct !== null ? { blockZeroHeldPct: snipers.blockZeroHeldPct } : {}),
   };
@@ -2714,6 +2726,19 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
                 ),
             devLaunchByMint.get(candidate.mintAddress) ?? null,
             pass.kind,
+            // Recorded only (GROUP_HOLD_FEATURES): the same-size group needs no book; the hold
+            // mean is left off with the Wallet Score when the own-tape read failed.
+            {
+              sameSize: liveSameSizeGroupOn(livePages.get(candidate.mintAddress)),
+              recentBuyersHoldMean:
+                ownTapes === null
+                  ? null
+                  : liveRecentBuyersHoldOn(
+                      livePages.get(candidate.mintAddress),
+                      riskLookup,
+                      ownTapes.get(candidate.mintAddress),
+                    ),
+            },
           ),
         );
       } catch (err) {
@@ -3484,6 +3509,8 @@ async function processCandidate(
    * decides on the coin but banks no training row, so the cycle's moments stay where they were.
    */
   pass: ScanPass["kind"] = "cycle",
+  /** The same-size buy group on the live page and the buyers' hold time (recorded only). */
+  groups: LiveGroupReading | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -3515,6 +3542,7 @@ async function processCandidate(
     winnerTraders,
     walletScores,
     winnerFollow,
+    groups,
   );
   // KOL Bundled % and Bundled % ride on the linked reading: unknown (left off) without one.
   const withBundled =

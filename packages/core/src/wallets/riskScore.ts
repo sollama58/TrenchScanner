@@ -232,6 +232,12 @@ export interface ScoredWallet {
   transferWins?: number | null;
   /** SOL it put in over every coin on record (WalletRisk.solIn): its usual stake is this / appearances. */
   solIn?: number;
+  /**
+   * Its median seconds from first buy to first sell over the coins it sold (WalletRisk.medianHoldSec,
+   * 2026-11-01); null until the hourly rebuild has it, absent on a book loaded without it. Read by
+   * the recorded-only recentBuyersHoldMean input.
+   */
+  medianHoldSec?: number | null;
 }
 
 /** What one wallet did in the coin being decided on, from that coin's own tape (TokenWalletActivity). */

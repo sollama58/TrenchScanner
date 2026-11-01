@@ -92,6 +92,7 @@ function loadWalletRiskBook(): Promise<void> {
         own2x: true,
         transferWins: true,
         solIn: true,
+        medianHoldSec: true,
       },
     }),
     prisma.systemHeartbeat.findUnique({
@@ -116,6 +117,7 @@ function loadWalletRiskBook(): Promise<void> {
           own2x: r.own2x,
           transferWins: r.transferWins,
           solIn: r.solIn,
+          medianHoldSec: r.medianHoldSec,
         },
       ]),
     );

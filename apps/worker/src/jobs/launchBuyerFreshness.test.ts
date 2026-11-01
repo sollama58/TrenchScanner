@@ -47,6 +47,7 @@ describe("withLaunchSnipers and the launch-buyer share", () => {
     blockZeroHeldPct: null,
     blockZeroBuyers: null,
     blockZeroBoughtPct: null,
+    launchSameSizeWallets: null,
   };
 
   it("carries the share with the launch shape", () => {

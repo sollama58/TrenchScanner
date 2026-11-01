@@ -3,6 +3,7 @@ import {
   walletScore,
   walletScoreMarket,
   walletScoreReading,
+  recentBuyersHoldMean,
   walletScoreV2,
   type WalletScoreCounts,
 } from "./walletScore.js";
@@ -143,6 +144,20 @@ describe("walletScoreReading", () => {
       walletScoreRecentBuyersMean: 1,
       walletScoreRecentBuyersScored: 1,
     });
+  });
+
+  it("averages the buyers' median hold times the same way (recentBuyersHoldMean)", () => {
+    const holds: Record<string, number | null> = { a: 120, b: 600, c: 30, d: null };
+    const trades = [
+      trade("a", "buy"),
+      trade("a", "buy"),
+      trade("b", "buy"),
+      trade("c", "sell"),
+      trade("d", "buy"),
+    ];
+    expect(recentBuyersHoldMean(trades, (w) => holds[w])).toBe(360);
+    expect(recentBuyersHoldMean(trades, (w) => holds[w], new Set(["b"]))).toBe(120);
+    expect(recentBuyersHoldMean([trade("d", "buy")], (w) => holds[w])).toBeNull();
   });
 
   it("is unknown when no buyer has a score", () => {

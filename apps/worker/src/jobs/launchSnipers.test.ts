@@ -112,6 +112,7 @@ describe("resolveLaunchSnipers", () => {
       blockZeroHeldPct: null,
       blockZeroBuyers: null,
       blockZeroBoughtPct: null,
+      launchSameSizeWallets: 0,
     });
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 60_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
@@ -283,6 +284,7 @@ describe("resolveLaunchSnipers", () => {
       blockZeroHeldPct: null,
       blockZeroBuyers: null,
       blockZeroBoughtPct: null,
+      launchSameSizeWallets: 0,
     });
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 60_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
@@ -312,6 +314,48 @@ describe("resolveLaunchSnipers", () => {
     expect(later.get("A")?.devHolding).toBe(false);
   });
 
+  it("reads the same-size print among the first buyers, block zero aside (recorded only)", async () => {
+    // Three wallets took the same 300 tokens in slot 101; the block-zero pair in slot 100 is not it.
+    const same = (mint: string, i: number, bought: number, slot: number) => ({
+      wallet: `${mint}-s${i}`,
+      tokenAccount: `${mint}-sa${i}`,
+      bought,
+      slot,
+    });
+    const reading = (mint: string): LaunchBuyersResult => ({
+      status: "found",
+      complete: true,
+      buyers: [
+        same(mint, 0, 500, 100),
+        same(mint, 1, 500, 100),
+        same(mint, 2, 300, 101),
+        same(mint, 3, 300, 101),
+        same(mint, 4, 300, 101),
+        ...buyers(mint, 20),
+      ],
+      launchAt: null,
+      ...LAUNCH,
+      blockZeroBuyers: [],
+    });
+    const getLaunchBuyersBatch = vi.fn(async (mints: string[]) => new Map(mints.map((m) => [m, reading(m)])));
+    const getTokenAccountBalances = vi.fn(
+      async (accounts: string[]) => new Map(accounts.map((a) => [a, 1000])),
+    );
+    const helius = { getLaunchBuyersBatch, getTokenAccountBalances } as unknown as HeliusClient;
+    const out = await resolveLaunchSnipers([{ mintAddress: "A", contender: false }], helius, {
+      ...opts,
+      now: 0,
+    });
+    expect(out.get("A")?.launchSameSizeWallets).toBe(3);
+    // The plain fixture's buyers carry no slot past block zero: unknown, not 0.
+    const f = fakeHelius({ found: { B: 25 } });
+    const plain = await resolveLaunchSnipers([{ mintAddress: "B", contender: false }], f.helius, {
+      ...opts,
+      now: 0,
+    });
+    expect(plain.get("B")?.launchSameSizeWallets).toBe(0);
+  });
+
   it("drops a reading once it is too old to trust", async () => {
     const f = fakeHelius({ found: { A: 25 } });
     await resolveLaunchSnipers([{ mintAddress: "A", contender: false }], f.helius, { ...opts, now: 0 });
@@ -333,6 +377,7 @@ describe("withLaunchSnipers", () => {
       blockZeroHeldPct: null,
       blockZeroBuyers: null,
       blockZeroBoughtPct: null,
+      launchSameSizeWallets: null,
     };
     expect(withLaunchSnipers(undefined, snipers)).toEqual({
       ...EMPTY_TRADE_FLOW,
