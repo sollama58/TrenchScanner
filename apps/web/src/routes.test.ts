@@ -3,13 +3,13 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TAB_DATA, resolveTab, tabFromHash } from "./routes";
 
-// The FDSA tab is hidden and admin-only (owner decision 2026-10-31, decision 7): it opens at #fdsa
-// for an admin wallet and nowhere else, and nothing links to it or warms it.
+// The FDSA page (user ask 2026-11-01): any reader opens it at #fdsa, but nothing links to it or
+// warms it. Its controls are Admin > FDSA, which only an admin wallet sees.
 
 const at = (hash: string) => vi.stubGlobal("window", { location: { hash } });
 afterEach(() => vi.unstubAllGlobals());
 
-describe("the hidden FDSA tab", () => {
+describe("the unlinked FDSA page", () => {
   it("is what #fdsa asks for", () => {
     at("#fdsa");
     expect(tabFromHash()).toBe("fdsa");
@@ -17,9 +17,9 @@ describe("the hidden FDSA tab", () => {
     expect(tabFromHash()).toBe("live");
   });
 
-  it("is drawn for an admin wallet only; anyone else gets the Live tab", () => {
+  it("is drawn for every reader; Admin stays an admin wallet's", () => {
     expect(resolveTab("fdsa", { isAdmin: true, portfolioOn: false })).toBe("fdsa");
-    expect(resolveTab("fdsa", { isAdmin: false, portfolioOn: true })).toBe("live");
+    expect(resolveTab("fdsa", { isAdmin: false, portfolioOn: false })).toBe("fdsa");
     expect(resolveTab("admin", { isAdmin: false, portfolioOn: false })).toBe("live");
     expect(resolveTab("portfolio", { isAdmin: true, portfolioOn: false })).toBe("live");
     expect(resolveTab("model", { isAdmin: false, portfolioOn: false })).toBe("model");
@@ -32,8 +32,12 @@ describe("the hidden FDSA tab", () => {
     const tabs = app.slice(app.indexOf("const TABS"), app.indexOf("];", app.indexOf("const TABS")));
     expect(tabs).not.toMatch(/fdsa/i);
     expect(app).toMatch(/const tabs = isAdmin \? \[\.\.\.shownTabs, ADMIN_TAB\] : shownTabs;/);
-    // Only the admin's own render loads its code.
-    expect(app).toMatch(/tab === "fdsa" && isAdmin && <FdsaTab \/>/);
+    // Only opening it loads its code; the admin desk is its own chunk in Admin.
+    expect(app).toMatch(/tab === "fdsa" && <FdsaTab \/>/);
+    const page = readFileSync(resolve(import.meta.dirname, "tabs/FdsaTab.tsx"), "utf8");
+    // The readers' page reads the readers' API and never the admin one, controls or spend.
+    expect(page).toMatch(/`\/fdsa\?days=/);
+    expect(page).not.toMatch(/\/admin\/fdsa|patch\(|post\(|costUsd|budget/);
     const main = readFileSync(resolve(import.meta.dirname, "main.tsx"), "utf8");
     expect(main).not.toMatch(/fdsa/i);
     const html = readFileSync(resolve(import.meta.dirname, "../index.html"), "utf8");

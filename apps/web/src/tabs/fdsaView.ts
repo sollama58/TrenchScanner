@@ -1,5 +1,5 @@
 /**
- * Pure formatting for the hidden FDSA tab (FdsaTab.tsx; owner decision 2026-10-31): the exit plan
+ * Pure formatting for FDSA's pages (FdsaTab.tsx for readers, AdminFdsa.tsx; owner decision 2026-10-31): the exit plan
  * in words, rates with their samples, and signed SOL and percent.
  */
 
@@ -66,4 +66,67 @@ export function fdsaSignedSol(lamports: string): string {
 export function fdsaSignedPct(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "–";
   return `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}%`;
+}
+
+/** Why a sale happened, in a reader's words (core fdsa/adaptiveExit.ts FdsaExitReason). */
+const EXIT_REASONS: Record<string, string> = {
+  stop_loss: "Hit the -50% stop",
+  floor: "Fell to its locked-in floor",
+  partial: "Took profit on the way up",
+  stall: "Stalled, so it got out",
+  max_hold: "Reached its time limit",
+  manual: "Closed by hand",
+};
+export function fdsaExitReasonText(reason: string | null | undefined): string {
+  if (!reason) return "–";
+  return EXIT_REASONS[reason] ?? reason.replace(/_/g, " ");
+}
+
+/** A milestone check-in, in words (core fdsa/exitPlan.ts triggers). */
+const CHECK_INS: Record<string, string> = {
+  crossed_2x: "Crossed 2x",
+  crossed_4x: "Crossed 4x",
+  drawdown: "Sharp drop from the high",
+  timer: "Every 10 minutes held",
+};
+export function fdsaCheckInText(trigger: string): string {
+  return CHECK_INS[trigger] ?? CHECK_INS[trigger.split("@")[0] ?? ""] ?? trigger.replace(/_/g, " ");
+}
+
+/** A multiple as text: "2.4x", "0.62x". */
+export function fdsaMultiple(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "–";
+  return `${v >= 10 ? v.toFixed(1) : v.toFixed(2)}x`;
+}
+
+/** What a closed trade banked as a multiple of its cost, from its P&L percent. */
+export function fdsaBankedMultiple(pnlPct: number | null | undefined): number | null {
+  return pnlPct === null || pnlPct === undefined || !Number.isFinite(pnlPct) ? null : 1 + pnlPct / 100;
+}
+
+/** How long it was held: "45s", "12m", "2h 5m". */
+export function fdsaHeld(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
+}
+
+/**
+ * A log scale for multiples, 0-1 across [lo, hi]: a 2x and a 0.5x sit the same distance from
+ * 1x, which is how a trade's run reads. Clamped to the ends.
+ */
+export function fdsaLogPos(v: number, lo: number, hi: number): number {
+  if (!(v > 0) || !(lo > 0) || !(hi > lo)) return 0;
+  const t = (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo));
+  return Math.min(1, Math.max(0, t));
+}
+
+/** The top of a multiple axis: the next of 2x, 4x, 10x, 20x, 50x, 100x over the highest value. */
+export function fdsaAxisTop(values: (number | null | undefined)[]): number {
+  const top = Math.max(1, ...values.filter((v): v is number => typeof v === "number" && Number.isFinite(v)));
+  for (const step of [2, 4, 10, 20, 50, 100]) if (top * 1.05 <= step) return step;
+  return Math.ceil(top / 100) * 100;
 }

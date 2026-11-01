@@ -33,6 +33,8 @@ import { ExitPlanInfo } from "../components/ExitPlanInfo";
 
 // The trading bot's section is its own chunk: most admin visits never open it.
 const TradingBot = lazy(() => import("./TradingTab").then((m) => ({ default: m.TradingTab })));
+// FDSA's desk too (moved here from the #fdsa tab on 2026-11-01, user ask).
+const FdsaAdmin = lazy(() => import("./AdminFdsa").then((m) => ({ default: m.FdsaAdmin })));
 
 /**
  * The admin panel: everything about the running system in one place, for the wallets in
@@ -134,6 +136,11 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
         {section === "announce" && <AnnouncementsAdmin />}
         {section === "reports" && <FeedbackAdmin />}
         {section === "ai" && <Ai />}
+        {section === "fdsa" && (
+          <Suspense fallback={<p className="muted small">Loading FDSA…</p>}>
+            <FdsaAdmin />
+          </Suspense>
+        )}
         {section === "bot" && (
           <Suspense fallback={<p className="muted small">Loading the trading bot…</p>}>
             <TradingBot />

@@ -26477,7 +26477,7 @@ button.wlm-remove:hover:not(:disabled) {
   }
 }
 
-/* FDSA (hidden #fdsa tab, tabs/FdsaTab.tsx): the model's reasoning wraps instead of widening the table. */
+/* Admin > FDSA (tabs/AdminFdsa.tsx): the model's reasoning wraps instead of widening the table. */
 .fdsa .fdsa-why {
   display: block;
   min-width: 240px;
@@ -26487,4 +26487,455 @@ button.wlm-remove:hover:not(:disabled) {
 }
 .fdsa .fdsa-plan {
   padding: 12px;
+}
+
+/* ---------- FDSA for readers (#fdsa, tabs/FdsaTab.tsx; user ask 2026-11-01) ---------- */
+.fdsa-page h3 {
+  margin-bottom: 4px;
+}
+.fdsa-down {
+  color: var(--bad-ink);
+}
+.fdsa-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.fdsa-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  font-weight: 600;
+  font-size: 12px;
+}
+.fdsa-pill i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.fdsa-pill.on {
+  color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+  background: var(--good-wash);
+}
+.fdsa-pill.on i {
+  background: var(--good);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent);
+}
+.fdsa-pill.paper {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-b) 40%, var(--border));
+}
+.fdsa-kpis .kpi {
+  min-height: 116px;
+}
+.fdsa-kpis .kpi-value {
+  font-size: 30px;
+}
+.fdsa-page .good {
+  color: var(--good-ink);
+}
+.fdsa-page .bad {
+  color: var(--bad-ink);
+}
+.fdsa-empty {
+  padding: 18px 0 6px;
+}
+.fdsa-sub {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 18px 0 4px;
+  color: var(--ink-2);
+}
+.fdsa-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: none;
+}
+.fdsa-figure .num {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.fdsa-rings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 14px 0 10px;
+}
+
+/* The funnel: each stage a narrower bar than the last, centred, so the drop reads at a glance. */
+.fdsa-funnel {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.fdsa-funnel li {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
+  padding: 9px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--series-1) 9%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--series-1) 22%, var(--border));
+  min-width: 0;
+}
+.fdsa-funnel li .stage-icon {
+  grid-row: span 2;
+  margin: 0;
+}
+.fdsa-funnel li .faint {
+  grid-column: 2;
+}
+.fdsa-funnel-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+.fdsa-funnel-count {
+  grid-row: span 2;
+  grid-column: 3;
+  font-size: 22px;
+  font-weight: 700;
+}
+.fdsa-funnel li.goal {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--brand-a) 22%, var(--surface-2)),
+    var(--surface-2)
+  );
+  border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
+}
+.fdsa-funnel li.goal .stage-icon {
+  background: var(--brand-a);
+  color: #fff;
+}
+
+/* Live trades: a card each, with the run drawn on a log track. */
+.fdsa-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent);
+}
+.fdsa-trades {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+.fdsa-trade {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+.fdsa-trade > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.fdsa-trade-now {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.fdsa-trade-now .num {
+  font-size: 22px;
+  font-weight: 700;
+}
+.fdsa-coin {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fdsa-coin:hover strong {
+  text-decoration: underline;
+}
+.fdsa-coin-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.fdsa-coin-text > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+.fdsa-coin-img {
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  width: 32px;
+  height: 32px;
+}
+.fdsa-coin.small .fdsa-coin-img {
+  width: 22px;
+  height: 22px;
+}
+.fdsa-coin-img.fallback {
+  display: grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-weight: 700;
+  font-size: 12px;
+}
+.fdsa-track {
+  position: relative;
+  height: 40px;
+  margin: 4px 6px 0;
+}
+.fdsa-track-rail,
+.fdsa-track-floor,
+.fdsa-track-run {
+  position: absolute;
+  top: 8px;
+  height: 10px;
+  border-radius: 5px;
+}
+.fdsa-track-rail {
+  left: 0;
+  right: 0;
+  background: var(--surface-3);
+}
+.fdsa-track-floor {
+  left: 0;
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--series-2) 45%, transparent) 0 4px,
+    color-mix(in srgb, var(--series-2) 18%, transparent) 4px 8px
+  );
+}
+.fdsa-track-run {
+  background: color-mix(in srgb, var(--series-1) 45%, transparent);
+}
+.fdsa-track-target,
+.fdsa-track-peak,
+.fdsa-track-now {
+  position: absolute;
+  transform: translateX(-50%);
+}
+.fdsa-track-target {
+  top: 4px;
+  width: 2px;
+  height: 18px;
+  background: var(--ink-2);
+  border-radius: 1px;
+}
+.fdsa-track-target.done {
+  background: var(--good);
+}
+.fdsa-track-peak {
+  top: 5px;
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--series-1);
+}
+.fdsa-track-now {
+  top: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--series-1);
+  border: 3px solid var(--surface-solid);
+  box-shadow: 0 0 0 1px var(--series-1);
+}
+.fdsa-track-ticks span {
+  position: absolute;
+  top: 26px;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.fdsa-trade-figs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.fdsa-trade-figs dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.fdsa-trade-figs dd {
+  margin: 0;
+  font-weight: 600;
+}
+.fdsa-plan-text {
+  margin: 0;
+}
+
+/* The run chart: a bar from 1x to the trade's high (slot 1), a dot at what it kept (slot 2). */
+.fdsa-run {
+  fill: color-mix(in srgb, var(--series-1) 70%, transparent);
+}
+.fdsa-kept {
+  fill: var(--series-2);
+  stroke: var(--surface-solid);
+  stroke-width: 2;
+}
+.swatch.dot {
+  border-radius: 50%;
+}
+.fdsa-dim {
+  opacity: 0.35;
+}
+.fdsa-ref-stop,
+.fdsa-ref-goal {
+  stroke-width: 1.25;
+  stroke-dasharray: 4 4;
+}
+.fdsa-ref-stop {
+  stroke: var(--bad);
+}
+.fdsa-ref-goal {
+  stroke: var(--good);
+}
+.fdsa-ref-label {
+  font-size: 10px;
+}
+.fdsa-exit-cols {
+  margin-top: 6px;
+}
+.fdsa-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
+}
+.fdsa-compare-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+.fdsa-compare-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+}
+.fdsa-compare-track {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--surface-3);
+}
+.fdsa-compare-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 7px;
+}
+.fdsa-compare-fill.s1 {
+  background: var(--series-1);
+}
+.fdsa-compare-fill.s2 {
+  background: var(--series-2);
+}
+.fdsa-compare-zero {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--axis);
+}
+.fdsa-compare-value {
+  text-align: right;
+  font-weight: 600;
+}
+.fdsa-table td {
+  white-space: nowrap;
+}
+.fdsa-grade {
+  font-size: 12px;
+  font-weight: 600;
+}
+.fdsa-steps .stage-icon {
+  font-weight: 700;
+}
+@media (max-width: 900px) {
+  .fdsa-page .columns.even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fdsa-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fdsa-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fdsa-steps .stage-arrow {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .fdsa-kpis {
+    gap: 10px;
+  }
+  .fdsa-kpis .kpi {
+    min-height: 0;
+    padding: 14px;
+  }
+  .fdsa-kpis .kpi-value {
+    font-size: 24px;
+  }
+  .fdsa-rings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fdsa-funnel li {
+    width: 100% !important;
+  }
+  .fdsa-trades {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fdsa-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fdsa-page .section-head {
+    flex-direction: column;
+  }
+  .fdsa-page .fdsa-figure {
+    align-items: flex-start;
+  }
+  .fdsa-compare-row {
+    grid-template-columns: 96px minmax(0, 1fr) 56px;
+  }
+}
+.fdsa-compare-label .swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
 }

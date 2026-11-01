@@ -50,6 +50,12 @@ export const ADMIN_SECTIONS = [
   { id: "announce", label: "Announcements", group: "People", blurb: "The bar at the top of the dashboard." },
   { id: "reports", label: "Reports", group: "People", blurb: "Bug reports from the dashboard." },
   { id: "ai", label: "AI", group: "AI", blurb: "The reviewer switch, spend and recent reviews." },
+  {
+    id: "fdsa",
+    label: "FDSA",
+    group: "AI",
+    blurb: "Claude's paper desk: its controls, spend, reviews, plans and record. Readers see #fdsa.",
+  },
   { id: "bot", label: "Trading bot", group: "Trading", blurb: "The bot's positions, config and controls." },
   {
     id: "backups",
