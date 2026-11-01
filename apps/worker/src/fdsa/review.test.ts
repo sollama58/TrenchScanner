@@ -47,6 +47,7 @@ const {
   enqueueFdsaAlert,
   drainFdsaReviews,
   setFdsaMarketSource,
+  screenLineFrom,
 } = await import("./review.js");
 const { reserveFdsaSpend, reserveAiSpend, resetAiBudget, settleAiSpend } = await import("../ai/budget.js");
 const { resetComparablePoolCache } = await import("../ai/reviewer.js");
@@ -428,5 +429,83 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
     expect(down?.read.error).not.toBeNull();
     // Spend went on the exit source.
     expect((await readFdsaBudget(env)).bySource.find((s) => s.source === "fdsa-exit")?.calls).toBe(2);
+  });
+
+  it("shortlists the top of the last day's screens once a day is on record (owner decision 2026-11-01)", async () => {
+    // A day of its own, so the other tests' screens are outside the 24 h window.
+    vi.setSystemTime(new Date("2001-03-20T12:00:00Z"));
+    const seedToken = await prisma.token.create({ data: { mintAddress: `${TAG}-seed`, symbol: "S" } });
+    // 60 model screens as production saw them (Haiku at 0.08-0.35), plus guard drops and a failed
+    // call that must not count. The top 10% is 6 rows: the four at 0.35 fit, the 0.12s would not.
+    const scores = [...Array<number>(50).fill(0.08), ...Array<number>(6).fill(0.12), 0.35, 0.35, 0.35, 0.35];
+    const row = (score: number | null, model = env.FDSA_SCREEN_MODEL, error: string | null = null) => ({
+      tokenId: seedToken.id,
+      stage: "screen",
+      model,
+      effort: "low",
+      promptVersion: FDSA_PROMPT_VERSIONS.screen,
+      decision: score === null ? null : "drop",
+      score,
+      error,
+      alertAt: new Date(),
+      anchorPriceUsd: 0.0001,
+      anchorMcapUsd: 85_000,
+      latencyMs: 1,
+      // On the test's clock: the database's own now() is the real one.
+      createdAt: new Date(),
+    });
+    await prisma.fdsaReview.createMany({
+      data: [
+        ...scores.map((x) => row(x)),
+        ...Array.from({ length: 30 }, () => row(0, LAUNCHER_TEXT_GUARD_MODEL)),
+        row(null, env.FDSA_SCREEN_MODEL, "timeout"),
+      ],
+    });
+    try {
+      const shortlisted = await alertFor();
+      replies.push(screenReply(0.35), decideReply({ ...tradeAnswer, decision: "pass", exitPlan: null }));
+      expect((await reviewFdsaAlert(shortlisted, env)).screen?.decision).toBe("shortlist");
+
+      const dropped = await alertFor();
+      replies.push(screenReply(0.3));
+      expect((await reviewFdsaAlert(dropped, env)).screen?.decision).toBe("drop");
+      expect(await fdsaHeartbeat(env)).toMatchObject({ screenLine: 0.35, screenLineRanked: true });
+
+      // A share of 0 is the fixed line again.
+      resetFdsaReviews();
+      expect(await fdsaHeartbeat({ ...env, FDSA_SCREEN_SHORTLIST_PCT: 0 })).toMatchObject({
+        screenLine: 0.7,
+        screenLineRanked: false,
+      });
+    } finally {
+      await prisma.fdsaReview.deleteMany({ where: { tokenId: seedToken.id } });
+    }
+  });
+});
+
+describe("FDSA screen line", () => {
+  it("takes the lowest score whose ties keep the shortlist within the share", () => {
+    const counts = [
+      { score: 0.08, n: 80 },
+      { score: 0.12, n: 10 },
+      { score: 0.3, n: 6 },
+      { score: 0.35, n: 4 },
+    ];
+    expect(screenLineFrom(counts, 10)).toBe(0.3);
+    expect(screenLineFrom(counts, 5)).toBe(0.35);
+    expect(screenLineFrom(counts, 20)).toBe(0.12);
+    expect(screenLineFrom(counts, 100)).toBe(0.08);
+  });
+  it("still lets the day's top score through when it alone is over the share, and is null with no screens", () => {
+    expect(
+      screenLineFrom(
+        [
+          { score: 0.12, n: 90 },
+          { score: 0.3, n: 30 },
+        ],
+        10,
+      ),
+    ).toBe(0.3);
+    expect(screenLineFrom([], 10)).toBeNull();
   });
 });

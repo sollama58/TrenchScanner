@@ -1243,11 +1243,17 @@ const envSchema = z.object({
     .transform((v) => v === "true"),
   // Stage 1, the screen (owner decision 2026-10-31, decision 1): every alert, on Haiku at low
   // effort with a compact brief, returns a 0-1 shortlist score. Alerts scoring at least
-  // FDSA_SCREEN_MIN_SCORE go to the decide stage. The aim is about 10% shortlisted; 0.7 is a
-  // starting guess, and the tab shows the real shortlist rate to tune it from.
+  // FDSA_SCREEN_MIN_SCORE go to the decide stage. The aim is about 10% shortlisted; 0.7 was a
+  // starting guess, and it shortlisted none of the first 233 alerts (2026-11-01: Haiku's scores
+  // topped out near 0.35). So by default the line is relative (owner decision 2026-11-01): an
+  // alert is shortlisted when its score is in the top FDSA_SCREEN_SHORTLIST_PCT percent of the
+  // last day's screens (fdsa/review.ts screenLine), whatever scale the screen model grades on.
+  // FDSA_SCREEN_MIN_SCORE is then only the line until a day holds enough screens to rank against;
+  // FDSA_SCREEN_SHORTLIST_PCT=0 goes back to the fixed line.
   FDSA_SCREEN_MODEL: z.string().default("claude-haiku-5-5"),
   FDSA_SCREEN_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
   FDSA_SCREEN_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.7),
+  FDSA_SCREEN_SHORTLIST_PCT: z.coerce.number().min(0).max(100).default(10),
   FDSA_SCREEN_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
   // Stage 2, the decide: the shortlist, on Opus at medium effort with the reviewer's full brief,
   // says trade or pass and sets the entry exit plan. A buy must still reach the paper pass inside

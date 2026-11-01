@@ -147,6 +147,11 @@ function expectSameReadings(actual: Record<string, unknown>, expected: Record<st
     const got = actual[key];
     if (typeof value === "number" && typeof got === "number" && /age|minutes/i.test(key)) {
       expect(Math.abs(got - value), key).toBeLessThan(1 / 60);
+    } else if (typeof value === "number" && typeof got === "number" && key === "bandDwellShare") {
+      // Minutes in the band over the launch's age: it reads the clock too, and two passes either
+      // side of a minute's turn differ by a minute's share of the age (CI 2026-11-01: 0 against
+      // 1/201 on a coin 201 minutes old).
+      expect(Math.abs(got - value), key).toBeLessThan(0.01);
     } else {
       expect(got, key).toEqual(value);
     }

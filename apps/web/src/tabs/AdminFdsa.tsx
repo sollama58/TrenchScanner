@@ -61,6 +61,8 @@ interface FdsaState {
     apiKeySet: boolean | null;
     screenModel: string;
     screenMinScore: number;
+    /** Null from an API older than the relative screen line. */
+    screenShortlistPct: number | null;
     decideModel: string;
     decideEffort: string;
     promptVersion: string;
@@ -359,13 +361,21 @@ function DeskPanel({ s, reload }: { s: FdsaState; reload: () => void }) {
           alert to verdict {ms(numOrNull(s.worker.fdsa.alertToVerdictP50Ms))} median
           {Number(s.worker.fdsa.staleTrades ?? 0) > 0 &&
             `; ${String(s.worker.fdsa.staleTrades)} trade verdicts landed after the alert went stale`}
+          {typeof s.worker.fdsa.screenLine === "number" &&
+            `; the screen shortlists at ${s.worker.fdsa.screenLine.toFixed(2)} now${
+              s.worker.fdsa.screenLineRanked === true ? " (the last day's top scores)" : ""
+            }`}
           {typeof s.worker.fdsa.lastError === "string" && `; last error: ${s.worker.fdsa.lastError}`}.
           Reported {when(s.worker.scanAt)}.
         </p>
       )}
       <p className="muted small">
-        Screen: {s.settings.screenModel}, shortlists at {s.settings.screenMinScore}. Decide:{" "}
-        {s.settings.decideModel} at {s.settings.decideEffort} effort. Prompt {s.settings.promptVersion}.
+        Screen: {s.settings.screenModel},{" "}
+        {s.settings.screenShortlistPct !== null && s.settings.screenShortlistPct > 0
+          ? `shortlists the top ${s.settings.screenShortlistPct}% of the last day's scores (${s.settings.screenMinScore} until a day is on record)`
+          : `shortlists at ${s.settings.screenMinScore}`}
+        . Decide: {s.settings.decideModel} at {s.settings.decideEffort} effort. Prompt{" "}
+        {s.settings.promptVersion}.
       </p>
     </Panel>
   );

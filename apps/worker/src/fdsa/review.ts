@@ -165,6 +165,68 @@ async function deskState(): Promise<DeskState> {
   return state;
 }
 
+// ── The screen's shortlist line ───────────────────────────────────────────
+
+/** The day of screens the relative line ranks against, and the fewest it needs to rank at all. */
+const SCREEN_LINE_WINDOW_MS = 24 * 3_600_000;
+const SCREEN_LINE_MIN_SAMPLE = 50;
+const SCREEN_LINE_CACHE_MS = 5 * 60_000;
+let screenLineCache: { at: number; line: number; ranked: boolean } | null = null;
+
+/**
+ * Where a screen score is shortlisted from (owner decision 2026-11-01). The fixed 0.7 line
+ * shortlisted none of the first 233 alerts: Haiku's scores sat at 0.08-0.35, with sound reasons,
+ * so the screen never handed Opus anything to decide. The line is now relative: the lowest score
+ * that keeps the shortlist to at most FDSA_SCREEN_SHORTLIST_PCT percent of the last day's model
+ * screens. Scores come in coarse steps (0.08, 0.12, 0.30...), so a tie at the line counts against
+ * the share rather than past it, unless even the top score alone is over the share - then the top
+ * score is the line, so the best of the day still reaches the decide.
+ *
+ * Fixed at FDSA_SCREEN_MIN_SCORE when the share is 0, or while fewer than 50 model screens are
+ * on record to rank against. Read at most every 5 minutes.
+ */
+export function screenLineFrom(counts: readonly { score: number; n: number }[], pct: number): number | null {
+  const total = counts.reduce((s, c) => s + c.n, 0);
+  if (total === 0) return null;
+  const allowed = (total * pct) / 100;
+  const desc = [...counts].sort((a, b) => b.score - a.score);
+  let line: number | null = null;
+  let atOrAbove = 0;
+  for (const c of desc) {
+    atOrAbove += c.n;
+    if (atOrAbove > allowed) break;
+    line = c.score;
+  }
+  return line ?? desc[0]!.score;
+}
+
+export async function screenLine(
+  env: Pick<Env, "FDSA_SCREEN_MIN_SCORE" | "FDSA_SCREEN_SHORTLIST_PCT">,
+): Promise<{ line: number; ranked: boolean }> {
+  const fixed = { line: env.FDSA_SCREEN_MIN_SCORE, ranked: false };
+  if (env.FDSA_SCREEN_SHORTLIST_PCT <= 0) return fixed;
+  if (screenLineCache && Date.now() - screenLineCache.at < SCREEN_LINE_CACHE_MS) return screenLineCache;
+  // The model's own answers only: not the launcher-text guard's drops, failed calls or unusable answers.
+  const rows = await prisma.fdsaReview.groupBy({
+    by: ["score"],
+    where: {
+      stage: "screen",
+      createdAt: { gt: new Date(Date.now() - SCREEN_LINE_WINDOW_MS), lte: new Date() },
+      score: { not: null },
+      error: null,
+      model: { not: LAUNCHER_TEXT_GUARD_MODEL },
+    },
+    _count: { _all: true },
+  });
+  const counts = rows.flatMap((r) => (r.score === null ? [] : [{ score: r.score, n: r._count._all }]));
+  const total = counts.reduce((s, c) => s + c.n, 0);
+  const ranked =
+    total >= SCREEN_LINE_MIN_SAMPLE ? screenLineFrom(counts, env.FDSA_SCREEN_SHORTLIST_PCT) : null;
+  const state = ranked === null ? fixed : { line: ranked, ranked: true };
+  screenLineCache = { at: Date.now(), ...state };
+  return state;
+}
+
 // ── Slots ─────────────────────────────────────────────────────────────────
 
 /**
@@ -255,6 +317,7 @@ const pendingTokens = new Set<string>();
 export function resetFdsaReviews(): void {
   stats = emptyStats();
   deskCache = null;
+  screenLineCache = null;
   pendingTokens.clear();
   pending.clear();
   inFlight = 0;
@@ -268,9 +331,10 @@ export function resetFdsaReviews(): void {
  */
 export async function fdsaHeartbeat(env: Env): Promise<Record<string, string | number | boolean | null>> {
   if (!fdsaEnabled(env)) return { enabled: false };
-  const [desk, budget] = await Promise.all([
+  const [desk, budget, line] = await Promise.all([
     deskState().catch(() => null),
     readFdsaBudget(env).catch(() => null),
+    screenLine(env).catch(() => null),
   ]);
   return {
     enabled: true,
@@ -299,6 +363,9 @@ export async function fdsaHeartbeat(env: Env): Promise<Record<string, string | n
     alertToVerdictP50Ms: median(stats.alertToVerdictMs),
     alertToVerdictMaxMs: stats.alertToVerdictMs.length > 0 ? Math.max(...stats.alertToVerdictMs) : null,
     maxSignalAgeSeconds: desk?.maxSignalAgeSeconds ?? null,
+    // The score a screen needs to be shortlisted now, and whether it is ranked on the last day.
+    screenLine: line?.line ?? null,
+    screenLineRanked: line?.ranked ?? null,
     lastError: stats.lastError,
     lastErrorAt: stats.lastErrorAt,
   };
@@ -594,7 +661,8 @@ export async function reviewFdsaAlert(alert: FdsaAlert, env: Env): Promise<FdsaR
     stats.skippedBudget += 1;
     return out("budget");
   }
-  const screen = readFdsaScreenAnswer(screenCall.raw, screenCall.meta, env.FDSA_SCREEN_MIN_SCORE);
+  const { line } = await screenLine(env);
+  const screen = readFdsaScreenAnswer(screenCall.raw, screenCall.meta, line);
   stats.screened += 1;
   sample(stats.screenMs, screenCall.latencyMs);
   const screenError = errorOf(screenCall, screen);
