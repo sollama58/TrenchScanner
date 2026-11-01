@@ -82,7 +82,12 @@ import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { aiReviewEnabled, reviewTimeoutMs } from "./ai/reviewer.js";
 import { drainShadowReviews } from "./jobs/curatedAlerts.js";
-import { drainFdsaReviews, fdsaHeartbeat } from "./fdsa/review.js";
+import {
+  drainFdsaReviews,
+  fdsaHeartbeat,
+  fdsaMarketFromJupiter,
+  setFdsaMarketSource,
+} from "./fdsa/review.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch, TRAINING_DEADLINE_MINUTES } from "./jobs/pipelineWatchJob.js";
@@ -407,6 +412,10 @@ async function main() {
         launchHomeClock: env.LAUNCH_HOME_CLOCK,
       })
     : undefined;
+  // FDSA's briefs take their seconds-old quotes from the same client, under its rate-limit gate
+  // (fdsa/review.ts; AI evaluation 2026-11-01). Without a Jupiter key they read "unknown".
+  const fdsaMarket = jupiter ? fdsaMarketFromJupiter(jupiter) : null;
+  setFdsaMarketSource(fdsaMarket);
   const dexScreener = new DexScreenerClient({
     baseUrl: env.DEXSCREENER_BASE_URL,
     requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
@@ -781,7 +790,7 @@ async function main() {
   // Paper trading (admin-only): simulated strategies on live signals and quotes. Never signs or
   // sends, so it runs whether or not the bot above is on - see packages/core/src/trading/paper.ts.
   schedule("paper-trading", () => {
-    const runPaperTrading = createPaperTradingRunner(env);
+    const runPaperTrading = createPaperTradingRunner(env, { market: fdsaMarket });
     return scheduleInterval("paper-trading", runPaperTrading, PAPER_TRADING_INTERVAL_MS / 60_000, {
       deadlineMinutes: 5,
     });

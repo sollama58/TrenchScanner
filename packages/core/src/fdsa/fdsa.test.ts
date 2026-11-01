@@ -40,7 +40,11 @@ import {
   readFdsaMode,
 } from "./desk.js";
 import {
+  DEFAULT_FDSA_TRADE_MIN_P2X,
+  FDSA_PROMPT_VERSION,
+  FDSA_PROMPT_VERSIONS,
   fdsaReviewDedupeKey,
+  fdsaTradeBarRisk,
   readFdsaDecideAnswer,
   readFdsaReviseAnswer,
   readFdsaScreenAnswer,
@@ -475,6 +479,30 @@ describe("FDSA verdicts", () => {
 
   it("a pass keeps no plan", () => {
     expect(readFdsaDecideAnswer({ ...trade, decision: "pass" }, ok).verdict.exitPlan).toBeNull();
+  });
+
+  it("holds a trade under the bar as a pass that names the bar, and takes one at it", () => {
+    const under = readFdsaDecideAnswer({ ...trade, probability2x: 0.35 }, ok, 0.5);
+    expect(under.error).toBeNull();
+    expect(under.verdict).toMatchObject({
+      decision: "pass",
+      probability2x: 0.35,
+      exitPlan: null,
+      risks: [fdsaTradeBarRisk(0.5), "dev sold", expect.any(String)],
+    });
+    expect(fdsaTradeBarRisk(0.5)).toBe("2x odds under the desk's 50% bar");
+    expect(readFdsaDecideAnswer({ ...trade, probability2x: 0.5 }, ok, 0.5).verdict.decision).toBe("trade");
+    // A percent answer is read as one before the bar (35 is 35%).
+    expect(readFdsaDecideAnswer({ ...trade, probability2x: 35 }, ok, 0.5).verdict.decision).toBe("pass");
+    // No bar: the model's word stands, as before.
+    expect(readFdsaDecideAnswer({ ...trade, probability2x: 0.1 }, ok).verdict.decision).toBe("trade");
+    expect(DEFAULT_FDSA_TRADE_MIN_P2X).toBe(0.5);
+  });
+
+  it("names one prompt version per stage", () => {
+    expect(Object.keys(FDSA_PROMPT_VERSIONS).sort()).toEqual(["decide", "revise", "screen"]);
+    expect(new Set(Object.values(FDSA_PROMPT_VERSIONS)).size).toBe(3);
+    expect(FDSA_PROMPT_VERSION).toBe(FDSA_PROMPT_VERSIONS.decide);
   });
 
   it("revises only with a usable plan; anything else keeps the running one", () => {

@@ -11,6 +11,7 @@ import {
   FDSA_DESK_ID,
   FDSA_HARD_FLOOR_MULTIPLE,
   FDSA_PROMPT_VERSION,
+  FDSA_PROMPT_VERSIONS,
   DEFAULT_FDSA_DESK_CONFIG,
   HIGH_CONVICTION_TIER,
   LAUNCHER_TEXT_GUARD_MODEL,
@@ -45,6 +46,7 @@ const {
   resetFdsaReviews,
   enqueueFdsaAlert,
   drainFdsaReviews,
+  setFdsaMarketSource,
 } = await import("./review.js");
 const { reserveFdsaSpend, reserveAiSpend, resetAiBudget, settleAiSpend } = await import("../ai/budget.js");
 const { resetComparablePoolCache } = await import("../ai/reviewer.js");
@@ -132,6 +134,7 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
       candidateOutcomeId: null,
       curatedAlertId: null,
       alertAt: new Date(),
+      agreement: { called: 9, of: 14 },
     };
   }
   const setDesk = (running: boolean) =>
@@ -160,6 +163,24 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
     resetFdsaReviews();
     resetAiBudget();
     resetComparablePoolCache();
+    // A seconds-old quote 20% above the alert's anchor, with Jupiter's last five minutes.
+    setFdsaMarketSource({
+      freshQuote: async () => ({
+        priceUsd: 0.00012,
+        marketCapUsd: 102_000,
+        fetchedAt: new Date(),
+        holderCount: 412,
+        stats5m: {
+          priceChangePct: 8,
+          buys: 41,
+          sells: 12,
+          buyVolumeUsd: 4120,
+          sellVolumeUsd: 1200,
+          netBuyers: 9,
+          holderChange: 31,
+        },
+      }),
+    });
     await cleanSpend();
     await setDesk(true);
   });
@@ -209,7 +230,26 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
     const decide = rows[1]!;
     expect(decide.id).toBe(out.decideReviewId);
     expect(decide.promptVersion).toBe(FDSA_PROMPT_VERSION);
+    expect(rows[0]!.promptVersion).toBe(FDSA_PROMPT_VERSIONS.screen);
     expect(decide.brief).toContain("<token>");
+    // The decide brief ends with what only the desk knows: the snapshot's age, the price now
+    // against the alert price (from the market source), the screen's verdict and the agreement.
+    expect(decide.brief).toContain("alert and desk:");
+    expect(decide.brief).toMatch(/read when the alert went out, \d+ seconds ago/);
+    expect(decide.brief).toContain(
+      "price now (seconds-old quote): $0.0001200, +20.0% on the alert price of $0.0001000",
+    );
+    expect(decide.brief).toContain("from here the alert's 2x is 1.67x and its stop 0.42x");
+    expect(decide.brief).toContain("live, last 5 minutes to now (Jupiter): price +8.0%, 41 buys / 12 sells");
+    expect(decide.brief).toContain("holders 412 (+31 in 5 minutes)");
+    expect(decide.brief).toContain("models alerting on this coin: 9 of 14");
+    expect(decide.brief).toContain(
+      'first screen (a quick cheap-model read, not evidence): 0.85, "strong flow"',
+    );
+    // The screen's brief carries none of it: the quote is taken for the decide alone.
+    expect(rows[0]!.brief).not.toContain("alert and desk:");
+    // The decide prompt names the bar the code enforces.
+    expect((decideReq!.system[0] as { text: string }).text).toContain("at 50% or more");
     expect((decide.exitPlan as { stopMultiple: number }).stopMultiple).toBe(FDSA_HARD_FLOOR_MULTIPLE);
     expect(decide.costUsd).toBeGreaterThan(0);
     expect(decide.anchorPriceUsd).toBe(0.0001);
@@ -233,6 +273,20 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
     expect(create).toHaveBeenCalledTimes(1);
     const rows = await prisma.fdsaReview.findMany({ where: { tokenId: alert.tokenId } });
     expect(rows.map((r) => [r.stage, r.decision, r.score])).toEqual([["screen", "drop", 0.4]]);
+  });
+
+  it("holds a trade under the bar as a pass, with no error and the bar in its risks", async () => {
+    const alert = await alertFor();
+    replies.push(screenReply(0.9), decideReply({ ...tradeAnswer, probability2x: 0.3 }));
+    const out = await reviewFdsaAlert(alert, env);
+    expect(out.decide).toMatchObject({ decision: "pass", probability2x: 0.3, exitPlan: null });
+    const row = await prisma.fdsaReview.findFirstOrThrow({
+      where: { tokenId: alert.tokenId, stage: "decide" },
+    });
+    expect(row.decision).toBe("pass");
+    expect(row.error).toBeNull();
+    expect(row.risks[0]).toBe("2x odds under the desk's 50% bar");
+    expect(await fdsaHeartbeat(env)).toMatchObject({ trades: 0, passes: 1 });
   });
 
   it("stores a refused, cut-off or schema-invalid decide as a pass with the error", async () => {

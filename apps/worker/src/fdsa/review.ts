@@ -13,16 +13,17 @@ import {
   readFdsaScreenAnswer,
   readFdsaDecideAnswer,
   readFdsaReviseAnswer,
+  buildFdsaDecideBrief,
   buildFdsaReviseBrief,
+  fdsaDecideSystemPrompt,
   fdsaReviewDedupeKey,
   FdsaScreenAnswerSchema,
   FdsaDecideAnswerSchema,
   FdsaReviseAnswerSchema,
   FDSA_SCREEN_SYSTEM_PROMPT,
-  FDSA_DECIDE_SYSTEM_PROMPT,
   FDSA_REVISE_SYSTEM_PROMPT,
   FDSA_DESK_ID,
-  FDSA_PROMPT_VERSION,
+  FDSA_PROMPT_VERSIONS,
   type CurationDecision,
   type Env,
   type FdsaAnswerMeta,
@@ -33,6 +34,8 @@ import {
   type FdsaScreenVerdict,
   type FdsaSpendSource,
   type FdsaStage,
+  type FreshQuote,
+  type JupiterClient,
   type ScoredToken,
 } from "@trenchscanner/core";
 import { anthropicClient, anthropicConfigured, describeAnthropicError } from "../ai/client.js";
@@ -75,6 +78,62 @@ export interface FdsaAlert {
   curatedAlertId: string | null;
   /** When the alert went out: the signal's age, and the comparables' cutoff, count from here. */
   alertAt: Date;
+  /**
+   * How many of the scanner's calling seats called this coin in the emitting cycle, of how many
+   * there are (AI evaluation 2026-11-01: coins called by most seats have been the better pool).
+   * Null when emission couldn't say.
+   */
+  agreement?: { called: number; of: number } | null;
+}
+
+// ── Market source ─────────────────────────────────────────────────────────
+
+/**
+ * A seconds-old quote for one mint - Jupiter's Tokens API read, with the last five minutes'
+ * stats and the live holder count (core's FreshQuote). The decide stage takes one so the model
+ * knows where the price stands now against the alert's anchor, and the desk's reviser takes one
+ * for the revise brief's market block (AI evaluation 2026-11-01: that block was never filled
+ * in). Null when the read failed or took too long: the briefs then say "unknown", never a stale
+ * figure dressed as current.
+ */
+export interface FdsaMarketSource {
+  freshQuote(mint: string): Promise<FreshQuote | null>;
+}
+
+/** How long a brief waits for its quote: the decide call is on the clock (maxSignalAgeSeconds). */
+const FRESH_QUOTE_DEADLINE_MS = 3_000;
+
+/** The scanner's own Jupiter client as a market source: one shared rate-limit gate, no second client. */
+export function fdsaMarketFromJupiter(jupiter: Pick<JupiterClient, "getFreshQuotes">): FdsaMarketSource {
+  return {
+    async freshQuote(mint) {
+      try {
+        const quotes = await jupiter.getFreshQuotes([mint], { deadlineMs: FRESH_QUOTE_DEADLINE_MS });
+        return quotes.get(mint) ?? null;
+      } catch (err) {
+        logger.warn("FDSA fresh quote failed", { error: String(err) });
+        return null;
+      }
+    },
+  };
+}
+
+let marketSource: FdsaMarketSource | null = null;
+
+/** Sets where FDSA's briefs take their seconds-old quotes from (index.ts, from the scan's Jupiter client). */
+export function setFdsaMarketSource(source: FdsaMarketSource | null): void {
+  marketSource = source;
+}
+
+/** A quote for the briefs, or null: without a source, on a failure, or past the deadline. Never throws. */
+export async function fdsaFreshQuote(mint: string): Promise<FreshQuote | null> {
+  if (!marketSource) return null;
+  try {
+    return await marketSource.freshQuote(mint);
+  } catch (err) {
+    logger.warn("FDSA fresh quote failed", { error: String(err) });
+    return null;
+  }
 }
 
 /** Whether FDSA may call at all: switched on and a key to call with. The desk's Resume is checked per alert. */
@@ -387,7 +446,7 @@ async function storeReview(
         model,
         answeredBy: call?.answeredBy ?? null,
         effort,
-        promptVersion: FDSA_PROMPT_VERSION,
+        promptVersion: FDSA_PROMPT_VERSIONS[stage],
         playbookId: null,
         brief,
         ...verdict,
@@ -557,7 +616,7 @@ export async function reviewFdsaAlert(alert: FdsaAlert, env: Env): Promise<FdsaR
   if (screen.verdict.decision !== "shortlist") return { ...out("dropped"), screen: screen.verdict };
   stats.shortlisted += 1;
 
-  const decided = await decideFdsaAlert(alert, env, base, desk);
+  const decided = await decideFdsaAlert(alert, env, base, desk, screen.verdict);
   return { screen: screen.verdict, ...decided };
 }
 
@@ -567,11 +626,24 @@ async function decideFdsaAlert(
   env: Env,
   base: RowBase,
   desk: DeskState,
+  screen: FdsaScreenVerdict,
 ): Promise<Omit<FdsaReviewOutcome, "screen">> {
   // The 20 nearest graded past calls, as the reviewer's shadow reviews see them: only rows whose
-  // outcome was knowable at the alert, since this runs detached after it.
-  const comparables = await comparablesFor(alert.scored, env, alert.alertAt);
-  const brief = buildAiReviewBrief(alert.scored, alert.decision, comparables, alert.alertAt);
+  // outcome was knowable at the alert, since this runs detached after it. Beside them, a
+  // seconds-old quote: the brief's figures are the alert's, and by now (a screen, a queue) the
+  // price has moved, so the model is told how old they are and where the price stands.
+  const [comparables, quote] = await Promise.all([
+    comparablesFor(alert.scored, env, alert.alertAt),
+    fdsaFreshQuote(alert.mint),
+  ]);
+  const brief = buildFdsaDecideBrief(alert.scored, alert.decision, comparables, {
+    alertAt: alert.alertAt,
+    now: new Date(),
+    anchorPriceUsd: base.anchorPriceUsd,
+    quote,
+    agreement: alert.agreement ?? null,
+    screen: { score: screen.score, reason: screen.reason },
+  });
   const call = await withSlot(env, false, () =>
     callFdsa(env, {
       stage: "decide",
@@ -579,7 +651,8 @@ async function decideFdsaAlert(
       model: env.FDSA_DECIDE_MODEL,
       effort: env.FDSA_DECIDE_EFFORT,
       timeoutMs: env.FDSA_DECIDE_TIMEOUT_MS,
-      system: FDSA_DECIDE_SYSTEM_PROMPT,
+      // Fixed per process: the bar is an env value, so the prefix is still one cached string.
+      system: fdsaDecideSystemPrompt(env.FDSA_TRADE_MIN_P2X),
       brief,
       schema: FdsaDecideAnswerSchema,
     }),
@@ -588,7 +661,7 @@ async function decideFdsaAlert(
     stats.skippedBudget += 1;
     return { decide: null, decideReviewId: null, stoppedAt: "budget" };
   }
-  const read: FdsaRead<FdsaDecideVerdict> = readFdsaDecideAnswer(call.raw, call.meta);
+  const read: FdsaRead<FdsaDecideVerdict> = readFdsaDecideAnswer(call.raw, call.meta, env.FDSA_TRADE_MIN_P2X);
   const v = read.verdict;
   stats.decided += 1;
   sample(stats.decideMs, call.latencyMs);

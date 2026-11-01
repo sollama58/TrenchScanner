@@ -254,6 +254,15 @@ describe.skipIf(!dbAvailable)("FDSA paper desk", () => {
     s = await pass();
     expect(s.revisionsDispatched).toBe(1);
     expect(reviser.requests[0]).toMatchObject({ trigger: "crossed_2x", planVersion: 1 });
+    // The request carries the desk's own tape (one reading per priced tick, oldest first) and the
+    // fill's price in USD at the market's SOL price, for the revise brief.
+    const req = reviser.requests[0]!;
+    // The first tick priced the fill at the quote, so it reads the 1% penalty: 0.99.
+    expect(req.tape.map((t) => Number(t.multiple.toFixed(2)))).toEqual([0.99, 2.2, 2.2]);
+    expect(req.tape[0]!.minutesAgo).toBeCloseTo(2, 5);
+    expect(req.tape.at(-1)!.minutesAgo).toBe(0);
+    // Entry: 0.5 SOL less the 1% fill penalty for tokens at ENTRY_PRICE lamports a raw unit.
+    expect(req.entryPriceUsd).toBeCloseTo(((ENTRY_PRICE / 0.99) * 1e6 * market.solUsd) / 1e9, 6);
     p = await position(mint);
     expect(p.planVersion).toBe(2);
     expect(p.triggersFired).toContain("crossed_2x");

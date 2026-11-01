@@ -1,8 +1,48 @@
 import { describe, expect, it } from "vitest";
 import { FDSA_DEFAULT_EXIT_PLAN, loadEnv, prisma } from "@trenchscanner/core";
-import { fdsaReviser } from "./fdsaDeskJob.js";
+import { fdsaReviser, sinceEntryLines, type FdsaSnapshotRow } from "./fdsaDeskJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+
+describe("FDSA since-entry block", () => {
+  const snap = (over: Partial<FdsaSnapshotRow> = {}): FdsaSnapshotRow => ({
+    holderCount: 120,
+    largestHolderPct: 8.2,
+    devWalletPct: 3,
+    bundledSupplyPct: null,
+    flaggedSellers: 0,
+    winnerRecentBuyers: 2,
+    winnerRecentSellers: 0,
+    devHolding: true,
+    ...over,
+  });
+
+  it("lists each holder figure at the alert against now, only where both read", () => {
+    const lines = sinceEntryLines(
+      snap(),
+      snap({
+        holderCount: 310,
+        devWalletPct: 0,
+        winnerRecentSellers: 3,
+        devHolding: false,
+        flaggedSellers: null,
+      }),
+    );
+    expect(lines).toEqual([
+      { label: "holders", from: "120", to: "310" },
+      { label: "largest holder", from: "8.2%", to: "8.2%" },
+      { label: "dev wallet", from: "3.0%", to: "0.0%" },
+      { label: "winner wallets buying", from: "2", to: "2" },
+      { label: "winner wallets selling", from: "0", to: "3" },
+      { label: "dev still holding", from: "yes", to: "no, sold out" },
+    ]);
+  });
+
+  it("is empty without a reading on either side", () => {
+    expect(sinceEntryLines(null, snap())).toEqual([]);
+    expect(sinceEntryLines(snap(), null)).toEqual([]);
+  });
+});
 
 describe.skipIf(!dbAvailable)("FDSA desk reviser", () => {
   const request = (positionId: string) => ({
@@ -18,6 +58,8 @@ describe.skipIf(!dbAvailable)("FDSA desk reviser", () => {
     plan: FDSA_DEFAULT_EXIT_PLAN,
     planVersion: 1,
     openedAt: new Date(Date.now() - 600_000),
+    tape: [],
+    entryPriceUsd: null,
     at: new Date(),
   });
 

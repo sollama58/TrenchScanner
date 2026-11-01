@@ -3,7 +3,7 @@ import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
 import { FIRST_BUYERS, FRESH_LAUNCH_BUYERS, resolveDevHolding } from "./tradeFlow.js";
 import { CREATOR_UNKNOWN_FLAG } from "../datasources/rugcheck.js";
 import { TOKENSAGE_LOGO_MIN_SCORE } from "../datasources/tokensage.js";
-import { buildCandidateFeatures } from "./features.js";
+import { buildCandidateFeatures, type CandidateFeatures } from "./features.js";
 import { decisionAnchor, FRESH_ANCHOR_LABEL_RULE, isWin } from "./labels.js";
 import { LINEAGE_KIND, narrativeIsCopycat, narrativeXRead, type NarrativeRead } from "./narrativeFeatures.js";
 import {
@@ -304,6 +304,7 @@ export function buildAiReviewBrief(
     `- volume acceleration (the last 5 minutes at an hourly pace, over the last hour; above 1 is speeding up): ${fmtVal(features.volumeAccel, 2)}`,
     `- order flow: 5m ${buyRatio(scored.buys5m, scored.sells5m)}; 1h ${buyRatio(scored.buys1h, scored.sells1h)}; 24h ${buyRatio(scored.buys24h, scored.sells24h)}`,
     ``,
+    ...liveLines(features),
     ...pricePathLines(scored),
     `holders:`,
     `- holder count: ${fmtNum(scored.holderCount)}`,
@@ -359,6 +360,29 @@ function pairAgeText(minutes: number | null, graduated: boolean | undefined): st
   if (minutes === null) return "unknown";
   const ago = `${Math.round(minutes)} minutes ago`;
   return graduated ? `${ago} (the volume and order flow figures cover only this pool)` : ago;
+}
+
+/**
+ * Jupiter's seconds-old read at the decision (ScoredToken.freshQuote, through the same derivations
+ * the models get: curation/features.ts): the live holder count and its 5-minute change - the
+ * strongest single stored input the 2026-10-25 evaluation found (AUC 0.57) - and the last five
+ * minutes' price, flow and buyers, which run 45-60 s ahead of DexScreener's market block above.
+ * Left out of the brief until the AI evaluation of 2026-11-01. Omitted when there was no quote.
+ */
+function liveLines(f: CandidateFeatures): string[] {
+  const has = (v: number | null) => v !== null && Number.isFinite(v);
+  if (!has(f.jupHolderCount) && !has(f.jup5mPriceChangePct) && !has(f.jup5mBuys)) return [];
+  const signedInt = (v: number | null) => (has(v) ? `${v! >= 0 ? "+" : ""}${Math.round(v!)}` : "unknown");
+  const flow =
+    has(f.jup5mBuys) || has(f.jup5mSells)
+      ? `${has(f.jup5mBuys) ? Math.round(f.jup5mBuys!) : 0} buys / ${has(f.jup5mSells) ? Math.round(f.jup5mSells!) : 0} sells`
+      : "unknown";
+  return [
+    `live (Jupiter, seconds old at the decision):`,
+    `- holders: ${has(f.jupHolderCount) ? Math.round(f.jupHolderCount!) : "unknown"}; change over the last 5 minutes: ${signedInt(f.jup5mHolderChange)}; over the last hour: ${signedInt(f.jup1hHolderChange)}`,
+    `- last 5 minutes: price ${fmtSignedPct(f.jup5mPriceChangePct)}, ${flow}, buy volume ${fmtUsd(f.jup5mBuyVolumeUsd ?? undefined)} / sell volume ${fmtUsd(f.jup5mSellVolumeUsd ?? undefined)}, net buyers ${signedInt(f.jup5mNetBuyers)}, traders ${has(f.jup5mTraders) ? Math.round(f.jup5mTraders!) : "unknown"}`,
+    ``,
+  ];
 }
 
 /** A signed percentage, "+12.0%" or "-4.5%". */
