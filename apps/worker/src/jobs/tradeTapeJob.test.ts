@@ -710,6 +710,215 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     });
   });
 
+  it("stores a busy coin's kept launch side with its partial newest-first read, across a restart", async () => {
+    const busy = await seedCalled("busy-gap", null);
+    const mint = busy.token.mintAddress;
+    const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+    const early = "EarLyBuyer1111111111111111111111111111111111";
+    const page = (
+      m: string,
+      signature: string,
+      blockTime: number,
+      owner: string,
+      pre: number,
+      post: number,
+      token: string | null,
+    ) => ({
+      status: "ok" as const,
+      paginationToken: token,
+      txs: [
+        {
+          blockTime,
+          transaction: { signatures: [signature], message: { accountKeys: [owner, "ata"] } },
+          meta: {
+            err: null,
+            preTokenBalances:
+              pre === 0
+                ? []
+                : [
+                    {
+                      accountIndex: 1,
+                      mint: m,
+                      owner,
+                      uiTokenAmount: { amount: String(pre * 1e6), decimals: 6 },
+                    },
+                  ],
+            postTokenBalances: [
+              { accountIndex: 1, mint: m, owner, uiTokenAmount: { amount: String(post * 1e6), decimals: 6 } },
+            ],
+            preBalances: pre < post ? [10e9, 0] : [9e9, 0],
+            postBalances: pre < post ? [9e9, 0] : [10e9, 0],
+          },
+        },
+      ],
+    });
+    // From the launch: a page a second, far too many for the window; the second page is another
+    // wallet's buy, the early buyer the hand-off must keep.
+    const fromLaunch: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m, opts) => {
+        const i = opts?.paginationToken ? Number(opts.paginationToken) : 0;
+        const owner = i === 1 ? early : dev;
+        return page(
+          m,
+          `gap-${i}`,
+          LAUNCH / 1000 + i,
+          owner,
+          i === 1 ? 0 : i,
+          i === 1 ? 5 : i + 1,
+          String(i + 1),
+        );
+      },
+    };
+    const none = pumpFunStub("none", []);
+    let now = NOW;
+    const first = await runTradeTapeJob(
+      { helius: fromLaunch, pumpFun: none.stub },
+      { heliusPagesPerRun: 50, pumpFunCallsPerRun: 0, now: () => now },
+    );
+    expect(first.handedOff).toBe(1);
+    expect(
+      await prisma.tradeTapeProgress.findUnique({ where: { lane: `handoff:${busy.token.id}` } }),
+    ).not.toBeNull();
+
+    // A new process: the in-memory hand-off is gone, the saved one is not. The newest-first read
+    // never reaches the launch side (its pages sit in the window's last minute), so at the cap the
+    // tape is partial, with the launch side's trades and early buyer in front.
+    resetTradeTapeState();
+    now += MIN;
+    const newest: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m, opts) => {
+        if (!opts?.newest) return { status: "ok", txs: [], paginationToken: null };
+        const i = opts.paginationToken ? Number(opts.paginationToken) : 0;
+        return page(m, `gap-new-${i}`, (ANCHOR + 30 * MIN) / 1000 - i, dev, 2, 1, String(i + 1));
+      },
+    };
+    const origin: TradeTapeDeps["pumpFun"] = { coinOrigin: async () => null, coinTrades: async () => null };
+    const opts = { heliusPagesPerRun: 50, pumpFunCallsPerRun: 0, now: () => now };
+    await runTradeTapeJob({ helius: newest, pumpFun: origin }, opts);
+    await runTradeTapeJob({ helius: newest, pumpFun: origin }, opts);
+    const tape = await prisma.tokenTradeTape.findUnique({ where: { tokenId: busy.token.id } });
+    expect(tape).toMatchObject({ status: "partial", source: "helius", creator: dev });
+    // The 30 newest-first pages, with the launch side's pages the hand-off kept in front.
+    expect(tape!.trades).toBeGreaterThan(30);
+    const rows = await prisma.tokenWalletActivity.findMany({ where: { tokenId: busy.token.id } });
+    // Its first buy is on the record (the wallet book's early-buy credit reads firstBuyAt); launch
+    // roles stay unknown on a partial tape, as summarizeTape has it.
+    expect(rows.find((w) => w.wallet === early)).toMatchObject({
+      firstBuyAt: new Date(LAUNCH + 1_000),
+      buys: 1,
+    });
+    expect(
+      await prisma.tradeTapeProgress.findUnique({ where: { lane: `handoff:${busy.token.id}` } }),
+    ).toBeNull();
+  });
+
+  it("reads an uncalled sample from Helius when no call waits, up to the day's quota", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-sample`, symbol: "S" } });
+    const row = await prisma.candidateOutcome.create({
+      data: {
+        tokenId: token.id,
+        anchorAt: new Date(ANCHOR),
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 10_000,
+        features: {},
+        sampleKind: "event",
+        labelRule: 4,
+        nextCheckAt: new Date(NOW),
+        peak1hPriceUsd: 1.2,
+        low1hPriceUsd: 0.4,
+        lowBefore2xPriceUsd: 0.4,
+        peak24hPriceUsd: 1.2,
+        finalizedAt: new Date(ANCHOR + 30 * MIN),
+      },
+    });
+    const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m) => {
+        // Only our coin has trades; another suite's uncalled coin, if picked, fails and is retried later.
+        if (m !== token.mintAddress) return { status: "ok", txs: [], paginationToken: null };
+        return {
+          status: "ok",
+          paginationToken: null,
+          txs: [
+            {
+              blockTime: LAUNCH / 1000,
+              transaction: { signatures: ["sample-0"], message: { accountKeys: [dev, "ata"] } },
+              meta: {
+                err: null,
+                preTokenBalances: [],
+                postTokenBalances: [
+                  { accountIndex: 1, mint: m, owner: dev, uiTokenAmount: { amount: "1000000", decimals: 6 } },
+                ],
+                preBalances: [10e9, 0],
+                postBalances: [9e9, 0],
+              },
+            },
+          ],
+        };
+      },
+    };
+    const none = pumpFunStub("none", []);
+    const opts = { heliusPagesPerRun: 50, heliusSamplesPerDay: 50, pumpFunCallsPerRun: 0, now: () => NOW };
+    let sampled = 0;
+    for (
+      let i = 0;
+      i < 3 && !(await prisma.tokenTradeTape.findUnique({ where: { tokenId: token.id } }));
+      i += 1
+    )
+      sampled += Number((await runTradeTapeJob({ helius, pumpFun: none.stub }, opts)).sampled ?? 0);
+    expect(sampled).toBeGreaterThanOrEqual(1);
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: token.id } })).toMatchObject({
+      reason: "sample",
+      status: "done",
+      source: "helius",
+      outcomeId: row.id,
+    });
+
+    // At the quota the lane takes no more: fifty samples read today, one more uncalled coin waits.
+    const quota = await prisma.token.createManyAndReturn({
+      data: Array.from({ length: 50 }, (_, i) => ({ mintAddress: `${TAG}-quota-${i}`, symbol: "Q" })),
+    });
+    await prisma.tokenTradeTape.createMany({
+      data: quota.map((t) => ({
+        tokenId: t.id,
+        anchorAt: new Date(ANCHOR),
+        reason: "sample",
+        status: "done",
+        source: "helius",
+        windowEnd: new Date(ANCHOR + 30 * MIN),
+        readAt: new Date(NOW - MIN),
+      })),
+    });
+    const other = await prisma.token.create({ data: { mintAddress: `${TAG}-sample-2`, symbol: "S" } });
+    await prisma.candidateOutcome.create({
+      data: {
+        tokenId: other.id,
+        anchorAt: new Date(ANCHOR),
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 10_000,
+        features: {},
+        sampleKind: "event",
+        labelRule: 4,
+        nextCheckAt: new Date(NOW),
+        peak1hPriceUsd: 1.2,
+        low1hPriceUsd: 0.4,
+        lowBefore2xPriceUsd: 0.4,
+        peak24hPriceUsd: 1.2,
+        finalizedAt: new Date(ANCHOR + 30 * MIN),
+      },
+    });
+    resetTradeTapeState();
+    const meta = await runTradeTapeJob({ helius, pumpFun: none.stub }, opts);
+    expect(meta.sampled).toBe(0);
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: other.id } })).toBeNull();
+  });
+
   it("reads a coin Helius failed once on Helius again, and gives up on the second failure", async () => {
     const once = await seedCalled("helius-once", null);
     await prisma.tokenTradeTape.create({

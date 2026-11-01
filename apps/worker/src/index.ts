@@ -114,7 +114,7 @@ import { runBundledSupplyBackfill } from "./jobs/bundledSupplyBackfill.js";
 import { runWalletScoreBackfill } from "./jobs/walletScoreBackfill.js";
 import { runWinnerFollowBackfill } from "./jobs/winnerFollowBackfill.js";
 import { runQuoteRegrade } from "./jobs/quoteRegrade.js";
-import { runTradeTapeJob, saveTradeTapeProgress } from "./jobs/tradeTapeJob.js";
+import { HELIUS_SAMPLES_PER_DAY, runTradeTapeJob, saveTradeTapeProgress } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runDevLaunchRiskJob } from "./jobs/devLaunchRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
@@ -1088,6 +1088,7 @@ async function main() {
         withJobLock("trade-tape", () =>
           runTradeTapeJob(tapeDeps, {
             heliusPagesPerRun: env.TRADE_TAPE_HELIUS_PAGES_PER_RUN,
+            heliusSamplesPerDay: HELIUS_SAMPLES_PER_DAY,
             pumpFunCallsPerRun: env.TRADE_TAPE_PUMPFUN_CALLS_PER_RUN,
             closingCreditsPerRun: env.TRADE_TAPE_CLOSING_CREDITS_PER_RUN,
             lowCapMcapUsd: env.LOW_CAP_MCAP_USD,
