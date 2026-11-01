@@ -1,6 +1,7 @@
 import {
   FDSA_NOTE_USER_ID,
   paperFdsaExecutor,
+  prisma,
   runFdsaDesk,
   sendTradeNotes,
   type Env,
@@ -9,6 +10,7 @@ import {
   type TelegramApi,
   type TradingRpc,
 } from "@trenchscanner/core";
+import { reviseFdsaPlan } from "../fdsa/review.js";
 import type { JobRunMeta } from "../scheduler.js";
 
 /**
@@ -20,8 +22,9 @@ import type { JobRunMeta } from "../scheduler.js";
  * plans: switching FDSA off must never strand a position without its stop (decision 8). With no
  * desk row yet and FDSA off, it does nothing at all.
  *
- * Revisions: `reviser` is the review pipeline's revise stage. Until that is wired, plans run as
- * set at entry - still with the -50% floor, the ratchet and the hold cap.
+ * Revisions go through the review pipeline's revise stage (fdsa/review.ts reviseFdsaPlan), under
+ * FDSA's exit slice of the cap. With FDSA off there are none: plans run as set at entry, still
+ * with the -50% floor, the ratchet and the hold cap.
  */
 export function createFdsaDeskRunner(
   env: Env,
@@ -30,6 +33,7 @@ export function createFdsaDeskRunner(
     rpc: TradingRpc;
     telegram: TelegramApi | null;
     admins: ReadonlySet<string>;
+    /** Replaces the revise stage (tests). */
     reviser?: FdsaReviser;
   },
 ): () => Promise<JobRunMeta> {
@@ -50,7 +54,7 @@ export function createFdsaDeskRunner(
       rpc: shared.rpc,
       executor,
       entries: env.FDSA_ENABLED,
-      reviser: env.FDSA_ENABLED ? shared.reviser : undefined,
+      reviser: env.FDSA_ENABLED ? (shared.reviser ?? fdsaReviser(env)) : undefined,
       revision: {
         timerMinutes: env.FDSA_REVISION_TIMER_MINUTES,
         drawdownPct: env.FDSA_REVISION_DRAWDOWN_PCT,
@@ -69,5 +73,50 @@ export function createFdsaDeskRunner(
       fdsaSkipped: s.skips.length,
       fdsaErrors: s.errors,
     };
+  };
+}
+
+/**
+ * The desk's reviser on the review pipeline's revise stage. The stored review is graded like the
+ * alert, so it carries the alert's time and anchor from the decide review that bought the
+ * position. Any "no call" (FDSA off, over the cap, an outage) is a failed revision: the running
+ * plan stays.
+ */
+export function fdsaReviser(env: Env): FdsaReviser {
+  return {
+    async revise(r) {
+      const position = await prisma.fdsaPosition.findUnique({
+        where: { id: r.positionId },
+        select: { reviewId: true, tokenId: true, candidateOutcomeId: true, curatedAlertId: true },
+      });
+      const decide = position?.reviewId
+        ? await prisma.fdsaReview.findUnique({
+            where: { id: position.reviewId },
+            select: { tokenId: true, alertAt: true, anchorPriceUsd: true, anchorMcapUsd: true },
+          })
+        : null;
+      if (!position || !decide) return { ok: false, error: "no decide review behind the position" };
+      const result = await reviseFdsaPlan(env, {
+        positionId: r.positionId,
+        tokenId: decide.tokenId,
+        candidateOutcomeId: position.candidateOutcomeId,
+        curatedAlertId: position.curatedAlertId,
+        alertAt: decide.alertAt,
+        anchorPriceUsd: decide.anchorPriceUsd,
+        anchorMcapUsd: decide.anchorMcapUsd,
+        trigger: r.trigger,
+        symbol: r.symbol,
+        minutesHeld: (r.at.getTime() - r.openedAt.getTime()) / 60_000,
+        multiple: r.multiple,
+        peakMultiple: r.peakMultiple,
+        floorMultiple: r.floorMultiple,
+        soldFraction: r.soldFraction,
+        planVersion: r.planVersion,
+        plan: r.plan,
+      });
+      if (!result)
+        return { ok: false, error: "no revision call: FDSA off, over its cap, or the call failed" };
+      return { ok: true, reviewId: result.reviewId, read: result.read };
+    },
   };
 }
