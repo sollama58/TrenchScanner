@@ -89,11 +89,22 @@ The desk exists to keep more of the big runs than a fixed ladder does (the ladde
  * bar (FDSA_TRADE_MIN_P2X) so the prompt names the same figure the code enforces
  * (verdicts.ts readFdsaDecideAnswer); fixed for the life of the process, so still one cached prefix.
  */
-export function fdsaDecideSystemPrompt(minProbability2x: number = DEFAULT_FDSA_TRADE_MIN_P2X): string {
+export function fdsaDecideSystemPrompt(
+  minProbability2x: number = DEFAULT_FDSA_TRADE_MIN_P2X,
+  topPct: number = 0,
+): string {
   const bar = Math.round(minProbability2x * 100);
+  // Ranked (owner decision 2026-11-01, FDSA_TRADE_TOP_PCT): the desk trades the day's top share by
+  // the model's odds, so the model is asked for honest odds and a plan on every answer, not to
+  // clear a bar it never reached (its odds sat at 12-20% under the 50% bar).
+  const rule =
+    topPct > 0
+      ? `It does not wait for a sure thing: it paper-trades the alerts you rate best, buying when your probability2x is among the top ${Math.round(topPct)}% of the day's decided alerts, and its record against that goal is how your odds are judged. So give honest, calibrated odds that rank the alerts well: never inflate them to get a buy, never deflate a good one to be safe. Say "trade" when you would buy it yourself and "pass" otherwise; your probability2x is the figure the desk ranks on, and the exit plan you give is the one it holds a bought position under, so give one on every answer.`
+      : `It would rather miss a winner than take a loser: say "trade" only when you put the chance of a win at ${bar}% or more, and say "pass" on everything that is merely promising or unproven. Your probability2x is the figure that is checked: a "trade" with probability2x under ${bar}% is recorded as a pass.`;
+  const planWhen = topPct > 0 ? "the exit plan on every answer" : "the exit plan on a trade (null on a pass)";
   return `You run an automated paper-trading desk for Solana memecoin alerts. You decide whether the desk buys this alert right now, at a fixed size, and if it does, the exit plan it holds the position under.
 
-Each alert is a token that already passed an automated rug screen (${safetyScreenSummary()}), was ranked among the strongest candidates a scanner found this hour, and passed a quick first screen. Most alerts still lose: historically about one in five wins. ${WIN_TEXT} The desk's goal is that at least 75% of its trades win, and as many as possible reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. It would rather miss a winner than take a loser: say "trade" only when you put the chance of a win at ${bar}% or more, and say "pass" on everything that is merely promising or unproven. Your probability2x is the figure that is checked: a "trade" with probability2x under ${bar}% is recorded as a pass.
+Each alert is a token that already passed an automated rug screen (${safetyScreenSummary()}), was ranked among the strongest candidates a scanner found this hour, and passed a quick first screen. Most alerts still lose: historically about one in five wins. ${WIN_TEXT} The desk's goal is that at least 75% of its trades win, and as many as possible reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. ${rule}
 
 Weigh momentum and order flow against holder health: concentrated, fresh-wallet or empty-wallet holders, a large dev bag, a dump in the last minutes, or thin liquidity are reasons to pass. The wallets section says who holds and trades the coin, from this scanner's record of each wallet: risky wallets, known dumpers and groups of wallets acting as one owner (same-size buy groups, recurring cohorts, above all one that includes a coin's creator) weigh against it; proven winner wallets in early, and buying now, and buyers who usually hold a while, weigh for it. Unknown values are unknown, not good news.
 
@@ -107,7 +118,7 @@ The brief's market, holder and wallet figures were read when the alert went out;
 
 ${EXIT_PLAN_RULES}
 
-Give probability2x and probability4x as honest estimates between 0 and 1, conviction (0-1) in the call itself, the exit plan on a trade (null on a pass), one to three plain sentences of reasoning, and the specific risks you weighed as short phrases.`;
+Give probability2x and probability4x as honest estimates between 0 and 1, conviction (0-1) in the call itself, ${planWhen}, one to three plain sentences of reasoning, and the specific risks you weighed as short phrases.`;
 }
 
 /** The decide prompt at the default bar, for tests and the tab's settings. */

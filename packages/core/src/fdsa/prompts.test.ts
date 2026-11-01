@@ -40,6 +40,13 @@ describe("FDSA prompts", () => {
     expect(fdsaDecideSystemPrompt(0.65)).toContain("counts from its fill, not from the alert price");
   });
 
+  it("the ranked decide prompt asks for honest odds and a plan on every answer, not a bar", () => {
+    const p = fdsaDecideSystemPrompt(0.5, 20);
+    expect(p).toContain("among the top 20% of the day's decided alerts");
+    expect(p).toContain("the exit plan on every answer");
+    expect(p).not.toContain("at 50% or more");
+  });
+
   it("quote the launcher's symbol in the revise brief, flattened and capped", () => {
     const brief = buildFdsaReviseBrief({
       trigger: "drawdown",

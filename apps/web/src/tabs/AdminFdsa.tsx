@@ -63,6 +63,8 @@ interface FdsaState {
     screenMinScore: number;
     /** Null from an API older than the relative screen line. */
     screenShortlistPct: number | null;
+    /** Null from an API older than ranked trades. */
+    tradeTopPct: number | null;
     decideModel: string;
     decideEffort: string;
     promptVersion: string;
@@ -365,6 +367,10 @@ function DeskPanel({ s, reload }: { s: FdsaState; reload: () => void }) {
             `; the screen shortlists at ${s.worker.fdsa.screenLine.toFixed(2)} now${
               s.worker.fdsa.screenLineRanked === true ? " (the last day's top scores)" : ""
             }`}
+          {typeof s.worker.fdsa.tradeLine === "number" &&
+            `; a decide trades at ${Math.round(s.worker.fdsa.tradeLine * 100)}% 2x odds or more now${
+              s.worker.fdsa.tradeLineRanked === true ? " (the last day's top odds)" : ""
+            }`}
           {typeof s.worker.fdsa.lastError === "string" && `; last error: ${s.worker.fdsa.lastError}`}.
           Reported {when(s.worker.scanAt)}.
         </p>
@@ -374,8 +380,11 @@ function DeskPanel({ s, reload }: { s: FdsaState; reload: () => void }) {
         {s.settings.screenShortlistPct !== null && s.settings.screenShortlistPct > 0
           ? `shortlists the top ${s.settings.screenShortlistPct}% of the last day's scores (${s.settings.screenMinScore} until a day is on record)`
           : `shortlists at ${s.settings.screenMinScore}`}
-        . Decide: {s.settings.decideModel} at {s.settings.decideEffort} effort. Prompt{" "}
-        {s.settings.promptVersion}.
+        . Decide: {s.settings.decideModel} at {s.settings.decideEffort} effort
+        {s.settings.tradeTopPct !== null && s.settings.tradeTopPct > 0
+          ? `, trades the top ${s.settings.tradeTopPct}% of the last day's odds`
+          : ""}
+        . Prompt {s.settings.promptVersion}.
       </p>
     </Panel>
   );
