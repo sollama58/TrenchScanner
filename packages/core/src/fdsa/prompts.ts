@@ -1,4 +1,10 @@
-import { safetyScreenSummary } from "../curation/aiReview.js";
+import {
+  buildAiReviewBrief,
+  clip,
+  safetyScreenSummary,
+  type ComparableOutcome,
+} from "../curation/aiReview.js";
+import type { CurationDecision } from "../curation/curator.js";
 import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   GOAL_MULTIPLE,
@@ -6,6 +12,7 @@ import {
   WIN_MULTIPLE,
   WIN_WINDOW_MINUTES,
 } from "../curation/labels.js";
+import type { FreshQuote, ScoredToken } from "../types.js";
 import {
   FDSA_DEFAULT_EXIT_PLAN,
   FDSA_PLAN_BOUNDS,
@@ -13,16 +20,21 @@ import {
   type FdsaExitPlan,
 } from "./exitPlan.js";
 import type { FdsaRevisionTrigger } from "./exitPlan.js";
+import { DEFAULT_FDSA_TRADE_MIN_P2X } from "./verdicts.js";
 
 /**
  * FDSA's prompts (owner decision 2026-10-31, decision 1): the fixed system prompts for the screen,
- * the decide and the exit revision, and the revision brief. The per-alert brief is the AI
- * reviewer's own (curation/aiReview.ts buildAiReviewBrief), which already quotes the launcher's
- * text as JSON inside <token> and TokenSage's read inside <tokensage>; FDSA does not build a
- * second one. The worker (apps/worker/src/fdsa/reviewer.ts) makes the calls.
+ * the decide and the exit revision, and the two briefs FDSA adds to the reviewer's. The per-alert
+ * brief is the AI reviewer's own (curation/aiReview.ts buildAiReviewBrief), which already quotes
+ * the launcher's text as JSON inside <token> and TokenSage's read inside <tokensage>; FDSA does
+ * not build a second one. The decide stage appends an "alert and desk" section to it
+ * (buildFdsaDecideBrief) with what only the desk knows: how old the snapshot is, where the price
+ * stands now, how many models called the coin and what the screen said (AI evaluation
+ * 2026-11-01). The worker (apps/worker/src/fdsa/review.ts) makes the calls.
  *
- * Every system prompt here is a fixed string - no per-call value, no date - so it stays a stable,
- * cacheable prefix. Bump FDSA_PROMPT_VERSION (verdicts.ts) whenever one of them changes.
+ * Every system prompt here is a fixed string per process - no per-call value, no date - so it
+ * stays a stable, cacheable prefix. Bump the stage's entry in FDSA_PROMPT_VERSIONS (verdicts.ts)
+ * whenever one of them, or its brief, changes.
  */
 
 const STOP_PCT = Math.round((1 - DISQUALIFYING_DRAWDOWN_FRACTION) * 100);
@@ -62,31 +74,161 @@ const EXIT_PLAN_RULES = `The exit plan is a set of numbers a rule engine runs on
 At most ${FDSA_PLAN_MAX_STEPS} entries per list. The floor only ever ratchets up: nothing you send can lower it, and the -${STOP_PCT}% stop always holds.
 The desk exists to keep more of the big runs than a fixed ladder does (the ladder sells 35% at 2x, 30% at 4x and 25% at 10x), so prefer protecting gains with lock-ins and a trail over selling most of the position early. An example plan: ${EXAMPLE_PLAN}`;
 
-/** Stage 2 (Opus, medium effort): trade or pass, with the entry exit plan. */
-export const FDSA_DECIDE_SYSTEM_PROMPT = `You run an automated paper-trading desk for Solana memecoin alerts. You decide whether the desk buys this alert right now, at a fixed size, and if it does, the exit plan it holds the position under.
+/**
+ * Stage 2 (Opus, medium effort): trade or pass, with the entry exit plan. A function of the trade
+ * bar (FDSA_TRADE_MIN_P2X) so the prompt names the same figure the code enforces
+ * (verdicts.ts readFdsaDecideAnswer); fixed for the life of the process, so still one cached prefix.
+ */
+export function fdsaDecideSystemPrompt(minProbability2x: number = DEFAULT_FDSA_TRADE_MIN_P2X): string {
+  const bar = Math.round(minProbability2x * 100);
+  return `You run an automated paper-trading desk for Solana memecoin alerts. You decide whether the desk buys this alert right now, at a fixed size, and if it does, the exit plan it holds the position under.
 
-Each alert is a token that already passed an automated rug screen (${safetyScreenSummary()}), was ranked among the strongest candidates a scanner found this hour, and passed a quick first screen. Most alerts still lose: historically about one in five wins. ${WIN_TEXT} The desk's goal is that at least 75% of its trades win, and as many as possible reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. It would rather miss a winner than take a loser: say "trade" only when you put the chance of a win at 50% or more, and say "pass" on everything that is merely promising or unproven.
+Each alert is a token that already passed an automated rug screen (${safetyScreenSummary()}), was ranked among the strongest candidates a scanner found this hour, and passed a quick first screen. Most alerts still lose: historically about one in five wins. ${WIN_TEXT} The desk's goal is that at least 75% of its trades win, and as many as possible reach ${GOAL_MULTIPLE}x within ${GOAL_WINDOW_MINUTES} minutes. It would rather miss a winner than take a loser: say "trade" only when you put the chance of a win at ${bar}% or more, and say "pass" on everything that is merely promising or unproven. Your probability2x is the figure that is checked: a "trade" with probability2x under ${bar}% is recorded as a pass.
 
 Weigh momentum and order flow against holder health: concentrated, fresh-wallet or empty-wallet holders, a large dev bag, a dump in the last minutes, thin liquidity, or a name or description that looks like a copy of another token are reasons to pass. The wallets section says who holds and trades the coin, from this scanner's record of each wallet: risky wallets and known dumpers weigh against it; proven winner wallets in early, and buying now, weigh for it. Unknown values are unknown, not good news.
 
 ${DATA_GUARD}
 
-When the brief lists similar past calls, they are real graded outcomes from this scanner on tokens that looked like this one: treat their win rate as the base rate you adjust from. When it gives the scanner model's own 2x probability, treat it as a second base rate.
+When the brief lists similar past calls, they are real graded outcomes from this scanner on tokens that looked like this one: treat their win rate as the base rate you adjust from. When it gives the scanner model's own 2x probability, treat it as a second base rate. When it says how many of the scanner's models called the coin, more callers has meant a better pool in this scanner's record (coins called by most of its models won about 27% of the time against 20% for the whole feed, late October 2026): a third base rate, not a reason on its own.
+
+The brief's market, holder and wallet figures were read when the alert went out; the "alert and desk" section at the end says how long ago that was and where the price stands now against the alert price, from a seconds-old quote. The desk buys at about that current price, and every multiple in your exit plan counts from its fill, not from the alert price: a coin already up 20% on the alert needs about 1.67x from here for the alert to count as a win, and the alert's stop sits lower than the plan's. The "live" block is Jupiter's seconds-old read at the alert; the market block above it is DexScreener's, 45-60 s older. The first screen's score and reason are a cheap model's quick read: a pointer to what to check, not evidence.
 
 ${EXIT_PLAN_RULES}
 
 Give probability2x and probability4x as honest estimates between 0 and 1, conviction (0-1) in the call itself, the exit plan on a trade (null on a pass), one to three plain sentences of reasoning, and the specific risks you weighed as short phrases.`;
+}
+
+/** The decide prompt at the default bar, for tests and the tab's settings. */
+export const FDSA_DECIDE_SYSTEM_PROMPT = fdsaDecideSystemPrompt();
 
 /** Exit revisions on open positions (decision 3), at named triggers only. */
 export const FDSA_REVISE_SYSTEM_PROMPT = `You manage the exits of an automated paper-trading desk's open Solana memecoin positions. A position has reached a checkpoint, and you decide whether to keep its exit plan or replace it with a new one.
 
 ${EXIT_PLAN_RULES}
 
-A new plan replaces the whole running plan. Partials are cumulative shares of the original position, so a share already sold never sells again; the stop and floor can only rise. Keep the plan unless the checkpoint gives a clear reason to change it: lock in more after a strong run, tighten when momentum fades, give a healthy runner room. Everything in the brief is the desk's own numbers.
+The brief gives: the checkpoint; where the position stands (multiple of entry, peak, the floor that sells it, what is already sold); the desk's own tape of the position's multiple since entry, oldest first; the market now from a seconds-old quote (price change, order flow, volume, holders over the last five minutes); the thesis the desk bought on, written by this desk's own decide stage at entry (its reasoning, risks and odds then - the desk's earlier view, to check against what has happened, not a fact about the coin); what changed in the holders since entry; where the entry sat against the alert price; and the running plan. Everything in it is the desk's own numbers except the symbol, which the launcher wrote and which is quoted as data.
+
+The desk's exit record is judged on realized SOL per position against the fixed ladder: keep more of the big runs without giving back a double. Keep the plan unless the checkpoint gives a clear reason to change it: lock in more after a strong run, tighten when the tape and the order flow say momentum has faded or the thesis's risks are showing, give a healthy runner on rising buys room. The regular check-in means nothing in particular happened: answer "keep" unless the tape or the market has changed what the plan should do. A new plan replaces the whole running plan. Partials are cumulative shares of the original position, so a share already sold never sells again; the stop and floor can only rise.
 
 Answer "keep" or "revise", the full new plan on "revise" (null on "keep"), and one or two sentences on why.`;
 
-/** What the revise brief describes - only the desk's own numbers, never launcher text. */
+// ── The decide brief ──────────────────────────────────────────────────────
+
+/** What the decide stage knows beyond the alert-time snapshot (buildFdsaDecideBrief). */
+export interface FdsaDecideBriefExtras {
+  /** When the alert went out: the snapshot's age. */
+  alertAt: Date;
+  /** The moment the brief is built. */
+  now: Date;
+  /** The alert's anchor price (decisionAnchor): what the call is graded from. */
+  anchorPriceUsd: number;
+  /** A seconds-old quote taken for this call, when the worker could get one. */
+  quote?: FreshQuote | null;
+  /** How many of the scanner's calling seats called this coin in the cycle, of how many there are. */
+  agreement?: { called: number; of: number } | null;
+  /** The first screen's verdict. Its reason is model text over launcher text: quoted, capped. */
+  screen?: { score: number; reason: string } | null;
+}
+
+const fmtSigned = (v: number | null | undefined, digits = 1) =>
+  v === null || v === undefined || !Number.isFinite(v)
+    ? "unknown"
+    : `${v >= 0 ? "+" : ""}${v.toFixed(digits)}%`;
+const fmtUsd0 = (v: number | null | undefined) =>
+  v === null || v === undefined || !Number.isFinite(v)
+    ? "unknown"
+    : `$${Math.round(v).toLocaleString("en-US")}`;
+const fmtInt = (v: number | null | undefined) =>
+  v === null || v === undefined || !Number.isFinite(v) ? "unknown" : String(Math.round(v));
+const fmtSignedInt = (v: number | null | undefined) =>
+  v === null || v === undefined || !Number.isFinite(v) ? "unknown" : `${v >= 0 ? "+" : ""}${Math.round(v)}`;
+
+/** A price, with enough digits to tell two memecoin prices apart. */
+function fmtPrice(v: number): string {
+  if (!Number.isFinite(v) || v <= 0) return "unknown";
+  return `$${v.toPrecision(4)}`;
+}
+
+/**
+ * The "alert and desk" section the decide stage appends to the reviewer's brief (AI evaluation
+ * 2026-11-01): the snapshot's age, the price now against the alert price and what the alert's
+ * win and stop are from here, Jupiter's last five minutes, how many models called the coin, and
+ * the screen's verdict. Every line reads "unknown" when the worker had no figure, as the reviewer's
+ * brief does.
+ */
+export function fdsaAlertLines(extras: FdsaDecideBriefExtras): string[] {
+  const ageSeconds = Math.max(0, Math.round((extras.now.getTime() - extras.alertAt.getTime()) / 1000));
+  const lines = [
+    `alert and desk:`,
+    `- the figures above were read when the alert went out, ${ageSeconds} seconds ago; the desk buys within about two minutes of the alert at the price then`,
+  ];
+  const q = extras.quote;
+  if (q && q.priceUsd > 0 && extras.anchorPriceUsd > 0) {
+    const ratio = q.priceUsd / extras.anchorPriceUsd;
+    const winFromHere = WIN_MULTIPLE / ratio;
+    const stopFromHere = DISQUALIFYING_DRAWDOWN_FRACTION / ratio;
+    lines.push(
+      `- price now (seconds-old quote): ${fmtPrice(q.priceUsd)}, ${fmtSigned((ratio - 1) * 100)} on the alert price of ${fmtPrice(extras.anchorPriceUsd)}; from here the alert's ${WIN_MULTIPLE}x is ${winFromHere.toFixed(2)}x and its stop ${stopFromHere.toFixed(2)}x of a fill at this price`,
+    );
+    const s = q.stats5m;
+    if (s) {
+      const flow =
+        s.buys !== undefined || s.sells !== undefined
+          ? `${fmtInt(s.buys ?? 0)} buys / ${fmtInt(s.sells ?? 0)} sells`
+          : "unknown";
+      const holders =
+        q.holderCount !== undefined
+          ? `${fmtInt(q.holderCount)}${s.holderChange !== undefined ? ` (${fmtSignedInt(s.holderChange)} in 5 minutes)` : ""}`
+          : "unknown";
+      lines.push(
+        `- live, last 5 minutes to now (Jupiter): price ${fmtSigned(s.priceChangePct)}, ${flow}, buy volume ${fmtUsd0(s.buyVolumeUsd)} / sell volume ${fmtUsd0(s.sellVolumeUsd)}, net buyers ${fmtSignedInt(s.netBuyers)}, holders ${holders}`,
+      );
+    } else if (q.holderCount !== undefined) {
+      lines.push(`- holders now (Jupiter): ${fmtInt(q.holderCount)}`);
+    }
+  } else {
+    lines.push(`- price now: unknown (no quote in time)`);
+  }
+  const a = extras.agreement;
+  lines.push(`- models alerting on this coin: ${a && a.of > 0 ? `${a.called} of ${a.of}` : "unknown"}`);
+  const sc = extras.screen;
+  lines.push(
+    `- first screen (a quick cheap-model read, not evidence): ${sc ? `${sc.score.toFixed(2)}, ${JSON.stringify(clip(sc.reason, 160))}` : "unknown"}`,
+  );
+  return lines;
+}
+
+/** The decide stage's brief: the reviewer's brief with comparables, then the alert and desk section. */
+export function buildFdsaDecideBrief(
+  scored: ScoredToken,
+  decision: CurationDecision,
+  comparables: ComparableOutcome[] | undefined,
+  extras: FdsaDecideBriefExtras,
+): string {
+  return [
+    buildAiReviewBrief(scored, decision, comparables, extras.alertAt),
+    ``,
+    ...fdsaAlertLines(extras),
+  ].join("\n");
+}
+
+// ── The revise brief ──────────────────────────────────────────────────────
+
+/** One reading of the desk's own tape of a position (paperDesk.ts fdsaPositionTape). */
+export interface FdsaTapePoint {
+  /** Minutes before the brief's moment. */
+  minutesAgo: number;
+  multiple: number;
+}
+
+/** One holder figure as it was at the alert and as it is now (fdsaDeskJob.ts sinceEntryLines). */
+export interface FdsaSinceEntryChange {
+  label: string;
+  from: string;
+  to: string;
+}
+
+/** What the revise brief describes - the desk's own numbers; the symbol is the one launcher-written field. */
 export interface FdsaReviseBriefInput {
   trigger: FdsaRevisionTrigger;
   symbol: string | null;
@@ -97,13 +239,32 @@ export interface FdsaReviseBriefInput {
   soldFraction: number;
   planVersion: number;
   plan: FdsaExitPlan;
-  /** Recent market figures, when the caller has them. */
+  /** Recent market figures, when the caller has them (a seconds-old Jupiter quote). */
   market?: {
     priceChange5mPct?: number | null;
+    priceChange1hPct?: number | null;
     volume5mUsd?: number | null;
+    buyVolume5mUsd?: number | null;
+    sellVolume5mUsd?: number | null;
     buys5m?: number | null;
     sells5m?: number | null;
+    netBuyers5m?: number | null;
+    holderCount?: number | null;
+    holderChange5m?: number | null;
   };
+  /** The desk's own readings of the multiple over the hold, oldest first. */
+  tape?: readonly FdsaTapePoint[];
+  /** What the decide stage said at entry: this desk's own model text, shown as its earlier view. */
+  thesis?: {
+    reasoning: string;
+    risks: readonly string[];
+    probability2x: number;
+    probability4x: number;
+  } | null;
+  /** The fill against the alert's anchor price, in percent (+20 = bought 20% above the alert). */
+  entryVsAlertPct?: number | null;
+  /** Holder figures at the alert against now. */
+  sinceEntry?: readonly FdsaSinceEntryChange[];
 }
 
 const TRIGGER_TEXT: Record<FdsaRevisionTrigger, string> = {
@@ -116,9 +277,41 @@ const TRIGGER_TEXT: Record<FdsaRevisionTrigger, string> = {
 const num = (v: number | null | undefined, digits = 2) =>
   v === null || v === undefined || !Number.isFinite(v) ? "unknown" : v.toFixed(digits);
 
+/** At most this many tape readings are written; a longer tape is thinned evenly, keeping its ends. */
+const TAPE_POINTS = 30;
+
 /**
- * The revision brief: the checkpoint, where the position stands and the plan it runs. The symbol
- * is launcher-written, so it goes in JSON-quoted and capped like the reviewer's token text.
+ * The tape as a line: oldest first, thinned to TAPE_POINTS, with the step between readings named
+ * so the model can read a slope off it, and the change over the desk's own last five minutes.
+ */
+export function fdsaTapeLines(tape: readonly FdsaTapePoint[] | undefined, multipleNow: number): string[] {
+  const clean = (tape ?? [])
+    .filter((p) => Number.isFinite(p.minutesAgo) && Number.isFinite(p.multiple) && p.multiple > 0)
+    .sort((a, b) => b.minutesAgo - a.minutesAgo);
+  if (clean.length === 0) return [`tape (the desk's own readings since entry): none yet`];
+  const step = Math.max(1, Math.ceil(clean.length / TAPE_POINTS));
+  const shown = clean.filter((_, i) => i % step === 0 || i === clean.length - 1);
+  const span = clean[0]!.minutesAgo;
+  const stepMinutes = shown.length > 1 ? span / (shown.length - 1) : span;
+  const fiveAgo = clean.reduce((best, p) =>
+    Math.abs(p.minutesAgo - 5) < Math.abs(best.minutesAgo - 5) ? p : best,
+  );
+  const lines = [
+    `tape (the desk's own readings of the multiple since entry, oldest first, about one every ${stepMinutes < 1 ? "minute or less" : `${stepMinutes.toFixed(stepMinutes < 10 ? 1 : 0)} minutes`}, over the last ${Math.round(span)} minutes): ${shown.map((p) => p.multiple.toFixed(2)).join(" ")} -> now ${multipleNow.toFixed(2)}`,
+  ];
+  if (fiveAgo.minutesAgo >= 3 && fiveAgo.multiple > 0) {
+    lines.push(
+      `- change over the desk's own last ${Math.round(fiveAgo.minutesAgo)} minutes: ${fmtSigned((multipleNow / fiveAgo.multiple - 1) * 100)}`,
+    );
+  }
+  return lines;
+}
+
+/**
+ * The revision brief: the checkpoint, where the position stands, the desk's own tape, the market
+ * now, the thesis at entry, what changed since, the entry against the alert, and the plan it runs.
+ * The symbol is launcher-written, so it goes in JSON-quoted and capped like the reviewer's token
+ * text; the thesis is this desk's own earlier model text, flattened and capped the same way.
  */
 export function buildFdsaReviseBrief(input: FdsaReviseBriefInput): string {
   const symbol = JSON.stringify(
@@ -132,6 +325,32 @@ export function buildFdsaReviseBrief(input: FdsaReviseBriefInput): string {
     m?.buys5m !== null && m?.buys5m !== undefined && m.sells5m !== null && m.sells5m !== undefined
       ? `${m.buys5m} buys / ${m.sells5m} sells`
       : "unknown";
+  const volume5m =
+    m?.volume5mUsd ??
+    (m?.buyVolume5mUsd !== null &&
+    m?.buyVolume5mUsd !== undefined &&
+    m.sellVolume5mUsd !== null &&
+    m.sellVolume5mUsd !== undefined
+      ? m.buyVolume5mUsd + m.sellVolume5mUsd
+      : null);
+  const holders =
+    m?.holderCount === null || m?.holderCount === undefined
+      ? "unknown"
+      : `${fmtInt(m.holderCount)}${m.holderChange5m !== null && m.holderChange5m !== undefined ? ` (${fmtSignedInt(m.holderChange5m)} in 5 minutes)` : ""}`;
+  const t = input.thesis;
+  const thesisLines = t
+    ? [
+        `thesis at entry (this desk's own decide stage, then; its view to check, not a fact):`,
+        `- odds it gave: ${Math.round(t.probability2x * 100)}% to 2x, ${Math.round(t.probability4x * 100)}% to 4x`,
+        `- reasoning: ${JSON.stringify(clip(t.reasoning, 600))}`,
+        `- risks it named: ${t.risks.length > 0 ? JSON.stringify(t.risks.map((r) => clip(r, 140)).slice(0, 8)) : "none"}`,
+      ]
+    : [`thesis at entry: unknown`];
+  const since = input.sinceEntry ?? [];
+  const sinceLines =
+    since.length > 0
+      ? [`since entry (at the alert -> now):`, ...since.map((c) => `- ${c.label}: ${c.from} -> ${c.to}`)]
+      : [`since entry: no later holder reading yet`];
   return [
     `checkpoint: ${TRIGGER_TEXT[input.trigger]}`,
     `position (symbol, launcher-written: ${symbol}):`,
@@ -140,10 +359,15 @@ export function buildFdsaReviseBrief(input: FdsaReviseBriefInput): string {
     `- floor now (sells everything at or under): ${num(input.floorMultiple)}x`,
     `- share of the original position already sold: ${Math.round(input.soldFraction * 100)}%`,
     `- plan version: ${input.planVersion}`,
-    `market:`,
-    `- price change, last 5 minutes: ${num(m?.priceChange5mPct, 1)}%`,
-    `- volume, last 5 minutes: ${m?.volume5mUsd === null || m?.volume5mUsd === undefined ? "unknown" : `$${Math.round(m.volume5mUsd)}`}`,
-    `- order flow, last 5 minutes: ${flow}`,
+    `- entry against the alert price: ${input.entryVsAlertPct === null || input.entryVsAlertPct === undefined ? "unknown" : `${fmtSigned(input.entryVsAlertPct)} (the alert's 2x is ${(WIN_MULTIPLE / (1 + input.entryVsAlertPct / 100)).toFixed(2)}x of entry)`}`,
+    ...fdsaTapeLines(input.tape, input.multiple),
+    `market (seconds-old quote):`,
+    `- price change, last 5 minutes: ${num(m?.priceChange5mPct, 1)}%; last hour: ${num(m?.priceChange1hPct, 1)}%`,
+    `- volume, last 5 minutes: ${volume5m === null || volume5m === undefined ? "unknown" : `$${Math.round(volume5m)}`}${m?.buyVolume5mUsd !== null && m?.buyVolume5mUsd !== undefined ? ` (buys ${fmtUsd0(m.buyVolume5mUsd)} / sells ${fmtUsd0(m.sellVolume5mUsd)})` : ""}`,
+    `- order flow, last 5 minutes: ${flow}; net buyers ${fmtSignedInt(m?.netBuyers5m)}`,
+    `- holders: ${holders}`,
+    ...thesisLines,
+    ...sinceLines,
     `running plan: ${JSON.stringify(input.plan)}`,
   ].join("\n");
 }

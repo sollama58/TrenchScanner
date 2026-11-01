@@ -1065,6 +1065,15 @@ export async function emitCuratedCycle(
   // Anchors created by calls this pass, so another ledger's call on the same token grades from
   // the identical moment instead of minting a duplicate row.
   const anchors = new Map<string, CandidateSampleRef>();
+  // How many seats called each coin this cycle, for FDSA's decide brief (AI evaluation
+  // 2026-11-01): the 2026-10-25 evaluation found coins called by 9+ models the best cheap cut
+  // (27% against 20%), and the brief carried one seat's line. A contender is a seat's call.
+  const calledBy = new Map<string, number>();
+  for (const contenders of cycle.byModel.values()) {
+    for (const c of contenders) calledBy.set(c.token.id, (calledBy.get(c.token.id) ?? 0) + 1);
+  }
+  const callingSeats = roster.entries.filter((e) => e.spec.trackingOnly !== true).length;
+  const agreementOf = (tokenId: string) => ({ called: calledBy.get(tokenId) ?? 0, of: callingSeats });
 
   let emitted = 0;
   for (const model of order) {
@@ -1077,6 +1086,7 @@ export async function emitCuratedCycle(
         now,
         hourAgo,
         burstAgo,
+        agreementOf,
       });
     } catch (err) {
       // One ledger's failure must not cost the others their calls.
@@ -1193,7 +1203,13 @@ async function emitForModel(
   isDefault: boolean,
   anchors: Map<string, CandidateSampleRef>,
   env: Env,
-  clock: { now: number; hourAgo: Date; burstAgo: Date },
+  clock: {
+    now: number;
+    hourAgo: Date;
+    burstAgo: Date;
+    /** Seats that called a token this cycle, of the calling seats (for FDSA's brief); omitted, unknown. */
+    agreementOf?: (tokenId: string) => { called: number; of: number };
+  },
 ): Promise<number> {
   // No pace set (the default): nothing to count, every contender has a slot.
   const [lastHour, lastBurstWindow] = paceLimited(env.CURATED_TARGET_PER_HOUR)
@@ -1338,6 +1354,7 @@ async function emitForModel(
         candidateOutcomeId: result.anchor.id,
         curatedAlertId: result.alertId,
         alertAt: new Date(),
+        agreement: clock.agreementOf?.(pick.token.id) ?? null,
       },
       env,
     );

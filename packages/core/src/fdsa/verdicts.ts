@@ -25,10 +25,23 @@ export const FDSA_STAGES = ["screen", "decide", "revise"] as const;
 export type FdsaStage = (typeof FDSA_STAGES)[number];
 
 /**
- * Bumped whenever a prompt or an answer schema changes, and stored on every FdsaReview, so the
- * tab's record is read per prompt version.
+ * One version per stage, bumped whenever that stage's prompt, brief or answer schema changes, and
+ * stored on every FdsaReview (promptVersion), so the tab's record is read per prompt version. Split
+ * per stage (AI evaluation 2026-11-01): under one shared string a change to the revise prompt
+ * reset the decide record's version too, and the two change for different reasons.
+ *   v2 (2026-11-01): the decide brief gained the alert's age, the price now against the alert
+ *   price, how many models called the coin, Jupiter's live figures and the screen's verdict; the
+ *   revise brief gained the market block it never received, the position's own tape, the thesis
+ *   at entry, what changed since entry and the entry against the alert price; the trade bar is
+ *   enforced in code (FDSA_TRADE_MIN_P2X).
  */
-export const FDSA_PROMPT_VERSION = "fdsa-v1";
+export const FDSA_PROMPT_VERSIONS: Readonly<Record<FdsaStage, string>> = {
+  screen: "fdsa-screen-v2",
+  decide: "fdsa-decide-v2",
+  revise: "fdsa-revise-v2",
+};
+/** The decide stage's version: the one the tab's settings and record name. */
+export const FDSA_PROMPT_VERSION = FDSA_PROMPT_VERSIONS.decide;
 
 /** FdsaReview.dedupeKey: one screen and one decide per token. Revisions repeat, so they have none. */
 export function fdsaReviewDedupeKey(tokenId: string, stage: FdsaStage): string | null {
@@ -148,13 +161,31 @@ const PASS: FdsaDecideVerdict = {
   risks: [],
 };
 
+/** The desk's default trade bar (FDSA_TRADE_MIN_P2X): the 2x odds a "trade" must carry. */
+export const DEFAULT_FDSA_TRADE_MIN_P2X = 0.5;
+
+/** The bar's risk line, as stored on a trade held back by it (see readFdsaDecideAnswer). */
+export function fdsaTradeBarRisk(minProbability2x: number): string {
+  return `2x odds under the desk's ${Math.round(minProbability2x * 100)}% bar`;
+}
+
 /**
  * A decide answer as stored. Probabilities and conviction clamped to 0-1 (a 2-100 value read as a
  * percent, as the reviewer does), 4x odds held at or under the 2x odds, text capped, and the exit
  * plan clamped (clampFdsaExitPlan). A trade whose plan can't be made valid is stored as a pass with
  * the error - FDSA never buys without a plan that is safe to run.
+ *
+ * The trade bar (AI evaluation 2026-11-01, as the reviewer's AI_REVIEW_BUY_MIN_PROBABILITY): a
+ * "trade" whose own probability2x sits under `minProbability2x` is stored as a pass with the bar
+ * named in its risks. The prompt tells the model the bar, but a model that says "trade" at 35%
+ * odds anyway was buying under the prompt's own rule; the record, the desk and the tab should
+ * mean the same thing by "trade". Not an error: the answer was usable, the desk just doesn't take it.
  */
-export function readFdsaDecideAnswer(raw: unknown, meta: FdsaAnswerMeta): FdsaRead<FdsaDecideVerdict> {
+export function readFdsaDecideAnswer(
+  raw: unknown,
+  meta: FdsaAnswerMeta,
+  minProbability2x: number = 0,
+): FdsaRead<FdsaDecideVerdict> {
   const pass = (error: string): FdsaRead<FdsaDecideVerdict> => ({
     verdict: PASS,
     error,
@@ -176,6 +207,17 @@ export function readFdsaDecideAnswer(raw: unknown, meta: FdsaAnswerMeta): FdsaRe
     risks: clipRisks(a.risks),
   };
   if (a.decision === "pass") return { verdict, error: null, refused: false };
+  if (probability2x < minProbability2x) {
+    return {
+      verdict: {
+        ...verdict,
+        decision: "pass",
+        risks: [fdsaTradeBarRisk(minProbability2x), ...verdict.risks].slice(0, MAX_RISKS),
+      },
+      error: null,
+      refused: false,
+    };
+  }
   const plan = clampFdsaExitPlan(a.exitPlan);
   if (!plan)
     return {

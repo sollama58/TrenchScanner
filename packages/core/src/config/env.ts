@@ -1256,6 +1256,13 @@ const envSchema = z.object({
   FDSA_DECIDE_MODEL: z.string().default("claude-opus-5-5"),
   FDSA_DECIDE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   FDSA_DECIDE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  // The trade bar (AI evaluation 2026-11-01): the 2x odds the decide stage's own probability2x
+  // must reach for a "trade" to count as one; under it the answer is stored as a pass with the bar
+  // named in its risks (core's readFdsaDecideAnswer), as the reviewer's AI_REVIEW_BUY_MIN_PROBABILITY
+  // does. The prompt states the same figure. 0.5 is the prompt's original wording; a desk that
+  // trades at 50% odds wins about half the time, so the 75% goal wants this nearer 0.65-0.7 once
+  // the tab's calibration bands show what the model's odds are worth.
+  FDSA_TRADE_MIN_P2X: z.coerce.number().min(0).max(1).default(0.5),
   // Exit-plan revisions on open positions (decision 3), only at named triggers: crossing 2x,
   // crossing 4x, a fall of FDSA_REVISION_DRAWDOWN_PCT from the high, and every
   // FDSA_REVISION_TIMER_MINUTES while held; never two on one position within

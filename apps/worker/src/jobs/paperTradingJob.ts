@@ -7,6 +7,7 @@ import {
   TradingRpc,
   type Env,
 } from "@trenchscanner/core";
+import type { FdsaMarketSource } from "../fdsa/review.js";
 import type { JobRunMeta } from "../scheduler.js";
 import { createFdsaDeskRunner } from "./fdsaDeskJob.js";
 
@@ -17,7 +18,13 @@ import { createFdsaDeskRunner } from "./fdsaDeskJob.js";
  * admin starts a strategy. The FDSA paper desk runs after the strategies in the same job
  * (fdsaDeskJob.ts), on the same clients.
  */
-export function createPaperTradingRunner(env: Env): () => Promise<JobRunMeta> {
+export function createPaperTradingRunner(
+  env: Env,
+  shared: {
+    /** Seconds-old quotes for FDSA's revise briefs (the scan's Jupiter client; see fdsa/review.ts). */
+    market?: FdsaMarketSource | null;
+  } = {},
+): () => Promise<JobRunMeta> {
   const admins = adminWalletSet(env);
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
@@ -34,7 +41,7 @@ export function createPaperTradingRunner(env: Env): () => Promise<JobRunMeta> {
     ? async (notes: Parameters<typeof sendTradeNotes>[0]) =>
         void (await sendTradeNotes(notes, { telegram, admins }))
     : undefined;
-  const runFdsa = createFdsaDeskRunner(env, { swap, rpc, telegram, admins });
+  const runFdsa = createFdsaDeskRunner(env, { swap, rpc, telegram, admins, market: shared.market });
   return async () => {
     // Each pass's failure is its own. A strategies pass that throws (a pool timeout, a rate limit)
     // must not skip the FDSA pass behind it: FDSA's open positions hold their -50% stop only while

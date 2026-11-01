@@ -33,6 +33,7 @@ import {
   type FdsaRevisionOptions,
   type FdsaRevisionTrigger,
 } from "./exitPlan.js";
+import type { FdsaTapePoint } from "./prompts.js";
 import type { FdsaRead, FdsaReviseVerdict } from "./verdicts.js";
 
 /**
@@ -150,6 +151,19 @@ export interface FdsaRevisionRequest {
   plan: FdsaExitPlan;
   planVersion: number;
   openedAt: Date;
+  /**
+   * The desk's own readings of the multiple over the hold, oldest first (fdsaPositionTape): what
+   * the reviser reads the move off, since no price feed carries a position's own path (AI
+   * evaluation 2026-11-01).
+   */
+  tape: FdsaTapePoint[];
+  /**
+   * The fill's price in USD at today's SOL price - the desk doesn't store the SOL price at entry,
+   * and SOL moves little over a hold. Null when no SOL price was in hand. The reviser sets it
+   * against the alert's anchor (FdsaReview.anchorPriceUsd) so the model knows where the alert's
+   * 2x sits in entry multiples.
+   */
+  entryPriceUsd: number | null;
   at: Date;
 }
 
@@ -395,6 +409,7 @@ async function manageExit(
       where: { id: position.id },
       data: { status: "closed", closedAt: now, closeReason: position.closeReason ?? "empty" },
     });
+    tapes.delete(position.id);
     return false;
   }
 
@@ -447,8 +462,9 @@ async function manageExit(
           error: null,
         },
       });
+      recordTape(position.id, now, multiple);
       if (d.action === "hold") {
-        maybeRevise(deps, position, plan, multiple, peak, floor, now, summary);
+        maybeRevise(deps, position, plan, multiple, peak, floor, now, solUsd, summary);
         return false;
       }
       reason = d.reason;
@@ -509,6 +525,7 @@ async function manageExit(
     });
     if (credited.count === 0) throw new ResetUnderUs("desk reset during the pass");
   });
+  if (left <= 0n) tapes.delete(position.id);
   const result =
     left <= 0n
       ? `; closed ${signedSol(position.proceedsLamports + net - position.swapInLamports - position.feesLamports)}`
@@ -545,6 +562,57 @@ async function quotedMultiple(
   }
 }
 
+// ── The position tape ────────────────────────────────────────────────────────────────────────
+
+/**
+ * Each open position's own readings of its multiple, one per tick, in this process's memory (AI
+ * evaluation 2026-11-01). The revise brief reads the move off it: no price feed carries a
+ * position's path from its own fill, and the row keeps only the last and peak multiples. Kept to
+ * the hold cap at one reading a tick (TAPE_MAX_POINTS), dropped when the position closes. A
+ * restart starts the tape over, and the brief then says it covers only the minutes since; the
+ * exits themselves never read it.
+ */
+const TAPE_MAX_POINTS = 2_000;
+const tapes = new Map<string, { at: number; multiple: number }[]>();
+
+function recordTape(positionId: string, at: Date, multiple: number): void {
+  if (!Number.isFinite(multiple) || multiple <= 0) return;
+  let tape = tapes.get(positionId);
+  if (!tape) {
+    tape = [];
+    tapes.set(positionId, tape);
+  }
+  const last = tape.at(-1);
+  if (last && at.getTime() <= last.at) return;
+  tape.push({ at: at.getTime(), multiple });
+  if (tape.length > TAPE_MAX_POINTS) tape.splice(0, tape.length - TAPE_MAX_POINTS);
+}
+
+/** A position's tape as the revise brief takes it: minutes before `now`, oldest first. */
+export function fdsaPositionTape(positionId: string, now: Date): FdsaTapePoint[] {
+  return (tapes.get(positionId) ?? []).map((p) => ({
+    minutesAgo: (now.getTime() - p.at) / 60_000,
+    multiple: p.multiple,
+  }));
+}
+
+/** Test hook: forgets every tape. */
+export function resetFdsaPositionTapes(): void {
+  tapes.clear();
+}
+
+/** The fill's price in USD at the given SOL price (see FdsaRevisionRequest.entryPriceUsd). */
+export function fdsaEntryPriceUsd(
+  position: Pick<PositionRow, "swapInLamports" | "tokensBought" | "decimals">,
+  solUsd: number | undefined,
+): number | null {
+  if (!solUsd || !Number.isFinite(solUsd) || solUsd <= 0) return null;
+  const tokens = Number(position.tokensBought) / 10 ** position.decimals;
+  const sol = Number(position.swapInLamports) / 1e9;
+  if (!(tokens > 0) || !(sol > 0)) return null;
+  return (sol / tokens) * solUsd;
+}
+
 // ── Revisions ────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -560,6 +628,7 @@ function maybeRevise(
   peak: number | null,
   floor: number,
   now: Date,
+  solUsd: number | undefined,
   summary: FdsaDeskSummary,
 ) {
   const reviser = deps.reviser;
@@ -589,6 +658,8 @@ function maybeRevise(
     plan,
     planVersion: position.planVersion,
     openedAt: position.openedAt,
+    tape: fdsaPositionTape(position.id, now),
+    entryPriceUsd: fdsaEntryPriceUsd(position, solUsd),
     at: now,
   };
   inFlight.add(position.id);
