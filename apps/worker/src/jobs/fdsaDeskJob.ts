@@ -35,6 +35,8 @@ export function createFdsaDeskRunner(
     admins: ReadonlySet<string>;
     /** Replaces the revise stage (tests). */
     reviser?: FdsaReviser;
+    /** Takes each detached revision call (tests await them); unset, they run fire and forget. */
+    dispatch?: (revision: Promise<void>) => void;
   },
 ): () => Promise<JobRunMeta> {
   const executor = paperFdsaExecutor({ swap: shared.swap, rpc: shared.rpc });
@@ -61,6 +63,7 @@ export function createFdsaDeskRunner(
         minGapSeconds: env.FDSA_REVISION_MIN_GAP_SECONDS,
       },
       notify,
+      dispatch: shared.dispatch,
     });
     return {
       fdsaRunning: s.running,

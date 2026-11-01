@@ -6,8 +6,15 @@ import {
   FDSA_DEFAULT_EXIT_PLAN,
   FDSA_DESK_ID,
   loadEnv,
+  NoRouteError,
+  paperFdsaExecutor,
+  PROGRAM,
   prisma,
+  runFdsaDesk,
+  WSOL_MINT,
   type Env,
+  type FdsaDeskDeps,
+  type SwapQuote,
 } from "@trenchscanner/core";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
@@ -345,5 +352,89 @@ describe.skipIf(!dbAvailable)("FDSA routes", () => {
     const state = (await call("GET", "/fdsa", "admin")).json();
     expect(state.reviews.today).toMatchObject({ screened: 6, shortlisted: 2, trade: 1, pass: 1, failed: 1 });
     expect(state.reviews.today.shortlistRate).toBeCloseTo(2 / 6);
+  });
+  it("shows what the paper desk itself books: Resume, a buy, the plan's partial and the floor exit", async () => {
+    // Thread E of the FDSA build (2026-11-01): the rows here come from core's runFdsaDesk, the
+    // pass the scanner runs, rather than seeded by hand, so the tab is read against what the desk
+    // really writes.
+    await call("GET", "/fdsa", "admin");
+    expect((await call("PATCH", "/fdsa", "admin", { running: true })).statusCode).toBe(200);
+    const coin = await alerted("won", 40);
+    const verdict = await review(coin, "decide", "trade", { reasoning: "clean holders" });
+
+    // A pretend Jupiter with no price impact: lamports per raw unit, per mint.
+    const price = new Map<string, number>([[coin.token.mintAddress, 0.05]]);
+    const market: FdsaDeskDeps["market"] = {
+      quote: async ({ inputMint, outputMint, amount }) => {
+        const mint = inputMint === WSOL_MINT ? outputMint : inputMint;
+        const p = price.get(mint);
+        if (p === undefined) throw new NoRouteError("no route");
+        const out = inputMint === WSOL_MINT ? Number(amount) / p : Number(amount) * p;
+        return {
+          inputMint,
+          outputMint,
+          inAmount: amount.toString(),
+          outAmount: BigInt(Math.floor(out)).toString(),
+          otherAmountThreshold: "0",
+          priceImpactPct: "0",
+        } as SwapQuote;
+      },
+      pricesUsd: async (mints) =>
+        new Map(
+          mints.flatMap((m): [string, number][] =>
+            m === WSOL_MINT ? [[m, 200]] : price.has(m) ? [[m, ((price.get(m)! * 1e6) / 1e9) * 200]] : [],
+          ),
+        ),
+    };
+    const rpc = {
+      getMintInfo: async () => ({
+        program: PROGRAM.token,
+        mintAuthority: null,
+        freezeAuthority: null,
+        extensions: [],
+        decimals: 6,
+      }),
+    };
+    const pass = () =>
+      runFdsaDesk({
+        market,
+        rpc,
+        executor: paperFdsaExecutor({ swap: market, rpc }),
+        entries: true,
+        revision: { timerMinutes: 10, drawdownPct: 30, minGapSeconds: 0 },
+      });
+    expect(await pass()).toMatchObject({ running: true, entries: 1 });
+    // 3x on the entry (the 1% fill penalty puts the entry at 1/0.99 of the quote): the default
+    // plan's quarter goes, then 1.5x is under its trailed floor (3 x 0.6) and the rest goes.
+    price.set(coin.token.mintAddress, (0.05 * 3) / 0.99);
+    expect(await pass()).toMatchObject({ sells: 1 });
+    price.set(coin.token.mintAddress, (0.05 * 1.5) / 0.99);
+    expect(await pass()).toMatchObject({ sells: 1, open: 0 });
+
+    const { open, closed } = (await call("GET", "/fdsa/positions", "admin")).json();
+    expect(open).toEqual([]);
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({
+      closeReason: "floor",
+      hit2x: true,
+      ladderReturnPct: 40,
+      planVersion: 1,
+    });
+    expect(closed[0].pnlPct).toBeGreaterThan(0);
+    expect(closed[0].revisions).toEqual([
+      expect.objectContaining({ trigger: "entry", status: "applied", reason: "clean holders" }),
+    ]);
+
+    const state = (await call("GET", "/fdsa", "admin")).json();
+    expect(state.desk).toMatchObject({ running: true, openPositions: 0 });
+    expect(state.desk.stats).toMatchObject({ entries: 1, closed: 1 });
+    expect(BigInt(state.desk.cashLamports)).toBeGreaterThan(10_000_000_000n);
+
+    const record = (await call("GET", "/fdsa/record?days=7", "admin")).json();
+    expect(record.trades).toMatchObject({ total: 1, graded: 1, wins: 1 });
+    expect(record.ladder).toMatchObject({ closedTrades: 1, paired: 1, ladderAvgPct: 40 });
+    expect(record.latency.trades).toBe(1);
+    const reviews = (await call("GET", "/fdsa/reviews?stage=decide", "admin")).json();
+    expect(reviews).toEqual([expect.objectContaining({ id: verdict.id, decision: "trade", hit2x: true })]);
   });
 });
