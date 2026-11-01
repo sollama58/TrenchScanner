@@ -4,6 +4,7 @@ import {
   COHORT_EARLY_SEC,
   COHORT_MAX_COIN_SHARE,
   COHORT_MIN_COINS,
+  COHORT_MIN_PAIR_COINS,
   COHORT_PAIR_GAP_SEC,
   createLogger,
   prisma,
@@ -65,6 +66,14 @@ export async function runWalletCohortJob(opts: { now?: () => number } = {}): Pro
   // The seeds' pairs, each with the coins both first-bought within the gap, and each seed's own
   // early coin count. One statement: the early rows are read once into a materialized CTE.
   const { pairs, seeds, creators, coins } = await withLongReads(async (tx) => {
+    // Shaped by the 2026-11-01 failure: the first version ran every hour into the 600 s bound and
+    // never wrote a row. It looked up each pair's two coin counts with a subquery over the seed CTE
+    // (no index, so a full scan per pair: pairs x seeds, ~50 G row reads at production's size) and
+    // band-joined every early row on the coin alone. Now the seeds' early rows are kept apart (se),
+    // paired by a hash join on the coin and the COHORT_PAIR_GAP_SEC-wide time bucket (two buys
+    // within the gap are in the same or a neighbouring bucket), and the counts come from a join.
+    // (tokenId, wallet) is unique in TokenWalletActivity, so each early row is one wallet's one coin
+    // and each pair row one coin: COUNT(*) is the distinct count.
     const rows = await tx.$queryRaw<
       { a: string; b: string; tokens: string[]; lastAt: Date; coinsA: bigint; coinsB: bigint }[]
     >`
@@ -77,29 +86,35 @@ export async function runWalletCohortJob(opts: { now?: () => number } = {}): Pro
         AND a."firstBuyAt" >= ${since}
         AND a."firstBuyAt" >= t."launchAt"
         AND a."firstBuyAt" < t."launchAt" + make_interval(secs => ${COHORT_EARLY_SEC})
-    ), totals AS (
-      SELECT COUNT(DISTINCT "tokenId") AS n FROM early
     ), seed AS MATERIALIZED (
-      SELECT e."wallet", COUNT(DISTINCT e."tokenId") AS coins
+      SELECT e."wallet", COUNT(*) AS coins
       FROM early e
       GROUP BY e."wallet"
-      HAVING COUNT(DISTINCT e."tokenId") >= ${COHORT_MIN_COINS}
-         AND COUNT(DISTINCT e."tokenId") < GREATEST(${COHORT_BOT_MIN_COINS}, ${COHORT_MAX_COIN_SHARE} * (SELECT n FROM totals))
+      HAVING COUNT(*) >= ${COHORT_MIN_COINS}
+         AND COUNT(*) < GREATEST(${COHORT_BOT_MIN_COINS}, ${COHORT_MAX_COIN_SHARE} * (SELECT COUNT(DISTINCT "tokenId") FROM early))
+    ), se AS MATERIALIZED (
+      SELECT e."tokenId", e."wallet", e."firstBuyAt",
+             floor(extract(epoch FROM e."firstBuyAt") / ${COHORT_PAIR_GAP_SEC})::bigint AS bucket
+      FROM early e
+      JOIN seed s ON s."wallet" = e."wallet"
     ), pair AS (
       SELECT x."wallet" AS a, y."wallet" AS b, x."tokenId", GREATEST(x."firstBuyAt", y."firstBuyAt") AS at
-      FROM early x
-      JOIN seed sx ON sx."wallet" = x."wallet"
-      JOIN early y ON y."tokenId" = x."tokenId" AND y."wallet" > x."wallet"
-       AND y."firstBuyAt" BETWEEN x."firstBuyAt" - make_interval(secs => ${COHORT_PAIR_GAP_SEC})
-                              AND x."firstBuyAt" + make_interval(secs => ${COHORT_PAIR_GAP_SEC})
-      JOIN seed sy ON sy."wallet" = y."wallet"
+      FROM se x
+      CROSS JOIN (VALUES (-1), (0), (1)) d(off)
+      JOIN se y ON y."tokenId" = x."tokenId" AND y.bucket = x.bucket + d.off
+      WHERE y."wallet" > x."wallet"
+        AND y."firstBuyAt" BETWEEN x."firstBuyAt" - make_interval(secs => ${COHORT_PAIR_GAP_SEC})
+                               AND x."firstBuyAt" + make_interval(secs => ${COHORT_PAIR_GAP_SEC})
+    ), kept AS (
+      SELECT p.a, p.b, array_agg(p."tokenId") AS tokens, MAX(p.at) AS "lastAt"
+      FROM pair p
+      GROUP BY p.a, p.b
+      HAVING COUNT(*) >= ${COHORT_MIN_PAIR_COINS}
     )
-    SELECT p.a, p.b, array_agg(DISTINCT p."tokenId") AS tokens, MAX(p.at) AS "lastAt",
-           (SELECT coins FROM seed WHERE seed."wallet" = p.a) AS "coinsA",
-           (SELECT coins FROM seed WHERE seed."wallet" = p.b) AS "coinsB"
-    FROM pair p
-    GROUP BY p.a, p.b
-    HAVING COUNT(DISTINCT p."tokenId") >= 2`;
+    SELECT k.a, k.b, k.tokens, k."lastAt", sa.coins AS "coinsA", sb.coins AS "coinsB"
+    FROM kept k
+    JOIN seed sa ON sa."wallet" = k.a
+    JOIN seed sb ON sb."wallet" = k.b`;
     const seeds = new Map<string, number>();
     const coins = new Set<string>();
     for (const r of rows) {
