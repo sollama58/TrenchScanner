@@ -283,7 +283,8 @@ export async function registerAdminOpsRoutes(
       readAiBudget(env),
       prisma.aiSpend.groupBy({
         by: ["day"],
-        where: { day: { gte: new Date(now - 13 * DAY_MS).toISOString().slice(0, 10) } },
+        // The reviewer's cap only: FDSA's spend has its own ledger and cap (owner decision 2026-10-31).
+        where: { day: { gte: new Date(now - 13 * DAY_MS).toISOString().slice(0, 10) }, ledger: "reviewer" },
         _sum: { costUsd: true, calls: true, refused: true },
         _max: { capUsd: true },
         orderBy: { day: "desc" },

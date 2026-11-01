@@ -183,6 +183,20 @@ export const ENV_MANIFEST: readonly EnvVarSpec[] = [
     same: true,
     note: "The AI reviewer, playbook evolution and text features.",
   },
+  {
+    key: "FDSA_ENABLED",
+    group: "AI",
+    kind: "setting",
+    on: { scanner: "expected" },
+    note: "FDSA, the AI desk that paper-trades its own picks. Off until set to true; then it waits for Resume in #fdsa.",
+  },
+  {
+    key: "FDSA_DAILY_BUDGET_USD",
+    group: "AI",
+    kind: "setting",
+    on: { scanner: "expected" },
+    note: "FDSA's own daily Claude cap, apart from AI_DAILY_BUDGET_USD.",
+  },
   // ---- Sign-in and access
   { key: "JWT_SECRET", group: "Sign-in and access", kind: "secret", on: { api: "required" } },
   { key: "SESSION_TTL_HOURS", group: "Sign-in and access", kind: "setting", on: { api: "expected" } },

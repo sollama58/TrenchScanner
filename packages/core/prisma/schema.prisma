@@ -789,6 +789,7 @@ model Token {
   curatedAlerts          CuratedAlert[]
   curatedShadowEmissions CuratedShadowEmission[]
   aiReviews              AiReview[]
+  fdsaReviews            FdsaReview[]
   peakWatch              PeakWatch?
   watchlistItems         WatchlistItem[]
 
@@ -904,7 +905,8 @@ model CuratedAlert {
   /// other seats' calls nobody noted, and on rows from before it was stored (2026-10-08).
   narrativeRationale Json?
 
-  aiReviews AiReview[]
+  aiReviews   AiReview[]
+  fdsaReviews FdsaReview[]
 
   @@index([createdAt])
   @@index([tokenId, createdAt])
@@ -1340,6 +1342,7 @@ model CandidateOutcome {
   curatedAlerts   CuratedAlert[]
   shadowEmissions CuratedShadowEmission[]
   aiReviews       AiReview[]
+  fdsaReviews     FdsaReview[]
 
   // No (tokenId, anchorAt) index: every per-token lookup also names the sampleKind, and the
   // three-column index below serves plain tokenId probes (cleanup, the FK) through its prefix.
@@ -2767,6 +2770,11 @@ model ModelBackup {
 model AiSpend {
   day       String
   source    String
+  /// Which daily cap the row counts against: "reviewer" (AI_DAILY_BUDGET_USD: the reviewer, text
+  /// reads, playbooks, replays) or "fdsa" (FDSA_DAILY_BUDGET_USD). Set from the source by
+  /// addAiSpend (curation/aiSpend.ts aiSpendLedger), so neither cap can draw on the other (owner
+  /// decision 2026-10-31).
+  ledger    String   @default("reviewer")
   costUsd   Float    @default(0)
   calls     Int      @default(0)
   refused   Int      @default(0)
@@ -2774,6 +2782,7 @@ model AiSpend {
   updatedAt DateTime @default(now())
 
   @@id([day, source])
+  @@index([day, ledger])
 }
 
 /// The Admin panel's AI reviewer switch (one row, id "ai-reviewer"; curation/aiSwitch.ts). With
@@ -4046,4 +4055,219 @@ model AsylFlowRead {
   txs     Int
 
   @@index([readAt])
+}
+
+/// FDSA (owner decision 2026-10-31): an AI desk that reviews every curated alert with Claude in
+/// two stages (screen, then decide) and paper-trades the ones it picks under its own adaptive exit
+/// plan (packages/core/src/fdsa). It runs alongside the AI reviewer (AiReview) and never writes
+/// to it. One row, id "fdsa". Paper only for now: `mode` accepts "paper" alone (a CHECK
+/// constraint holds it there), and nothing in FDSA holds a key, builds a transaction or signs.
+/// Settings the owner changes from the hidden #fdsa tab live here, not in env.
+model FdsaDesk {
+  id               String    @id @default("fdsa")
+  /// "paper". "live" is planned and refused until a later PR builds it (fdsa/desk.ts FDSA_MODES).
+  mode             String    @default("paper")
+  /// Reviewing and buying new alerts. Pausing leaves open positions on their exit plans.
+  running          Boolean   @default(false)
+  /// Why it stopped itself (daily loss limit, say); null when it runs or was paused by hand.
+  pausedReason     String?
+  /// fdsa/desk.ts validates it: the bot's settings (sizing, limits, slippage, Jito, reserve, daily
+  /// loss limit) plus the paper fill penalty, with FDSA's paper defaults (0.5 SOL a trade).
+  config           Json
+  /// The simulated SOL it started with, and what it holds now outside positions.
+  bankrollLamports BigInt
+  cashLamports     BigInt
+  /// Bumped by a reset; a pass's cash change applies only under the reset it read.
+  resetAt          DateTime  @default(now())
+  /// Alerts before this are never bought: set to now on each start, so it never trades a backlog.
+  signalsFrom      DateTime  @default(now())
+  /// dailyLossLimitSol counts positions closed after this (set on each start and reset).
+  lossWindowFrom   DateTime  @default(now())
+  lastRunAt        DateTime?
+  lastError        String?
+  /// The admin wallet that last changed it.
+  updatedBy        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  positions FdsaPosition[]
+}
+
+/// One FDSA call to Claude: the screen (Haiku, every alert), the decide (Opus, the shortlist) or
+/// an exit-plan revision on an open position. Graded by the same CandidateOutcome labels as the
+/// alerts, so its record can be set against the pool's base rate and the AI reviewer's.
+model FdsaReview {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  candidateOutcomeId String?
+  candidateOutcome   CandidateOutcome? @relation(fields: [candidateOutcomeId], references: [id], onDelete: SetNull)
+  curatedAlertId     String?
+  curatedAlert       CuratedAlert?     @relation(fields: [curatedAlertId], references: [id], onDelete: SetNull)
+  /// For a revision: the position it revised.
+  positionId         String?
+  position           FdsaPosition?     @relation(fields: [positionId], references: [id], onDelete: SetNull)
+
+  /// "screen", "decide" or "revise" (fdsa/verdicts.ts FDSA_STAGES).
+  stage         String
+  /// One screen and one decide per token: "<tokenId>:<stage>". Null on revisions, which repeat.
+  dedupeKey     String? @unique
+  model         String
+  /// The model that answered, when a server-side fallback answered instead.
+  answeredBy    String?
+  effort        String
+  /// The prompt version (fdsa/verdicts.ts FDSA_PROMPT_VERSION), so a record is read per prompt.
+  promptVersion String
+  playbookId    String?
+  /// The exact brief sent, so a call can be audited and replayed.
+  brief         String?
+
+  /// screen: "shortlist" | "drop"; decide: "trade" | "pass"; revise: "revise" | "keep". Null
+  /// when the call failed (see error). A schema-invalid or refused answer is stored as "pass".
+  decision      String?
+  /// screen: the 0-1 shortlist score.
+  score         Float?
+  probability2x Float?
+  probability4x Float?
+  conviction    Float?
+  /// decide and revise: the validated exit plan it set (fdsa/exitPlan.ts).
+  exitPlan      Json?
+  reasoning     String?
+  risks         String[] @default([])
+  error         String?
+  /// The answer was a refusal (stop_reason "refusal").
+  refused       Boolean  @default(false)
+
+  inputTokens      Int?
+  outputTokens     Int?
+  cacheReadTokens  Int?
+  cacheWriteTokens Int?
+  costUsd          Float?
+  latencyMs        Int
+
+  /// When the alert went out, and the price and market cap it was graded from.
+  alertAt        DateTime
+  anchorPriceUsd Float
+  anchorMcapUsd  Float
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([stage, createdAt])
+  @@index([tokenId])
+  @@index([candidateOutcomeId])
+  @@index([curatedAlertId])
+  @@index([positionId])
+}
+
+/// One FDSA entry into one token, on the desk's paper bankroll. The desk enters a mint at most
+/// once (the unique key), which also makes a buy idempotent across a crash. Kept apart from the
+/// admin's own bot (TradingPosition) and strategies (PaperPosition), so their stats never mix.
+/// Raw token amounts are decimal strings (a u64 can exceed BIGINT).
+model FdsaPosition {
+  id                 String    @id @default(cuid())
+  deskId             String
+  desk               FdsaDesk  @relation(fields: [deskId], references: [id], onDelete: Cascade)
+  /// "paper" (the desk's mode when it bought).
+  mode               String    @default("paper")
+  mint               String
+  symbol             String?
+  tokenId            String?
+  /// Always "fdsa": the source tag that keeps these apart wherever positions are listed together.
+  sourceKind         String    @default("fdsa")
+  /// The decide review that bought it, and the outcome row the alert is graded by.
+  reviewId           String?   @unique
+  candidateOutcomeId String?
+  curatedAlertId     String?
+  /// When the alert went out, when the decide verdict landed, and when the entry filled - the
+  /// latency a buy has to beat the signal's freshness (maxSignalAgeSeconds) with.
+  signalAt           DateTime
+  verdictAt          DateTime?
+  openedAt           DateTime
+  /// "open" -> "closed"
+  status             String
+  swapInLamports     BigInt
+  feesLamports       BigInt    @default(0)
+  tokensBought       String
+  tokensHeld         String
+  decimals           Int
+  /// The plan running now (fdsa/exitPlan.ts), its version (1 at entry, +1 per applied revision),
+  /// and the floor multiple it enforces now (never under the -50% stop).
+  exitPlan           Json
+  planVersion        Int       @default(1)
+  floorMultiple      Float
+  /// Share of the original position sold so far (0-1), and how many of the plan's partials sold.
+  soldFraction       Float     @default(0)
+  partialsTaken      Int       @default(0)
+  /// Highest multiple over the whole hold, and the last one priced.
+  peakMultiple       Float?
+  lastMultiple       Float?
+  lastPricedAt       DateTime?
+  /// Revision triggers that have fired ("crossed_2x", "crossed_4x", and "drawdown@<peak>" once
+  /// per peak; fdsa/exitPlan.ts fdsaRevisionDue). The timer repeats, rate-limited by lastRevisionAt.
+  triggersFired      String[]  @default([])
+  lastRevisionAt     DateTime?
+  /// SOL back from sales, after their fees.
+  proceedsLamports   BigInt    @default(0)
+  closeRequested     Boolean   @default(false)
+  closedAt           DateTime?
+  closeReason        String?
+  error              String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  fills     FdsaFill[]
+  revisions FdsaPlanRevision[]
+  reviews   FdsaReview[]
+
+  @@unique([deskId, mint])
+  @@index([status])
+  @@index([deskId, createdAt])
+}
+
+/// One simulated FDSA swap, priced from a live Jupiter quote as paper.ts prices PaperFill.
+model FdsaFill {
+  id          String       @id @default(cuid())
+  positionId  String
+  position    FdsaPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  /// "buy" or "sell"; the reason is "entry" or the exit's (fdsa/adaptiveExit.ts FdsaExitReason).
+  side        String
+  reason      String
+  /// The plan version the sale ran under.
+  planVersion Int
+  lamports    BigInt
+  feeLamports BigInt
+  tokens      String
+  multiple    Float?
+  createdAt   DateTime     @default(now())
+
+  @@index([positionId])
+}
+
+/// Every exit plan an FDSA position ran under, and every revision asked for: the entry plan
+/// (trigger "entry"), each applied revision, and the ones that failed or were refused, with why.
+/// The audit trail behind each sale.
+model FdsaPlanRevision {
+  id         String       @id @default(cuid())
+  positionId String
+  position   FdsaPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  /// The FdsaReview behind it (null for the entry plan when it came straight from the decide).
+  reviewId   String?
+  /// "entry" | "crossed_2x" | "crossed_4x" | "drawdown" | "timer" (fdsa/exitPlan.ts).
+  trigger    String
+  /// "applied" | "kept" (the model kept the plan) | "rejected" (failed validation) | "failed"
+  /// (the call failed or came back late). Anything but "applied" leaves the running plan as is.
+  status     String
+  /// The plan version after this row (unchanged unless applied).
+  version    Int
+  /// The plan applied, after clamping; null unless applied.
+  plan       Json?
+  /// The model's raw proposal, as returned, for audit.
+  proposed   Json?
+  multiple   Float?
+  reason     String?
+  error      String?
+  createdAt  DateTime     @default(now())
+
+  @@index([positionId, createdAt])
 }

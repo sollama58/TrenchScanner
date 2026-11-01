@@ -1231,6 +1231,51 @@ const envSchema = z.object({
   // high-conviction reserve.
   AI_REVIEW_STANDARD_PICKS: z.enum(["spare", "never"]).default("never"),
 
+  // FDSA (packages/core/src/fdsa; owner decision 2026-10-31): an AI desk that reviews every curated
+  // alert and paper-trades the ones it picks under its own adaptive exits. It runs alongside the AI
+  // reviewer above and shares nothing with it but the Anthropic key and client. "false" (the
+  // default) makes no FDSA call at all; "true" lets the scanner worker run it, and it still waits
+  // for an admin to press Resume in the hidden #fdsa tab (FdsaDesk.running starts false). Without
+  // ANTHROPIC_API_KEY it is off whatever this says. Paper only: no FDSA path holds a key or signs.
+  FDSA_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  // Stage 1, the screen (owner decision 2026-10-31, decision 1): every alert, on Haiku at low
+  // effort with a compact brief, returns a 0-1 shortlist score. Alerts scoring at least
+  // FDSA_SCREEN_MIN_SCORE go to the decide stage. The aim is about 10% shortlisted; 0.7 is a
+  // starting guess, and the tab shows the real shortlist rate to tune it from.
+  FDSA_SCREEN_MODEL: z.string().default("claude-haiku-5-5"),
+  FDSA_SCREEN_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
+  FDSA_SCREEN_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.7),
+  FDSA_SCREEN_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  // Stage 2, the decide: the shortlist, on Opus at medium effort with the reviewer's full brief,
+  // says trade or pass and sets the entry exit plan. A buy must still reach the paper pass inside
+  // the desk's maxSignalAgeSeconds (120 s by default), so the screen and the decide together have
+  // to fit well inside it; a call past its timeout counts as a pass.
+  FDSA_DECIDE_MODEL: z.string().default("claude-opus-5-5"),
+  FDSA_DECIDE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
+  FDSA_DECIDE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  // Exit-plan revisions on open positions (decision 3), only at named triggers: crossing 2x,
+  // crossing 4x, a fall of FDSA_REVISION_DRAWDOWN_PCT from the high, and every
+  // FDSA_REVISION_TIMER_MINUTES while held; never two on one position within
+  // FDSA_REVISION_MIN_GAP_SECONDS. A call is never in the per-tick path: a failed or late one
+  // leaves the running plan in force.
+  FDSA_REVISION_MODEL: z.string().default("claude-opus-5-5"),
+  FDSA_REVISION_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
+  FDSA_REVISION_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  FDSA_REVISION_TIMER_MINUTES: z.coerce.number().positive().default(10),
+  FDSA_REVISION_DRAWDOWN_PCT: z.coerce.number().gt(0).lt(100).default(30),
+  FDSA_REVISION_MIN_GAP_SECONDS: z.coerce.number().int().min(0).default(120),
+  // FDSA's own daily cap per UTC day (decision 2), separate from AI_DAILY_BUDGET_USD: neither
+  // draws on the other (AiSpend.ledger). Reviews of new alerts stop at the cap less
+  // FDSA_EXIT_RESERVE_PCT, so exit revisions on open positions always have room. 0 stops every
+  // FDSA call; open positions keep following their last plan.
+  FDSA_DAILY_BUDGET_USD: z.coerce.number().min(0).default(20),
+  FDSA_EXIT_RESERVE_PCT: z.coerce.number().min(0).max(100).default(25),
+  // FDSA calls in flight at once (both stages), so a busy cycle doesn't hit the key's rate limit.
+  FDSA_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(20).default(3),
+
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),
 
