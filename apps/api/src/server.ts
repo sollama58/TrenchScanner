@@ -49,6 +49,7 @@ import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/a
 import { registerAdminOpsRoutes } from "./routes/adminOps.js";
 import { registerAdminCreditRoutes } from "./routes/adminCredits.js";
 import { registerAdminUsageRoutes } from "./routes/adminUsage.js";
+import { registerFdsaRoutes } from "./routes/fdsa.js";
 import { registerAdminEnvRoutes } from "./routes/adminEnv.js";
 import { registerAdminRetrainRoutes } from "./routes/adminRetrain.js";
 import { registerAdminJobRunRoutes } from "./routes/adminJobRuns.js";
@@ -911,6 +912,16 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       await registerAdminEnvRoutes(instance, { env });
     },
     { prefix: "/admin" },
+  );
+  // FDSA, the AI desk's hidden #fdsa tab (routes/fdsa.ts; owner decision 2026-10-31): admin
+  // wallets only, under its own prefix so it never shows up among the Admin sections.
+  await app.register(
+    async (instance) => {
+      instance.addHook("preHandler", instance.authenticateAdmin);
+      recordAdminActions(instance, admins);
+      await registerFdsaRoutes(instance, { env });
+    },
+    { prefix: "/fdsa" },
   );
   // Model backups: list, take, download, import, pin, restore - see routes/adminBackups.ts. Gated
   // at onRequest rather than preHandler: the import takes a large body, and nobody but an admin

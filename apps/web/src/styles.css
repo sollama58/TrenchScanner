@@ -26476,3 +26476,15 @@ button.wlm-remove:hover:not(:disabled) {
     display: none;
   }
 }
+
+/* FDSA (hidden #fdsa tab, tabs/FdsaTab.tsx): the model's reasoning wraps instead of widening the table. */
+.fdsa .fdsa-why {
+  display: block;
+  min-width: 240px;
+  max-width: 560px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.fdsa .fdsa-plan {
+  padding: 12px;
+}

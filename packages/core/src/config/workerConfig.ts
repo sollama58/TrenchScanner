@@ -44,6 +44,13 @@ export function workerConfigMeta(env: Env): {
       aiReviewModel: env.AI_REVIEW_MODEL,
       aiTextFeatures: env.AI_TEXT_FEATURES,
       aiTextMaxPerHour: env.AI_TEXT_MAX_PER_HOUR,
+      // FDSA (owner decision 2026-10-31): the hidden #fdsa tab reads whether the scanner runs it
+      // and with which screen threshold and models, since those are the worker's env, not the API's.
+      fdsaEnabled: env.FDSA_ENABLED,
+      fdsaScreenModel: env.FDSA_SCREEN_MODEL,
+      fdsaScreenMinScore: env.FDSA_SCREEN_MIN_SCORE,
+      fdsaDecideModel: env.FDSA_DECIDE_MODEL,
+      fdsaDecideEffort: env.FDSA_DECIDE_EFFORT,
     },
     workerCredentials: {
       heliusApiKey: env.HELIUS_API_KEY.length > 0,
