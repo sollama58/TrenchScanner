@@ -15,6 +15,7 @@ import {
   readFdsaReviseAnswer,
   buildFdsaDecideBrief,
   buildFdsaReviseBrief,
+  fdsaModelLines,
   fdsaDecideSystemPrompt,
   fdsaReviewDedupeKey,
   FdsaScreenAnswerSchema,
@@ -28,7 +29,9 @@ import {
   type Env,
   type FdsaAnswerMeta,
   type FdsaDecideVerdict,
+  type FdsaModelContext,
   type FdsaRead,
+  type FdsaSeatRecord,
   type FdsaReviseBriefInput,
   type FdsaReviseVerdict,
   type FdsaScreenVerdict,
@@ -83,7 +86,9 @@ export interface FdsaAlert {
    * there are (AI evaluation 2026-11-01: coins called by most seats have been the better pool).
    * Null when emission couldn't say.
    */
-  agreement?: { called: number; of: number } | null;
+  agreement?: { called: number; of: number; seats?: { id: string; name: string }[] } | null;
+  /** The seat that made this alert: its id, name, what it is and the call's tier. Null when unknown. */
+  seat?: { id: string; name: string; description: string | null; tier: string | null } | null;
 }
 
 // ── Market source ─────────────────────────────────────────────────────────
@@ -266,6 +271,66 @@ export async function tradeLine(
   return state;
 }
 
+// ── The scanner models behind an alert ────────────────────────────────────
+
+/** The week of each seat's own graded calls its live record counts. */
+const SEAT_RECORD_DAYS = 7;
+const SEAT_RECORD_CACHE_MS = 15 * 60_000;
+let seatRecordCache: { at: number; records: Map<string, FdsaSeatRecord> } | null = null;
+
+/**
+ * Every seat's live record on the goal metric: its curated calls of the last week whose verdict
+ * is in (CuratedAlert.hit2xIn1h, the 15-minute win), and the wins. One query for all seats, read
+ * at most every 15 minutes.
+ */
+async function seatRecords(): Promise<Map<string, FdsaSeatRecord>> {
+  if (seatRecordCache && Date.now() - seatRecordCache.at < SEAT_RECORD_CACHE_MS)
+    return seatRecordCache.records;
+  const rows = await prisma.curatedAlert.groupBy({
+    by: ["model", "hit2xIn1h"],
+    where: {
+      createdAt: { gt: new Date(Date.now() - SEAT_RECORD_DAYS * 86_400_000) },
+      hit2xIn1h: { not: null },
+      model: { not: null },
+    },
+    _count: { _all: true },
+  });
+  const records = new Map<string, FdsaSeatRecord>();
+  for (const r of rows) {
+    if (r.model === null) continue;
+    const rec = records.get(r.model) ?? { wins: 0, graded: 0 };
+    rec.graded += r._count._all;
+    if (r.hit2xIn1h === true) rec.wins += r._count._all;
+    records.set(r.model, rec);
+  }
+  seatRecordCache = { at: Date.now(), records };
+  return records;
+}
+
+/**
+ * The scanner models section for an alert's briefs (user ask 2026-11-01), or null when emission
+ * didn't say which seat made it. A failed read of the records leaves them "no graded calls"
+ * rather than holding the review.
+ */
+export async function fdsaModelContext(alert: FdsaAlert): Promise<FdsaModelContext | null> {
+  if (!alert.seat) return null;
+  const records = await seatRecords().catch((err: unknown) => {
+    logger.warn("FDSA seat records failed", { error: String(err) });
+    return new Map<string, FdsaSeatRecord>();
+  });
+  const seats = alert.agreement?.seats ?? [];
+  return {
+    alerting: {
+      name: alert.seat.name,
+      description: alert.seat.description,
+      tier: alert.seat.tier,
+      record: records.get(alert.seat.id) ?? null,
+    },
+    callers: seats.map((c) => ({ name: c.name, record: records.get(c.id) ?? null })),
+    recordDays: SEAT_RECORD_DAYS,
+  };
+}
+
 // ── Slots ─────────────────────────────────────────────────────────────────
 
 /**
@@ -358,6 +423,7 @@ export function resetFdsaReviews(): void {
   deskCache = null;
   screenLineCache = null;
   tradeLineCache = null;
+  seatRecordCache = null;
   pendingTokens.clear();
   pending.clear();
   inFlight = 0;
@@ -667,8 +733,13 @@ export async function reviewFdsaAlert(alert: FdsaAlert, env: Env): Promise<FdsaR
     anchorPriceUsd: anchor.priceUsd,
     anchorMcapUsd: anchor.marketCapUsd,
   };
-  // The screen reads the reviewer's brief without its comparables: the cheap first look.
-  const screenBrief = buildAiReviewBrief(alert.scored, alert.decision);
+  // The screen reads the reviewer's brief without its comparables: the cheap first look, with the
+  // scanner models behind the alert after it.
+  const models = await fdsaModelContext(alert);
+  const screenBrief = [
+    buildAiReviewBrief(alert.scored, alert.decision),
+    ...(models ? [``, ...fdsaModelLines(models)] : []),
+  ].join("\n");
 
   // Launcher text written to steer a model is a drop on its own, decided here so the model is
   // never the only check against it - the reviewer's own guard (core's launcherTextInstructs).
@@ -728,7 +799,7 @@ export async function reviewFdsaAlert(alert: FdsaAlert, env: Env): Promise<FdsaR
   if (screen.verdict.decision !== "shortlist") return { ...out("dropped"), screen: screen.verdict };
   stats.shortlisted += 1;
 
-  const decided = await decideFdsaAlert(alert, env, base, desk, screen.verdict);
+  const decided = await decideFdsaAlert(alert, env, base, desk, screen.verdict, models);
   return { screen: screen.verdict, ...decided };
 }
 
@@ -739,6 +810,7 @@ async function decideFdsaAlert(
   base: RowBase,
   desk: DeskState,
   screen: FdsaScreenVerdict,
+  models: FdsaModelContext | null,
 ): Promise<Omit<FdsaReviewOutcome, "screen">> {
   // The 20 nearest graded past calls, as the reviewer's shadow reviews see them: only rows whose
   // outcome was knowable at the alert, since this runs detached after it. Beside them, a
@@ -755,6 +827,7 @@ async function decideFdsaAlert(
     quote,
     agreement: alert.agreement ?? null,
     screen: { score: screen.score, reason: screen.reason },
+    models,
   });
   const call = await withSlot(env, false, () =>
     callFdsa(env, {

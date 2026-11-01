@@ -58,7 +58,7 @@ export const FDSA_SCREEN_SYSTEM_PROMPT = `You are the first screen of an automat
 
 Each alert is a token that already passed an automated rug screen (${safetyScreenSummary()}) and was ranked among the strongest candidates a scanner found this hour. Most still lose: about one alert in five wins. ${WIN_TEXT}
 
-Your only job is to decide how strongly this alert deserves a full, slower review that may buy it. Score it from 0 to 1: about one alert in ten should score 0.7 or more. Score high only when momentum, order flow and holder health together look clearly better than a typical alert. Score low on concentrated, fresh-wallet or empty-wallet holders, a large dev bag, a dump in the last minutes, thin liquidity, or risky or dumping wallets. Unknown values are unknown, not good news.
+Your only job is to decide how strongly this alert deserves a full, slower review that may buy it. Score it from 0 to 1: about one alert in ten should score 0.7 or more. Score high only when momentum, order flow and holder health together look clearly better than a typical alert. Score low on concentrated, fresh-wallet or empty-wallet holders, a large dev bag, a dump in the last minutes, thin liquidity, or risky or dumping wallets. The scanner models section says which of the scanner's models called the coin and how each has done live this week: calls from models with a strong live record, or a high-conviction call, are a reason to look closer. Unknown values are unknown, not good news.
 
 ${COPY_GUIDANCE}
 
@@ -112,7 +112,7 @@ ${COPY_GUIDANCE}
 
 ${DATA_GUARD}
 
-When the brief lists similar past calls, they are real graded outcomes from this scanner on tokens that looked like this one: treat their win rate as the base rate you adjust from. When it gives the scanner model's own 2x probability, treat it as a second base rate. When it says how many of the scanner's models called the coin, more callers has meant a better pool in this scanner's record (coins called by most of its models won about 27% of the time against 20% for the whole feed, late October 2026): a third base rate, not a reason on its own.
+When the brief lists similar past calls, they are real graded outcomes from this scanner on tokens that looked like this one: treat their win rate as the base rate you adjust from. When it gives the scanner model's own 2x probability, treat it as a second base rate. When it says how many of the scanner's models called the coin, more callers has meant a better pool in this scanner's record (coins called by most of its models won about 27% of the time against 20% for the whole feed, late October 2026): a third base rate, not a reason on its own. The scanner models section names those models and how each has done live over the last week: a call from models with a strong live record, or a high-conviction call, counts for more than one from models that have been losing.
 
 The brief's market, holder and wallet figures were read when the alert went out; the "alert and desk" section at the end says how long ago that was and where the price stands now against the alert price, from a seconds-old quote. The desk buys at about that current price, and every multiple in your exit plan counts from its fill, not from the alert price: a coin already up 20% on the alert needs about 1.67x from here for the alert to count as a win, and the alert's stop sits lower than the plan's. The "live" block is Jupiter's seconds-old read at the alert; the market block above it is DexScreener's, 45-60 s older. The first screen's score and reason are a cheap model's quick read: a pointer to what to check, not evidence.
 
@@ -151,6 +151,54 @@ export interface FdsaDecideBriefExtras {
   agreement?: { called: number; of: number } | null;
   /** The first screen's verdict. Its reason is model text over launcher text: quoted, capped. */
   screen?: { score: number; reason: string } | null;
+  /** Who called the coin and how those models have done live (fdsaModelLines). */
+  models?: FdsaModelContext | null;
+}
+
+/** One scanner model's live record on the goal metric: graded calls in the window, and the wins. */
+export interface FdsaSeatRecord {
+  wins: number;
+  graded: number;
+}
+
+/**
+ * The scanner models behind an alert (user ask 2026-11-01: the AIs saw one model's internal name,
+ * its odds and a raw conviction number in its own units, and a count of callers): the model that
+ * made the alert with what it is and its tier, every model that called the coin this cycle, and
+ * each one's live 2x rate over the last week. All of it is the scanner's own text and figures.
+ */
+export interface FdsaModelContext {
+  alerting: {
+    name: string;
+    description: string | null;
+    /** "high" when the call cleared the model's high-conviction line. */
+    tier: string | null;
+    record: FdsaSeatRecord | null;
+  };
+  /** Every model that called the coin this cycle, the alerting one included. */
+  callers: { name: string; record: FdsaSeatRecord | null }[];
+  /** The days the records cover. */
+  recordDays: number;
+}
+
+const fmtRecord = (r: FdsaSeatRecord | null) =>
+  r && r.graded > 0
+    ? `${Math.round((r.wins / r.graded) * 100)}% live 2x rate (${r.wins} of ${r.graded} graded calls)`
+    : "no graded live calls yet";
+
+/** The "scanner models" section of the screen and decide briefs. */
+export function fdsaModelLines(ctx: FdsaModelContext): string[] {
+  const a = ctx.alerting;
+  const lines = [
+    `scanner models behind this alert (their live records are the last ${ctx.recordDays} days of their own calls, graded on the win rule above):`,
+    `- alerting model: ${clip(a.name, 60)}${a.description ? ` - ${clip(a.description, 200)}` : ""}`,
+    `- its tier on this call: ${a.tier === "high" ? "high conviction (above its own high-conviction line)" : a.tier === "standard" ? "standard" : "unknown"}; ${fmtRecord(a.record)}`,
+  ];
+  if (ctx.callers.length > 0) {
+    lines.push(`- models that called this coin this cycle (${ctx.callers.length}):`);
+    for (const c of ctx.callers.slice(0, 30)) lines.push(`  - ${clip(c.name, 60)}: ${fmtRecord(c.record)}`);
+  }
+  return lines;
 }
 
 const fmtSigned = (v: number | null | undefined, digits = 1) =>
@@ -231,6 +279,7 @@ export function buildFdsaDecideBrief(
   return [
     buildAiReviewBrief(scored, decision, comparables, extras.alertAt),
     ``,
+    ...(extras.models ? [...fdsaModelLines(extras.models), ``] : []),
     ...fdsaAlertLines(extras),
   ].join("\n");
 }

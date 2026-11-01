@@ -137,7 +137,20 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
       candidateOutcomeId: null,
       curatedAlertId: null,
       alertAt: new Date(),
-      agreement: { called: 9, of: 14 },
+      agreement: {
+        called: 2,
+        of: 14,
+        seats: [
+          { id: "sharp-trees", name: "Sharp Trees" },
+          { id: "narrative", name: "Narrative" },
+        ],
+      },
+      seat: {
+        id: "sharp-trees",
+        name: "Sharp Trees",
+        description: "Deep trees on early signs",
+        tier: "high",
+      },
     };
   }
   const setDesk = (running: boolean) =>
@@ -245,7 +258,11 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
     expect(decide.brief).toContain("from here the alert's 2x is 1.67x and its stop 0.42x");
     expect(decide.brief).toContain("live, last 5 minutes to now (Jupiter): price +8.0%, 41 buys / 12 sells");
     expect(decide.brief).toContain("holders 412 (+31 in 5 minutes)");
-    expect(decide.brief).toContain("models alerting on this coin: 9 of 14");
+    expect(decide.brief).toContain("models alerting on this coin: 2 of 14");
+    // Both briefs name the scanner models behind the alert (user ask 2026-11-01).
+    for (const b of [decide.brief, rows[0]!.brief])
+      expect(b).toContain("- alerting model: Sharp Trees - Deep trees on early signs");
+    expect(decide.brief).toContain("  - Narrative: no graded live calls yet");
     expect(decide.brief).toContain(
       'first screen (a quick cheap-model read, not evidence): 0.85, "strong flow"',
     );

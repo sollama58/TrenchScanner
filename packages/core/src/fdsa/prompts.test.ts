@@ -6,6 +6,7 @@ import {
   buildFdsaDecideBrief,
   buildFdsaReviseBrief,
   fdsaDecideSystemPrompt,
+  fdsaModelLines,
   fdsaTapeLines,
   FDSA_DECIDE_SYSTEM_PROMPT,
   FDSA_REVISE_SYSTEM_PROMPT,
@@ -38,6 +39,29 @@ describe("FDSA prompts", () => {
       'a "trade" with probability2x under 65% is recorded as a pass',
     );
     expect(fdsaDecideSystemPrompt(0.65)).toContain("counts from its fill, not from the alert price");
+  });
+
+  it("names the scanner models behind an alert, what the alerting one is, its tier and live records", () => {
+    const lines = fdsaModelLines({
+      alerting: {
+        name: "Sharp Trees",
+        description: "Deep trees on the strongest early signs",
+        tier: "high",
+        record: { wins: 12, graded: 40 },
+      },
+      callers: [
+        { name: "Sharp Trees", record: { wins: 12, graded: 40 } },
+        { name: "Narrative", record: null },
+      ],
+      recordDays: 7,
+    }).join("\n");
+    expect(lines).toContain("- alerting model: Sharp Trees - Deep trees on the strongest early signs");
+    expect(lines).toContain(
+      "high conviction (above its own high-conviction line); 30% live 2x rate (12 of 40 graded calls)",
+    );
+    expect(lines).toContain("- models that called this coin this cycle (2):");
+    expect(lines).toContain("  - Narrative: no graded live calls yet");
+    expect(lines).toContain("the last 7 days");
   });
 
   it("the ranked decide prompt asks for honest odds and a plan on every answer, not a bar", () => {

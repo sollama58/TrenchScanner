@@ -45,10 +45,13 @@ export type FdsaStage = (typeof FDSA_STAGES)[number];
  *   on its own (prompts.ts COPY_GUIDANCE; user ask). The revise prompt is unchanged.
  *   decide v4 (2026-11-01): with FDSA_TRADE_TOP_PCT set, the decide is told the desk trades the
  *   day's top share by its probability2x, to give honest odds and an exit plan on every answer.
+ *   screen v4, decide v5 (2026-11-01): both briefs carry the scanner models behind the alert (the
+ *   alerting model and what it is, its tier, every model that called the coin, each one's live 2x
+ *   rate over the last week; prompts.ts fdsaModelLines), and both prompts say how to read them.
  */
 export const FDSA_PROMPT_VERSIONS: Readonly<Record<FdsaStage, string>> = {
-  screen: "fdsa-screen-v3",
-  decide: "fdsa-decide-v4",
+  screen: "fdsa-screen-v4",
+  decide: "fdsa-decide-v5",
   revise: "fdsa-revise-v2",
 };
 /** The decide stage's version: the one the tab's settings and record name. */
