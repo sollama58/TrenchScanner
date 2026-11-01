@@ -215,6 +215,7 @@ export async function registerFdsaRoutes(app: FastifyInstance, { env }: { env: E
         apiKeySet: worker?.credentials.anthropicApiKey ?? null,
         screenModel: setting("fdsaScreenModel", env.FDSA_SCREEN_MODEL),
         screenMinScore: setting("fdsaScreenMinScore", env.FDSA_SCREEN_MIN_SCORE),
+        screenShortlistPct: setting("fdsaScreenShortlistPct", env.FDSA_SCREEN_SHORTLIST_PCT),
         decideModel: setting("fdsaDecideModel", env.FDSA_DECIDE_MODEL),
         decideEffort: setting("fdsaDecideEffort", env.FDSA_DECIDE_EFFORT),
         promptVersion: FDSA_PROMPT_VERSION,

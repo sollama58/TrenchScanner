@@ -6,7 +6,9 @@ import { clampFdsaExitPlan, FdsaExitPlanAnswerSchema, type FdsaExitPlan } from "
  * What FDSA's Claude calls return, and how an answer becomes a stored verdict (owner decision
  * 2026-10-31, decision 1). Two stages review every curated alert:
  *   - "screen": Haiku at low effort, compact brief, a 0-1 shortlist score and a one-line reason;
- *     at or above FDSA_SCREEN_MIN_SCORE the alert is shortlisted for the decide stage;
+ *     at or above the screen's line the alert is shortlisted for the decide stage (the worker's
+ *     fdsa/review.ts screenLine: the top FDSA_SCREEN_SHORTLIST_PCT of the last day's scores, or
+ *     FDSA_SCREEN_MIN_SCORE);
  *   - "decide": Opus at medium effort, the reviewer's full brief, trade or pass and the entry exit
  *     plan.
  * And "revise" re-plans an open position at a named trigger (exitPlan.ts fdsaRevisionDue).
