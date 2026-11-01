@@ -688,11 +688,15 @@ function walletLines(s: ScoredToken): string[] {
       `- same-size buy groups (3+ wallets each buying once, for the same amount, in the same second: one script's row of wallets): ${recent}; ${launch}`,
     );
   }
-  if (known(s.cohortRecentBuyersPct) || known(s.cohortRecentMaxSize)) {
+  if (known(s.cohortRecentBuyersPct)) {
     const creator = known(s.cohortCreatorLinked) ? fmtBool(s.cohortCreatorLinked === 1) : "unknown";
     lines.push(
       `- recurring cohorts among the newest buyers (wallets that keep buying the same launches together within seconds): ${fmtPct(s.cohortRecentBuyersPct)} of the buyers, largest cohort ${fmtNum(s.cohortRecentMaxSize)} wallets; a cohort includes a coin's creator: ${creator}`,
     );
+  } else if (known(s.cohortRecentMaxSize)) {
+    // The book was read but the page had no buyers (cohortReading): say so rather than "unknown
+    // of the buyers, largest cohort 0" (bugfix pass 2026-11-01).
+    lines.push("- recurring cohorts among the newest buyers: no buyers on the newest trades to read");
   }
   if (known(s.recentBuyersHoldMean)) {
     lines.push(
