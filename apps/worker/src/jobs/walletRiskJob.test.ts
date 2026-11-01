@@ -329,6 +329,7 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
       [min(-1), min(5), 2, 2, 0.01, min(10), false], // churn (2 buys, 2 sells), micro buys, exit before stop
       [min(-1), min(20), 1, 1, 1, min(10), true], // dumped into the stop: hold 21 min
       [min(2), null, 1, 0, 1, null, false], // late buyer, never sold
+      [min(-3), min(-1), 1, 1, 1, min(10), false], // out before the call: neither a sell into it nor an exit before the stop
     ];
     for (const [
       i,
@@ -379,12 +380,12 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
     await runWalletRiskJob();
     const row = await prisma.walletRisk.findUnique({ where: { wallet: trader } });
     expect(row).toMatchObject({
-      appearances: 4,
-      earlyBuys: 3,
-      // Three sold coins held 2, 6 and 21 minutes.
-      medianHoldSec: 6 * 60,
-      // 1 + 2 + 1 round trips over the sold coins; the unsold coin adds none.
-      roundTrips: 4,
+      appearances: 5,
+      earlyBuys: 4,
+      // Four sold coins held 2, 6, 21 and 2 minutes.
+      medianHoldSec: 4 * 60,
+      // 1 + 2 + 1 + 1 round trips over the sold coins; the unsold coin adds none.
+      roundTrips: 5,
       churnCoins: 1,
       microBuyCoins: 1,
       sellsIntoCalls: 1,

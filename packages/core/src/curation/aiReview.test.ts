@@ -264,6 +264,15 @@ describe("AI review brief", () => {
       "0.0% of the buyers, largest cohort 0 wallets; a cohort includes a coin's creator: no",
     );
     expect(none).toContain("averaged): 1h 6m");
+    // The book read but no buyers on the page: said as that, not as an unknown share of nobody.
+    const empty = buildAiReviewBrief(
+      { ...scored, cohortRecentMaxSize: 0, recentBuyersHoldMean: undefined } as ScoredToken,
+      decision,
+    );
+    expect(empty).toContain(
+      "recurring cohorts among the newest buyers: no buyers on the newest trades to read",
+    );
+    expect(empty).not.toContain("unknown of the buyers");
   });
 
   it("prints KOL Bundled % and the creator share with transfers counted, as the models read them", () => {

@@ -150,7 +150,9 @@ const holdSecSql = Prisma.sql`EXTRACT(EPOCH FROM (a."firstSellAt" - a."firstBuyA
 /**
  * The behaviour counters (data-uses evaluation 2026-11-01; WalletRisk's column notes say what each
  * one is), as one SELECT list. sellsIntoCalls and exitsBeforeStop read the call's anchor and stop
- * from the tape join (`t`).
+ * from the tape join (`t`). Both count coins the wallet held at the call: bought before the anchor
+ * and first sold at or after it. Without the sell-side bound (bugfix pass 2026-11-01) a wallet
+ * that bought early and was out before the call counted as an exit before the stop.
  */
 const behaviourCountsSql = Prisma.sql`percentile_cont(0.5) WITHIN GROUP (ORDER BY ${holdSecSql})
              FILTER (WHERE ${soldSql}) AS "medianHoldSec",
@@ -160,8 +162,8 @@ const behaviourCountsSql = Prisma.sql`percentile_cont(0.5) WITHIN GROUP (ORDER B
            COUNT(*) FILTER (WHERE a."buys" > 0 AND a."solIn" / a."buys" < ${MICRO_BUY_SOL}) AS "microBuyCoins",
            COUNT(*) FILTER (WHERE ${earlySql} AND a."firstSellAt" >= t."anchorAt"
                               AND a."firstSellAt" < t."anchorAt" + INTERVAL '2 minutes') AS "sellsIntoCalls",
-           COUNT(*) FILTER (WHERE ${earlySql} AND t."stoppedAt" IS NOT NULL AND a."firstSellAt" < t."stoppedAt"
-                              AND NOT a."dumpedIntoStop") AS "exitsBeforeStop"`;
+           COUNT(*) FILTER (WHERE ${earlySql} AND t."stoppedAt" IS NOT NULL AND a."firstSellAt" >= t."anchorAt"
+                              AND a."firstSellAt" < t."stoppedAt" AND NOT a."dumpedIntoStop") AS "exitsBeforeStop"`;
 const MIN_APPEARANCES = 2;
 
 const WALLET_RISK_TABLE: ReplaceRowsSpec = {
