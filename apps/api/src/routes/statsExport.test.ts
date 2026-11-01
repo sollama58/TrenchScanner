@@ -27,6 +27,7 @@ describe("export query", () => {
     expect(exportQuerySchema.safeParse({ dataset: "tokens" }).success).toBe(false);
     expect(exportQuerySchema.parse({ dataset: "wallets" }).dataset).toBe("wallets");
     expect(exportQuerySchema.parse({ dataset: "wallet-activity" }).dataset).toBe("wallet-activity");
+    expect(exportQuerySchema.parse({ dataset: "tape" }).dataset).toBe("tape");
   });
 
   it("pulls the narrative's names out of a stored TokenSage analysis", () => {
@@ -394,6 +395,50 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
         { subscriptionId: `${PUSH_SUB}-b`, tokenId, matchId: "m-1", batched: true, sentAt: at(2) },
       ],
     });
+    // A trade tape of the call at minute 0 with two wallets' stored trades: one buys and sells,
+    // one buys once and holds (its trades list is null on rows written before trades were kept).
+    await prisma.tokenTradeTape.create({
+      data: {
+        tokenId,
+        outcomeId: outcomeIds[0]!,
+        anchorAt: at(0),
+        reason: "called",
+        status: "done",
+        windowEnd: at(30),
+        trades: 3,
+        wallets: 2,
+        readAt: at(35),
+      },
+    });
+    await prisma.tokenWalletActivity.createMany({
+      data: [
+        {
+          tokenId,
+          wallet: "TapeWalletA",
+          buys: 1,
+          sells: 1,
+          solIn: 0.5,
+          solOut: 0.9,
+          firstBuyAt: at(-1),
+          firstSellAt: at(3),
+          trades: [
+            [at(-1).getTime(), 1, 0.5, 1_000_000],
+            [at(3).getTime(), -1, 0.9, 1_000_000],
+          ],
+          createdAt: at(35),
+        },
+        {
+          tokenId,
+          wallet: "TapeWalletB",
+          buys: 1,
+          solIn: 0.25,
+          firstBuyAt: at(1),
+          trades: [[at(1).getTime(), 1, 0.25, 400_000]],
+          createdAt: at(35),
+        },
+        { tokenId, wallet: "TapeWalletC", buys: 1, solIn: 0.1, firstBuyAt: at(1), createdAt: at(35) },
+      ],
+    });
   });
 
   afterAll(async () => {
@@ -527,6 +572,43 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
       coinAthMcapUsd: null,
       coinAthAt: null,
     });
+  });
+
+  it("exports the per-trade tape, one record per stored trade, with the call's grade beside it", async () => {
+    // Off the generator, not the route: the route's 12-a-minute limit is spent by the other cases.
+    const read = async (format: "jsonl" | "csv") => {
+      let text = "";
+      for await (const chunk of exportChunks(
+        exportQuerySchema.parse({ dataset: "tape", format }),
+        at(-1),
+        at(600),
+        2,
+      ))
+        text += chunk;
+      return text.trim().split("\n");
+    };
+    const rows = (await read("jsonl")).map((l) => JSON.parse(l));
+    // Wallet C has no stored trades and yields nothing.
+    expect(rows.map((r) => [r.wallet, r.side, r.sol, r.tokens])).toEqual([
+      ["TapeWalletA", "buy", 0.5, 1_000_000],
+      ["TapeWalletA", "sell", 0.9, 1_000_000],
+      ["TapeWalletB", "buy", 0.25, 400_000],
+    ]);
+    expect(rows[0]).toMatchObject({
+      symbol: "EXP",
+      tapeStatus: "done",
+      tapeReason: "called",
+      hit2xIn15m: null,
+    });
+    expect(rows[0].at).toBe(at(-1).toISOString());
+    expect(rows[0].anchorAt).toBe(at(0).toISOString());
+    expect(rows[0]).not.toHaveProperty("trades");
+    expect(rows[0]).not.toHaveProperty("id");
+    const csv = await read("csv");
+    const cols = csv[0]!.split(",");
+    expect(cols.slice(-4)).toEqual(["at", "side", "sol", "tokens"]);
+    expect(csv).toHaveLength(4);
+    expect(csv[2]!.split(",")[cols.indexOf("side")]).toBe("sell");
   });
 
   it("exports the stored Top Models pick per slot", async () => {
