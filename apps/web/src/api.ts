@@ -1069,7 +1069,7 @@ export interface LearningRates {
 export interface LearningDay {
   /** UTC calendar day, YYYY-MM-DD. */
   day: string;
-  /** The decision moments the models saw that day (graded "event" training rows). */
+  /** The cycle decision moments the models saw that day (graded "event" training rows; the fast path's "entry" rows are not in it). */
   market: LearningRates;
   /** Every model's calls that day, pooled. */
   feed: LearningRates;

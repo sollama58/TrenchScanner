@@ -307,7 +307,9 @@ const RAN_LATER = Prisma.sql`
  * The baseline a model's pick has to beat: every "event" moment anchored since `since` that passes
  * the wallet safety cuts and was graded under a reported label rule - the same market as the week
  * chart's Market line (learningCurve.ts) and the leaderboard's lift (liveMarketLift in
- * curation/laneStore.ts), so the three never disagree about what "the market" did. The hit-rate
+ * curation/laneStore.ts), so the three never disagree about what "the market" did. Cycle moments
+ * only: the fast path's "entry" rows (29% of decision rows at 21% against 16% on 2026-11-02, audit
+ * GF-8) are not in it, and the pages say so (user decision: label the baseline "cycle moments"). The hit-rate
  * report's samples.byKind stays the raw count of every banked row. The leaderboard carries it so
  * the Models vs baseline chart can switch windows without the full insights report.
  */

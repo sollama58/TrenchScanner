@@ -278,9 +278,9 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
           sub={`prior ${rate(pri.feed.hit4xPct)} · ${rate(pri.feed.hit10xPct)}`}
         />
         <Kpi
-          label="Market base 2x"
+          label="Cycle-moments base 2x"
           value={rate(cur.market.hit2xPct)}
-          sub={`${n(cur.market.graded)} event moments · prior ${rate(pri.market.hit2xPct)}`}
+          sub={`${n(cur.market.graded)} cycle moments (the fast path's entry moments are not in it) · prior ${rate(pri.market.hit2xPct)}`}
         />
         <Kpi
           label="Lift"
@@ -316,9 +316,9 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
           note={`Per bucket. A gap is a bucket under ${r.minGradedForRate} graded calls.`}
         >
           <AdminLines
-            label="2x rate and market base by bucket"
+            label="2x rate and cycle-moments base by bucket"
             points={r.series.current.map((b, i) => ({ label: label(i), values: [b.hit2xPct, b.base2xPct] }))}
-            names={[`${who} 2x %`, "Market 2x %"]}
+            names={[`${who} 2x %`, "Cycle moments 2x %"]}
             empty="Nothing graded in this window yet."
           />
         </Panel>

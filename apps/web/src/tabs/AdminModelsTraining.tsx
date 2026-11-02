@@ -460,7 +460,7 @@ export function ModelsPerformance({
           <div className="admin-split">
             <Panel
               title="Calls over time"
-              note={`2x rate by day in ${zone}. Feed is every model pooled. Market is the decision moments. A gap is a day under the lift floor, not a zero.`}
+              note={`2x rate by day in ${zone}. Feed is every model pooled. Market is the cycle decision moments only (the fast path's entry moments, about 29% of decisions, are not in it). A gap is a day under the lift floor, not a zero.`}
             >
               <AdminLines
                 label="Feed and market 2x rate by day"
