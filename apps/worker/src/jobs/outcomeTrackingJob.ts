@@ -125,6 +125,26 @@ const OUTCOME_WRITE_CONCURRENCY = 4;
 /** The furthest back the nightly peak sweep reads once it has ever succeeded - see below. */
 const SWEEP_MAX_LOOKBACK_DAYS = 3;
 
+/**
+ * A mint DexScreener has had no market for since this many days is left out of the live pass,
+ * except on its recheck night (one in OUTCOME_RECHECK_EVERY_DAYS, spread by mint). The pass priced
+ * 59,053 mints a night for 45 minutes, 78% of them coming back empty, to move 104 peaks (audit
+ * 2026-11-02). Leaving one out costs nothing it could have written: with no live market cap the
+ * pass only writes a peak it saw, and repairOutcomeBookkeeping derives the rest from the row.
+ */
+export const OUTCOME_SKIP_MISSING_AFTER_DAYS = 3;
+export const OUTCOME_RECHECK_EVERY_DAYS = 7;
+
+/** Whether the live pass leaves this mint out tonight (see OUTCOME_SKIP_MISSING_AFTER_DAYS). */
+export function skipsMissingMint(mint: string, dexMissingSince: Date | null, now: number): boolean {
+  if (!dexMissingSince) return false;
+  if (now - dexMissingSince.getTime() < OUTCOME_SKIP_MISSING_AFTER_DAYS * 86_400_000) return false;
+  let h = 0;
+  for (let i = 0; i < mint.length; i++) h = (h * 31 + mint.charCodeAt(i)) >>> 0;
+  const day = Math.floor(now / 86_400_000);
+  return (h + day) % OUTCOME_RECHECK_EVERY_DAYS !== 0;
+}
+
 /** Mints priced (and their matches written) per step of the live pass, each step saved when done. */
 const LIVE_MINTS_PER_STEP = 300;
 
@@ -434,21 +454,29 @@ export async function runOutcomeTrackingJob(
       peakMcapAt: true,
       peakReturnPct: true,
       hitHundredPctAt: true,
-      token: { select: { mintAddress: true } },
+      token: { select: { mintAddress: true, dexMissingSince: true } },
       alertMcapUsd: true,
       snapshot: { select: { marketCapUsd: true } },
     },
   });
   type MatchRow = (typeof matches)[number];
   const byMint = new Map<string, MatchRow[]>();
+  const missingSince = new Map<string, Date | null>();
   for (const m of matches) {
+    missingSince.set(m.token.mintAddress, m.token.dexMissingSince);
     const list = byMint.get(m.token.mintAddress);
     if (list) list.push(m);
     else byMint.set(m.token.mintAddress, [m]);
   }
   // In a fixed order so the saved mint is a cursor; a resumed run skips the mints already done.
   const liveAfter = afterFor("live");
-  const mints = [...byMint.keys()].sort().filter((mint) => liveAfter === undefined || mint > liveAfter);
+  const skippedMissing = [...byMint.keys()].filter((mint) =>
+    skipsMissingMint(mint, missingSince.get(mint) ?? null, runStartedAt),
+  ).length;
+  const mints = [...byMint.keys()]
+    .sort()
+    .filter((mint) => liveAfter === undefined || mint > liveAfter)
+    .filter((mint) => !skipsMissingMint(mint, missingSince.get(mint) ?? null, runStartedAt));
 
   // A step at a time, each saved when its writes are done, so a deploy partway through the
   // minutes of price fetching costs one step rather than the whole pass.
@@ -459,10 +487,31 @@ export async function runOutcomeTrackingJob(
     let skipped = 0;
     // One request at a time: this is thousands of mints, and DexScreener's rate limit is shared
     // with the fast-match and scan lanes that alerts actually wait on.
-    const live = await dexScreener.getTokensByAddresses(step, 1);
+    // Mints whose batch got no answer: unknown, not missing (see dexMissingSince below).
+    const unanswered = new Set<string>();
+    const live = await dexScreener.getTokensByAddresses(step, 1, { failed: unanswered });
     const mcapByMint = new Map(live.map((c) => [c.mintAddress, c.marketCapUsd]));
     // Read after the fetch, which takes a while: a new high is dated to when it was seen.
     const now = new Date();
+    // Which mints DexScreener has a market for, and which it answered with none, for the next
+    // nights' skip (dexMissingSince). DexScreener's blank spells (2026-10-07) answer the batch
+    // from GeckoTerminal, so a blank DexScreener alone doesn't stamp every mint missing.
+    const found = step.filter((mint) => mcapByMint.get(mint) !== undefined);
+    const missing = step.filter((mint) => mcapByMint.get(mint) === undefined && !unanswered.has(mint));
+    await Promise.all([
+      found.length > 0
+        ? prisma.token.updateMany({
+            where: { mintAddress: { in: found }, dexMissingSince: { not: null } },
+            data: { dexMissingSince: null },
+          })
+        : null,
+      missing.length > 0
+        ? prisma.token.updateMany({
+            where: { mintAddress: { in: missing }, dexMissingSince: null },
+            data: { dexMissingSince: now },
+          })
+        : null,
+    ]);
 
     // Four writes in flight rather than one: thousands of matches, one round trip each, was a
     // large share of this job's runtime, and each write is a single-row update by primary key.
@@ -528,6 +577,7 @@ export async function runOutcomeTrackingJob(
   const summary = {
     matchesChecked: checkpoint.matchesChecked,
     uniqueMints: byMint.size,
+    skippedMissingMints: skippedMissing,
     peaksUpdated: checkpoint.peaksUpdated,
     missingLiveData: checkpoint.missingLiveData,
     peaksRecoveredInFullSweep: checkpoint.fromSnapshots + checkpoint.fromLivePings,

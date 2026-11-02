@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  OUTCOME_RECHECK_EVERY_DAYS,
+  OUTCOME_SKIP_MISSING_AFTER_DAYS,
   readOutcomeCheckpoint,
   readRetryTokens,
   reconcileMatchOutcome,
   retryState,
+  skipsMissingMint,
   type MatchOutcomeState,
 } from "./outcomeTrackingJob.js";
 
@@ -229,5 +232,27 @@ describe("retryState", () => {
     const read = readOutcomeCheckpoint({ outcomeResume: saved }, Date.parse("2026-10-18T06:06:00.000Z"));
     expect(read).toMatchObject({ retryDone: true, retryFailing: "b,c" });
     expect(retryState(retry, read!).stillFailing).toEqual(["b", "c"]);
+  });
+});
+
+describe("skipsMissingMint", () => {
+  const DAY = 86_400_000;
+  const now = Date.UTC(2026, 10, 2);
+  it("reads a mint with a market, or one missing only lately", () => {
+    expect(skipsMissingMint("MintA", null, now)).toBe(false);
+    expect(skipsMissingMint("MintA", new Date(now - DAY), now)).toBe(false);
+  });
+
+  it("leaves out a long-missing mint except on one recheck night a week", () => {
+    const since = new Date(now - 10 * DAY);
+    const nights = Array.from({ length: OUTCOME_RECHECK_EVERY_DAYS }, (_, d) =>
+      skipsMissingMint("So11111111111111111111111111111111111111112", since, now + d * DAY),
+    );
+    expect(nights.filter((skip) => !skip)).toHaveLength(1);
+  });
+
+  it("starts skipping at OUTCOME_SKIP_MISSING_AFTER_DAYS", () => {
+    const since = new Date(now - OUTCOME_SKIP_MISSING_AFTER_DAYS * DAY + 1);
+    expect(skipsMissingMint("MintB", since, now)).toBe(false);
   });
 });
