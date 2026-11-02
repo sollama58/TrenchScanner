@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { HttpError } from "./httpClient.js";
-import { endpointOf, PumpFunGate, pumpFunFrontendGate, takePumpFunGateStats } from "./pumpfunGate.js";
+import {
+  endpointOf,
+  PumpFunGate,
+  pumpFunFrontendGate,
+  REFUSED_MAX_PAUSE_MS,
+  refusedPauseFor,
+  takePumpFunGateStats,
+} from "./pumpfunGate.js";
 
 describe("PumpFunGate", () => {
   it("lets a burst through, then holds back past the budget without waiting", async () => {
@@ -52,6 +59,39 @@ describe("PumpFunGate", () => {
     gate.answered(mintB);
     expect(gate.refusedRecently(mintA)).toBe(false);
     expect(gate.takeStats()).toMatchObject({ refused: 1, heldBackRefused: 2 });
+  });
+
+  // Audit 2026-11-02: a probe a minute through a days-long block was ~5,800 refused calls a day.
+  it("waits twice as long after each refused probe, up to the cap, and starts over once answered", () => {
+    let now = 0;
+    const gate = new PumpFunGate("test", 600, 10, 30_000, () => now, 60_000);
+    const url = "https://frontend-api-v3.pump.fun/coins-v2/" + "A".repeat(44);
+    gate.refused(url);
+    gate.refused(url); // a request already out when the block began: still the first refusal
+    now = 59_999;
+    expect(gate.refusedRecently(url)).toBe(true);
+    now = 60_000;
+    expect(gate.refusedRecently(url)).toBe(false); // the probe
+    gate.refused(url);
+    now = 60_000 + 119_999;
+    expect(gate.refusedRecently(url)).toBe(true);
+    now = 180_000;
+    expect(gate.refusedRecently(url)).toBe(false); // the second probe
+    gate.refused(url);
+    now = 180_000 + 239_999;
+    expect(gate.refusedRecently(url)).toBe(true);
+    now = 420_000;
+    expect(gate.refusedRecently(url)).toBe(false);
+    gate.answered(url);
+    gate.refused(url); // a new block starts from the base pause
+    now = 420_000 + 60_000;
+    expect(gate.refusedRecently(url)).toBe(false);
+  });
+
+  it("caps the refusal pause", () => {
+    expect(refusedPauseFor(60_000, 1)).toBe(60_000);
+    expect(refusedPauseFor(60_000, 3)).toBe(240_000);
+    expect(refusedPauseFor(60_000, 40)).toBe(REFUSED_MAX_PAUSE_MS);
   });
 
   it("counts the 403s Cloudflare marked as its managed challenge (check-in 2026-10-29)", () => {

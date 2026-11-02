@@ -10,7 +10,7 @@ export interface PumpFunGateStats {
   throttled: number;
   /** Requests turned away without being sent: paused, or the minute's budget spent. */
   heldBack: number;
-  /** Times an endpoint answered 403 (a Cloudflare block) and was left alone for REFUSED_PAUSE_MS. */
+  /** Times an endpoint answered 403 (a Cloudflare block) and was left alone (refusedPauseFor). */
   refused: number;
   /** Requests failed as that 403 without being sent, while their endpoint was refusing. */
   heldBackRefused: number;
@@ -42,6 +42,10 @@ export class PumpFunGate {
   private readonly msPerToken: number;
   /** Per endpoint (endpointOf): until when a 403 holds it back, or a probe is out asking. */
   private readonly refusedUntil = new Map<string, number>();
+  /** Per endpoint: probes refused in a row since it last answered (1 after the first 403). */
+  private readonly refusedStreak = new Map<string, number>();
+  /** Endpoints whose probe is out: the next 403 from them is the probe's answer. */
+  private readonly probing = new Set<string>();
 
   constructor(
     private readonly name: string,
@@ -98,7 +102,7 @@ export class PumpFunGate {
 
   /**
    * Whether a request to `url` should fail as a 403 without being sent (see fetchJson's gate):
-   * its endpoint answered 403 less than REFUSED_PAUSE_MS ago. Once that has passed one request
+   * its endpoint answered 403 less than its pause ago (refusedPauseFor). Once that has passed one request
    * goes out to ask whether the block has lifted, and the rest wait PROBE_MS for its answer.
    *
    * Pump.fun's Cloudflare refuses Render's addresses for hours at a time (2026-10-22, -23), and
@@ -117,28 +121,38 @@ export class PumpFunGate {
       return true;
     }
     this.refusedUntil.set(key, now + PROBE_MS);
+    this.probing.add(key);
     return false;
   }
 
-  /** The endpoint answered 403: hold its requests back for REFUSED_PAUSE_MS. */
+  /**
+   * The endpoint answered 403: hold its requests back, for longer each time its probe is refused
+   * again (refusedPauseFor). The 403s of requests already out when the block began count once.
+   */
   refused(url: string, headers?: Pick<Headers, "get">): void {
     const key = endpointOf(url);
     if (headers?.get("cf-mitigated") === "challenge") this.stats.challenged += 1;
-    if (!this.refusedUntil.has(key)) {
+    const first = !this.refusedUntil.has(key);
+    if (first) {
       logger.warn("Pump.fun refused us (403) - holding that endpoint back", {
         host: this.name,
         endpoint: key,
         pauseMs: this.refusedPauseMs,
       });
     }
+    let streak = this.refusedStreak.get(key) ?? 0;
+    if (first || this.probing.delete(key)) streak += 1;
+    this.refusedStreak.set(key, Math.max(1, streak));
     this.stats.refused += 1;
-    this.refusedUntil.set(key, this.now() + this.refusedPauseMs);
+    this.refusedUntil.set(key, this.now() + refusedPauseFor(this.refusedPauseMs, Math.max(1, streak)));
   }
 
   /** The endpoint answered something other than 403: it is no longer refusing. */
   answered(url: string): void {
     if (this.refusedUntil.size === 0) return;
     const key = endpointOf(url);
+    this.refusedStreak.delete(key);
+    this.probing.delete(key);
     if (this.refusedUntil.delete(key))
       logger.info("Pump.fun answered again", { host: this.name, endpoint: key });
   }
@@ -177,8 +191,21 @@ export function endpointOf(url: string): string {
 /** Path segments at least this long are a mint or wallet (base58, 32-44 characters). */
 const MINT_LIKE_SEGMENT = 32;
 
-/** How long a 403 holds back its endpoint before one request asks again. */
+/** How long a first 403 holds back its endpoint before one request asks again. */
 const REFUSED_PAUSE_MS = 60_000;
+
+/**
+ * The longest a refusal holds back its endpoint. A probe a minute per endpoint per process was
+ * still about 5,800 refused calls a day through a block that lasted days (audit 2026-11-02, every
+ * frontend-api call 403); doubling to 15 minutes cuts that about tenfold, and a lifted block is
+ * still noticed within 15 minutes. TokenSage's relay serves the coin reads meanwhile.
+ */
+export const REFUSED_MAX_PAUSE_MS = 15 * 60_000;
+
+/** The pause after the `streak`th refusal in a row: the base, doubled per refused probe, capped. */
+export function refusedPauseFor(baseMs: number, streak: number): number {
+  return Math.min(baseMs * 2 ** Math.max(0, streak - 1), Math.max(baseMs, REFUSED_MAX_PAUSE_MS));
+}
 
 /** How long the one request asking after a block has to answer before another may ask. */
 const PROBE_MS = 15_000;
