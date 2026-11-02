@@ -60,6 +60,16 @@ const SESSION_TIME_ZONE = "UTC";
 export const TRAINER_APPLICATION_NAME = "trenchscanner-trainer";
 
 /**
+ * What the API's connections call themselves, for the same reason: the API writes no alert and
+ * no match (the scanner writes both), but its report fills hold a transaction open for 12-37 s
+ * (the 30-day market rows), and every such fill held every alert back by the full commit wait,
+ * about 3% of sends 20 s late (full audit 2026-11-02, WB-44). Known by the package npm started
+ * (`npm run start -w @trenchscanner/api`, render.yaml); started any other way, the API's
+ * connections go unnamed and are waited on as before.
+ */
+export const API_APPLICATION_NAME = "trenchscanner-api";
+
+/**
  * What the two pass-lock transactions call themselves while they hold their lock. The Telegram
  * dispatch and the trading engine each keep one transaction open for the length of a pass, only
  * to hold its advisory lock; every row they write goes through other connections. The commit-wait
@@ -158,7 +168,12 @@ function tunedDatasourceUrl(): string | null {
         poolTimeoutSeconds !== undefined && poolTimeoutSeconds > 0 ? poolTimeoutSeconds : undefined,
       socketTimeoutSeconds: positive(process.env.DATABASE_SOCKET_TIMEOUT_SECONDS),
       statementTimeoutSeconds: positive(process.env.DATABASE_STATEMENT_TIMEOUT_SECONDS),
-      applicationName: process.env.WORKER_ROLE === "trainer" ? TRAINER_APPLICATION_NAME : undefined,
+      applicationName:
+        process.env.WORKER_ROLE === "trainer"
+          ? TRAINER_APPLICATION_NAME
+          : process.env.npm_package_name === "@trenchscanner/api"
+            ? API_APPLICATION_NAME
+            : undefined,
     });
   } catch {
     return null;

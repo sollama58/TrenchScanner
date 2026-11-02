@@ -1,7 +1,13 @@
 import { Prisma } from "@prisma/client";
 import type { Env } from "../config/env.js";
 import { adminWalletSet } from "../config/env.js";
-import { namePassLock, PASS_LOCK_APPLICATION_NAME, prisma, TRAINER_APPLICATION_NAME } from "../db.js";
+import {
+  API_APPLICATION_NAME,
+  namePassLock,
+  PASS_LOCK_APPLICATION_NAME,
+  prisma,
+  TRAINER_APPLICATION_NAME,
+} from "../db.js";
 import { createLogger } from "../logger.js";
 import { resolveAccess } from "../subscription/access.js";
 import {
@@ -138,8 +144,10 @@ export interface DispatchDeps {
  * processes (autovacuum, WAL senders): only client connections write alerts. Nor the pass-lock
  * transactions (PASS_LOCK_APPLICATION_NAME: the trading engine's, and this one's on another
  * process): they hold an advisory lock and write nothing, and the engine's would otherwise hold
- * every alert back for the length of each trading pass. A client transaction that hasn't written
- * yet still counts, since a scan's row can carry its transaction's start.
+ * every alert back for the length of each trading pass. Nor the API's (API_APPLICATION_NAME): it
+ * writes no alert and no match, and its report fills hold a transaction open for up to 37 s,
+ * which put a 20 s wait on 3% of sends (audit 2026-11-02, WB-44). A client transaction that
+ * hasn't written yet still counts, since a scan's row can carry its transaction's start.
  */
 export async function oldestOpenTransaction(tx: Prisma.TransactionClient): Promise<Date | null> {
   try {
@@ -147,7 +155,8 @@ export async function oldestOpenTransaction(tx: Prisma.TransactionClient): Promi
       SELECT min(xact_start) AS oldest FROM pg_stat_activity
       WHERE datname = current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL
         AND backend_type = 'client backend'
-        AND COALESCE(application_name, '') NOT IN (${TRAINER_APPLICATION_NAME}, ${PASS_LOCK_APPLICATION_NAME})`;
+        AND COALESCE(application_name, '')
+            NOT IN (${TRAINER_APPLICATION_NAME}, ${PASS_LOCK_APPLICATION_NAME}, ${API_APPLICATION_NAME})`;
     return row?.oldest ?? null;
   } catch {
     return null;
