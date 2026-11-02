@@ -3,6 +3,8 @@
  * in words, rates with their samples, and signed SOL and percent.
  */
 
+import { intervalText, wilson } from "../rates";
+
 /** An FDSA exit plan as the API returns it (core fdsa/exitPlan.ts, already validated there). */
 export interface FdsaPlan {
   stopMultiple: number;
@@ -51,6 +53,17 @@ export function describeFdsaPlan(p: FdsaPlan): string {
 export function fdsaRateText(r: FdsaRate): string {
   if (r.rate === null || r.graded === 0) return `– (0 graded)`;
   return `${Math.round(r.rate * 100)}% (${r.wins}/${r.graded})`;
+}
+
+/**
+ * The measured rate with its 90% range: "40% (90% range 19-65%, 2 of 5)". The pages state the
+ * band they measured and name 75% as the target, never as the rate (audit 2026-11-02, FD-7; user
+ * decision "state the measured band").
+ */
+export function fdsaMeasuredText(r: FdsaRate): string {
+  if (r.rate === null || r.graded === 0) return "no graded buys yet";
+  const i = wilson(r.wins, r.graded);
+  return `${Math.round(r.rate * 100)}% (${i ? `${intervalText(i)}, ` : ""}${r.wins} of ${r.graded})`;
 }
 
 export function fdsaSol(lamports: string | null | undefined, digits = 4): string {

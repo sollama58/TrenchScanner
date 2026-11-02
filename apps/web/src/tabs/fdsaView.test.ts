@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeFdsaPlan,
+  fdsaMeasuredText,
   fdsaAxisTop,
   fdsaBankedMultiple,
   fdsaCheckInText,
@@ -46,6 +47,15 @@ describe("FDSA tab formatting", () => {
   it("shows a rate with its sample, and says when nothing is graded", () => {
     expect(fdsaRateText({ total: 6, graded: 5, wins: 2, rate: 0.4, wins4x: 0 })).toBe("40% (2/5)");
     expect(fdsaRateText({ total: 3, graded: 0, wins: 0, rate: null, wins4x: 0 })).toBe("– (0 graded)");
+  });
+
+  it("states the measured band with its 90% range", () => {
+    expect(fdsaMeasuredText({ total: 60, graded: 50, wins: 12, rate: 0.24, wins4x: 0 })).toBe(
+      "24% (90% range 16-35%, 12 of 50)",
+    );
+    expect(fdsaMeasuredText({ total: 3, graded: 0, wins: 0, rate: null, wins4x: 0 })).toBe(
+      "no graded buys yet",
+    );
   });
 
   it("signs SOL and percent", () => {
