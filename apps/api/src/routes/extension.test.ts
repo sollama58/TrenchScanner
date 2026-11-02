@@ -293,6 +293,7 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
         confidence: 74,
         tier: "high",
         calibratedPct: 41,
+        shownPct: 41,
         createdAt: new Date(Date.now() - 10 * 60_000),
       },
     });
@@ -306,6 +307,7 @@ describe.skipIf(!dbAvailable)("extension overlay api", () => {
         confidence: 80,
         tier: "high",
         calibratedPct: 50,
+        shownPct: 50,
       },
     });
     await prisma.curatedAlert.create({

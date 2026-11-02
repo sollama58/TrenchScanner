@@ -94,7 +94,6 @@ export interface OverlayToken {
     name: string | null;
     tier: string | null;
     confidence: number;
-    /** The rate the card quotes: the call's own band from 35% up, else its model's pooled rate; null when unmeasured. */
     calibratedPct: number | null;
     at: string;
     mcapUsd: number;
