@@ -238,11 +238,16 @@ export async function runKolSideWalletsJob(
           WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since["30d"]} AND a."wallet" = ANY(${sides})
           GROUP BY a."wallet"`
         : Promise.resolve([]),
+      // Each read tape with a buy in the window, one index probe each (tokenId, firstBuyAt): the
+      // COUNT(DISTINCT) over every buy row averaged 16 s in production (audit 2026-11-02).
       tx.$queryRaw<{ c30: bigint }[]>`
-      SELECT COUNT(DISTINCT a."tokenId") AS c30
-      FROM "TokenWalletActivity" a
-      JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-      WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since["30d"]}`,
+      SELECT COUNT(*) AS c30
+      FROM "TokenTradeTape" t
+      WHERE t."status" IN ('done', 'partial')
+        AND EXISTS (
+          SELECT 1 FROM "TokenWalletActivity" a
+          WHERE a."tokenId" = t."tokenId" AND a."buys" > 0 AND a."firstBuyAt" >= ${since["30d"]}
+        )`,
     ]),
   );
   readMs.sides = Date.now() - readStarted;
