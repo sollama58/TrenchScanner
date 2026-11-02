@@ -58,6 +58,7 @@ import {
 } from "./modelShared";
 import { FOLLOWER_NOTE, MIN_GRADED_FOR_RATE, RULE_NOTE, intervalText, isEarly, wilsonOfRate } from "../rates";
 import { ModelDetailModal } from "./ModelDetail";
+import { ModelsVsKolsPanel } from "./ModelsVsKols";
 import { renderWeekCard, type WeekCardData } from "./weekCard";
 import { DAY_MS, changePoints, dayStarts } from "../pricingChange";
 
@@ -155,6 +156,12 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
           )}
         </div>
       </section>
+
+      <ModelsVsKolsPanel
+        api={api}
+        now={now}
+        targets={{ "2x": t.hitRate2xPct, "4x": t.hitRate4xPct, "10x": lb.scoring.tenXTargetPct ?? 25 }}
+      />
 
       <BaselinePanel
         board={lb}

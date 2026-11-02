@@ -293,6 +293,9 @@ export async function registerGuestRoutes(
     };
   });
 
+  /** The top models beside the top KOLs: aggregates only, the same answer subscribers get. */
+  app.get("/models/vs-kols", { config: { rateLimit: GUEST_RATE_LIMIT } }, () => opts.reports.modelsVsKols());
+
   /** One model's training runs: exam results only, nothing that names a token. */
   app.get("/models/:id/runs", { config: { rateLimit: GUEST_RATE_LIMIT } }, (request, reply) =>
     modelRunsRoute(opts.env, opts.reports, request, reply),
