@@ -28,7 +28,7 @@ import { linkedCount, linkedCountText } from "../linkedCount";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
-import { calibratedRateLabel, cardCalibratedRate } from "../rates";
+import { calibratedRateLabel, calibratedRateTitle, cardCalibratedRate } from "../rates";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 import { filterCardStyle } from "../filterStyle";
 import { quoteToken } from "../quoteToken";
@@ -128,6 +128,7 @@ export function AlertCard({
   const result = outcomeResult(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");
   const calls = curated?.calledBy ?? [];
+  const shownRate = curated ? cardCalibratedRate(curated, calls) : null;
   const { pct: recordedPeak, isRunPeak } = recordedPeakOf(card);
   // The filter that raised it, when its owner gave it a color or icon: that style wins over
   // Customize's outline and accent on this card, and its icon marks the card.
@@ -363,7 +364,7 @@ export function AlertCard({
                 <span
                   className="pill pill-icon pill-conviction"
                   role="img"
-                  title="High conviction: in the model's top half-percent of decision moments"
+                  title="High conviction: the model's recent alerts ranked like this one 2x'd at least 35% of the time"
                   aria-label="High conviction"
                 >
                   ❗
@@ -381,14 +382,9 @@ export function AlertCard({
                 <span className="pill-text">Narrative: {curated.narrative.verdict}</span>
               </span>
             )}
-            {curated && show("calibrated") && calibratedRateLabel(cardCalibratedRate(curated, calls)) && (
-              <span
-                className="pill pill-rate"
-                title={`The share of similarly ranked recent calls that doubled: of alerts like it, this percent hit 2x within 15 min of the alert, before a 50% stop${
-                  calls.length > 1 ? " (the middle of the alerting models' rates)" : ""
-                }`}
-              >
-                <span className="pill-text">{calibratedRateLabel(cardCalibratedRate(curated, calls))}</span>
+            {curated && show("calibrated") && shownRate !== null && (
+              <span className="pill pill-rate" title={calibratedRateTitle(shownRate, calls.length > 1)}>
+                <span className="pill-text">{calibratedRateLabel(shownRate)}</span>
               </span>
             )}
           </div>

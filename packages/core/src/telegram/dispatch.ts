@@ -437,7 +437,8 @@ export function buildPending(
     model: string | null;
     confidence: number;
     tier: string | null;
-    calibratedPct: number | null;
+    /** The rate the card quotes (CuratedAlert.shownPct). */
+    shownPct: number | null;
     reasons: string[];
     narrativeVerdict: string | null;
     liveMcapUsd?: number | null;
@@ -505,7 +506,7 @@ export function buildPending(
           modelName,
           confidence: c.confidence,
           tier: c.tier,
-          calibratedPct: c.calibratedPct,
+          calibratedPct: c.shownPct,
           reasons: c.reasons,
           narrativeVerdict: c.narrativeVerdict,
         });
@@ -664,7 +665,7 @@ async function dispatchPass(
             modelName: true,
             confidence: true,
             tier: true,
-            calibratedPct: true,
+            shownPct: true,
             reasons: true,
             narrativeVerdict: true,
             liveMcapUsd: true,

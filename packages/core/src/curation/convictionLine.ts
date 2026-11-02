@@ -15,6 +15,11 @@
  * no line, and the live line doesn't change that: it moves where the line sits, not whether a
  * seat tiers. The worker draws these lines with the seats' other live scales (liveScale.ts), which
  * also leave out a slot's scores from before evolution handed it a new recipe.
+ *
+ * From 2026-11-02 the tier no longer reads the line: a call is "high" when its own measured rank
+ * band doubles at or above CARD_BAND_MIN_PCT (liveRankRates.ts servedRate, user decision "redefine
+ * it"). The lines are still drawn with the other live scales and shown nowhere; they can go once
+ * nothing else wants them.
  */
 
 import { scoreAtRank } from "./liveScale.js";
@@ -59,18 +64,4 @@ export function liveConvictionLines(
     lines.set(seat, scoreAtRank(scores, rank));
   }
   return lines;
-}
-
-/**
- * The tier for a probability: "high" at or above the seat's line, else "standard". The line is
- * the live one when the seat has it, else the run's shipped one. No shipped line means the run
- * didn't earn the tier, so no tier at all (undefined).
- */
-export function convictionTier(
-  probability: number,
-  shippedThreshold: number | undefined,
-  liveLine: number | undefined,
-): "high" | "standard" | undefined {
-  if (shippedThreshold === undefined) return undefined;
-  return probability >= (liveLine ?? shippedThreshold) ? "high" : "standard";
 }
