@@ -77,10 +77,10 @@ dump_running() {
 # (the database unreachable - the deploy itself will say so) leaves the step out.
 invalid_indexes=()
 if [[ -z "${MIGRATE_SKIP_INVALID_INDEXES:-}" ]]; then
-  mapfile -t invalid_indexes < <(node scripts/migrate-invalid-indexes.cjs list 2>/dev/null)
+  mapfile -t invalid_indexes < <(node scripts/migrate-invalid-indexes.mjs list 2>/dev/null)
   if ((${#invalid_indexes[@]} > 0)); then
     echo "migrate-deploy: invalid index(es) found: ${invalid_indexes[*]}" >&2
-    node scripts/migrate-invalid-indexes.cjs drop "${invalid_indexes[@]}" || true
+    node scripts/migrate-invalid-indexes.mjs drop "${invalid_indexes[@]}" || true
   fi
 fi
 
@@ -89,7 +89,7 @@ fi
 # makes this a no-op for it.
 rebuild_invalid_indexes() {
   ((${#invalid_indexes[@]} == 0)) && return 0
-  node scripts/migrate-invalid-indexes.cjs recreate "${invalid_indexes[@]}" || true
+  node scripts/migrate-invalid-indexes.mjs recreate "${invalid_indexes[@]}" || true
 }
 
 lock_failures=0

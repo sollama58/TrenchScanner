@@ -19,12 +19,13 @@
 // Reads DATABASE_URL. Through the pg package npm ci installed: a Render Node image has no psql.
 // Exits 0 whenever the deploy should go on; a failed drop or rebuild is printed and the next
 // deploy tries again. The caller decides what to do with a non-zero exit.
-"use strict";
-const fs = require("node:fs");
-const path = require("node:path");
-const { Client } = require("pg");
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import pg from "pg";
 
-const MIGRATIONS = path.join(__dirname, "..", "packages", "core", "prisma", "migrations");
+const { Client } = pg;
+const MIGRATIONS = fileURLToPath(new URL("../packages/core/prisma/migrations", import.meta.url));
 
 async function withClient(fn) {
   const client = new Client({
@@ -117,7 +118,7 @@ async function main() {
     });
     return failed === 0 ? 0 : 1;
   }
-  console.error("usage: migrate-invalid-indexes.cjs list | drop NAME... | recreate NAME...");
+  console.error("usage: migrate-invalid-indexes.mjs list | drop NAME... | recreate NAME...");
   return 2;
 }
 
