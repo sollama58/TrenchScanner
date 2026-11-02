@@ -95,9 +95,10 @@ const envSchema = z.object({
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),
   // The worker's DexScreener token lookups a minute, shared by every job in the process (scan,
   // fast match, candidate watch, live prices, the empty-wallet check's pricing). DexScreener allows
-  // 300 a minute per IP: this 180, the API's live refreshes (90) and the trainer's (30, render.yaml)
-  // share it. See DexScreenerClient.
-  DEXSCREENER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(180),
+  // 300 a minute per IP: this 150, the API's live refreshes (120) and the trainer's (30, render.yaml)
+  // share it. See DexScreenerClient. 180 until 2026-11-02, when 30 moved to the API's live refreshes
+  // (user decision): open pages' readings were p50 140 s, p95 12 min behind (audit 2026-11-02).
+  DEXSCREENER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(150),
   // A CoinGecko paid-plan key. Market data falls back to GeckoTerminal whenever DexScreener answers
   // lookups blank (datasources/geckoterminal.ts); with this key it uses CoinGecko's on-chain API
   // instead, on the plan's limit rather than the free 30 calls a minute. Empty: the free tier.

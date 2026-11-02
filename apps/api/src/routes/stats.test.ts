@@ -589,7 +589,7 @@ describe.skipIf(!dbAvailable)("GET /stats/live", () => {
       expect(res.json()).toMatchObject({
         viewedLast2Min: expect.any(Number),
         readingAgeSeconds: expect.any(Object),
-        refresher: { lookups: 0, overBudget: 0, callsPerMinuteBudget: 90 },
+        refresher: { lookups: 0, overBudget: 0, callsPerMinuteBudget: 120 },
       });
     } finally {
       await app.close();

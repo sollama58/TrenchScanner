@@ -61,9 +61,10 @@ const BATCH_SIZE = 30;
 
 /**
  * DexScreener allows 300 token lookups a minute per IP. A process's default share: the worker's,
- * leaving the API's 120 a minute of live refreshes room if the two leave from one address.
+ * leaving the API's 120 a minute of live refreshes and the trainer's 30 room if they leave from
+ * one address (user decision 2026-11-02; it was 180 with the API's 90).
  */
-export const DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE = 180;
+export const DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE = 150;
 /**
  * Lookups that may go out back to back before the per-minute pace applies. A full watchlist
  * refresh is 30 batches: at 15 the other half queued at 3 a second, which held the scan's refresh
