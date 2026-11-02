@@ -1,6 +1,7 @@
 import type { DexScreenerClient } from "./dexscreener.js";
 import { keylessQuoteUsd, type QuoteUsd } from "./jupiter.js";
 import { createLogger } from "../logger.js";
+import { HttpError } from "./httpClient.js";
 
 const logger = createLogger("quote-price");
 
@@ -18,6 +19,14 @@ export type QuoteReader = (mint: string) => Promise<QuoteUsd | null>;
 
 /** Jupiter's free price endpoint, which answers a coin's decimals with its price. */
 export const jupiterQuote: QuoteReader = keylessQuoteUsd;
+
+/**
+ * How long a reader that answered 429 is passed over, for every coin. Jupiter's keyless host limits
+ * per IP, and production's IPs are shared: 89% of the worker's and 72% of the api's keyless price
+ * reads were 429s (audit 2026-11-02, /stats/ops/errors), each one a wasted round trip ahead of the
+ * DexScreener read that then answered. Resting it a minute sends those reads straight on.
+ */
+export const RATE_LIMITED_REST_MS = 60_000;
 
 /** A quote price older than this is not served: the chart would be priced on a stale coin. */
 export const QUOTE_PRICE_MAX_AGE_MS = 10 * 60_000;
@@ -59,6 +68,8 @@ export class QuotePrice {
   private readonly inFlight = new Map<string, Promise<QuoteUsd | null>>();
   private readonly nextTryAt = new Map<string, number>();
   private readonly readers: readonly QuoteReader[];
+  /** Per reader, until when it is passed over after a 429 (RATE_LIMITED_REST_MS). */
+  private readonly restingUntil: number[];
   /** Coins every reader failed or answered none for, with when, for the worker's heartbeat (takeMisses). */
   private misses: { mint: string; at: number; error: string | null }[] = [];
 
@@ -72,6 +83,7 @@ export class QuotePrice {
     private readonly onFailure?: (mint: string) => void,
   ) {
     this.readers = typeof read === "function" ? [read] : read;
+    this.restingUntil = this.readers.map(() => 0);
   }
 
   /**
@@ -102,6 +114,10 @@ export class QuotePrice {
   private async refresh(mint: string): Promise<QuoteUsd | null> {
     let lastError: string | null = null;
     for (const [i, read] of this.readers.entries()) {
+      if (this.now() < (this.restingUntil[i] ?? 0)) {
+        lastError ??= `reader ${i}: resting after a 429`;
+        continue;
+      }
       try {
         const value = await read(mint);
         if (value) {
@@ -114,6 +130,9 @@ export class QuotePrice {
         }
         lastError ??= `reader ${i}: no price`;
       } catch (err) {
+        if (err instanceof HttpError && err.status === 429) {
+          this.restingUntil[i] = this.now() + RATE_LIMITED_REST_MS;
+        }
         lastError = `reader ${i}: ${String(err)}`;
         logger.debug("quote price read failed", { mint, reader: i, error: String(err) });
       }
