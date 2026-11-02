@@ -11,8 +11,11 @@ import { prisma } from "../db.js";
  * Each process reports on itself: the api live from its own environment, each worker at boot into
  * ServiceEnvReport (a worker has no HTTP port the api could ask). A report never carries a value
  * that could be a credential: a secret is its length and a fingerprint the api compares across
- * services but never sends on, a URL is its origin, and only plain settings (numbers, switches,
- * public addresses) carry their value.
+ * services but never sends on, a URL is its origin, an account identifier (a wallet address, a
+ * bucket name, a storage endpoint) is only set or not, and only plain settings (numbers, switches,
+ * names) carry their value. Identifiers were settings until 2026-11-02: they are not credentials,
+ * but together they name the deployment's accounts to anyone with admin access (audit 2026-11-02,
+ * AP-13; user decision "hide them").
  */
 
 /** The Node services that report. "all" is local dev's one process running every role. */
@@ -26,7 +29,7 @@ export type EnvService = "api" | "scanner" | "trainer";
 export type EnvNeed = "required" | "expected" | "optional";
 
 /** What a report may say about the value: see the file comment. */
-export type EnvKind = "secret" | "url" | "setting";
+export type EnvKind = "secret" | "url" | "identifier" | "setting";
 
 export interface EnvVarSpec {
   key: string;
@@ -209,7 +212,7 @@ export const ENV_MANIFEST: readonly EnvVarSpec[] = [
   {
     key: "ADMIN_WALLET_ADDRESSES",
     group: "Sign-in and access",
-    kind: "setting",
+    kind: "identifier",
     on: { api: "required", scanner: "expected" },
     same: true,
   },
@@ -249,15 +252,15 @@ export const ENV_MANIFEST: readonly EnvVarSpec[] = [
   { key: "TRADING_KMS_REGION", group: "Trading", kind: "setting", on: { api: "expected" } },
   { key: "TRADING_AWS_ACCESS_KEY_ID", group: "Trading", kind: "secret", on: { api: "optional" } },
   { key: "TRADING_AWS_SECRET_ACCESS_KEY", group: "Trading", kind: "secret", on: { api: "optional" } },
-  { key: "TRADING_SERVER_WALLET_ADDRESS", group: "Trading", kind: "setting", on: { api: "optional" } },
-  { key: "TRADING_SERVER_WALLET_WITHDRAW_TO", group: "Trading", kind: "setting", on: { api: "optional" } },
+  { key: "TRADING_SERVER_WALLET_ADDRESS", group: "Trading", kind: "identifier", on: { api: "optional" } },
+  { key: "TRADING_SERVER_WALLET_WITHDRAW_TO", group: "Trading", kind: "identifier", on: { api: "optional" } },
   // ---- Backups
-  { key: "DB_DUMP_S3_ENDPOINT", group: "Backups", kind: "url", on: { api: "optional" } },
-  { key: "DB_DUMP_S3_BUCKET", group: "Backups", kind: "setting", on: { api: "optional" } },
+  { key: "DB_DUMP_S3_ENDPOINT", group: "Backups", kind: "identifier", on: { api: "optional" } },
+  { key: "DB_DUMP_S3_BUCKET", group: "Backups", kind: "identifier", on: { api: "optional" } },
   { key: "DB_DUMP_S3_ACCESS_KEY_ID", group: "Backups", kind: "secret", on: { api: "optional" } },
   { key: "DB_DUMP_S3_SECRET_ACCESS_KEY", group: "Backups", kind: "secret", on: { api: "optional" } },
-  { key: "MODEL_BACKUP_S3_ENDPOINT", group: "Backups", kind: "url", on: { trainer: "optional" } },
-  { key: "MODEL_BACKUP_S3_BUCKET", group: "Backups", kind: "setting", on: { trainer: "optional" } },
+  { key: "MODEL_BACKUP_S3_ENDPOINT", group: "Backups", kind: "identifier", on: { trainer: "optional" } },
+  { key: "MODEL_BACKUP_S3_BUCKET", group: "Backups", kind: "identifier", on: { trainer: "optional" } },
   { key: "MODEL_BACKUP_S3_ACCESS_KEY_ID", group: "Backups", kind: "secret", on: { trainer: "optional" } },
   { key: "MODEL_BACKUP_S3_SECRET_ACCESS_KEY", group: "Backups", kind: "secret", on: { trainer: "optional" } },
   // ---- Scan tuning (the scanner's render.yaml overrides of env.ts defaults)
@@ -323,6 +326,8 @@ export function describeEnvVar(kind: EnvKind, raw: string | undefined): EnvVarRe
     return { state: "set", hint: value.length > MAX_HINT ? `${value.slice(0, MAX_HINT - 1)}…` : value };
   }
   const print = createHash("sha256").update(value).digest("hex").slice(0, 12);
+  // An identifier is set or not: the fingerprint still tells "same on every service" apart.
+  if (kind === "identifier") return { state: "set", hint: null, print };
   if (kind === "url") {
     let origin: string | null = null;
     try {
