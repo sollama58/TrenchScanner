@@ -1387,6 +1387,47 @@ export const NS_X_READ_FALSE_ZEROS = {
 } as const;
 
 /**
+ * Eras the run guard's zero-era alarm (runGuard.ts zeroEraAlarms) named on the 2026-11-02 run,
+ * none of them masked until then (full audit 2026-11-02, MT-19; user decision "mask the zero
+ * eras"). Each is a stretch where an input read 0 on nearly every decision moment where it is
+ * usually filled: those zeros read as missing, and a non-zero reading in the window stays.
+ * - nsLogoReuse24h: 0 on 95% of moments from 10-17 18:00 to 10-19 00:00, before the window
+ *   NS_LOGO_REUSE_FALSE_ZEROS already covers.
+ * - nsTrendNovelty: 0 on 99% of moments on 10-27 00:00-18:00 (usually 84%).
+ * - nsCatNewsEvent: 0 on 98% of moments on 10-23 00:00-18:00.
+ * - linkedWalletPct and linkedClusterCount: 0 on 92% of moments on 10-13 00:00-18:00, the day the
+ *   count forms were added and before every holder's funder was read.
+ * The wallet-win inputs' era (10-13..10-17) is WALLET_WIN_READ_SINCE below.
+ */
+export const NS_LOGO_REUSE_FALSE_ZEROS_OCT17 = {
+  from: new Date("2026-10-17T18:00:00Z"),
+  until: new Date("2026-10-19T00:00:00Z"),
+} as const;
+export const NS_TREND_NOVELTY_FALSE_ZEROS = {
+  from: new Date("2026-10-27T00:00:00Z"),
+  until: new Date("2026-10-27T18:00:00Z"),
+} as const;
+export const NS_CAT_NEWS_EVENT_FALSE_ZEROS = {
+  from: new Date("2026-10-23T00:00:00Z"),
+  until: new Date("2026-10-23T18:00:00Z"),
+} as const;
+export const LINKED_WALLET_FALSE_ZEROS = {
+  from: new Date("2026-10-13T00:00:00Z"),
+  until: new Date("2026-10-13T18:00:00Z"),
+} as const;
+/** The two linked-wallet inputs that read false zeros in LINKED_WALLET_FALSE_ZEROS. */
+export const LINKED_WALLET_FALSE_ZERO_FEATURES = ["linkedWalletPct", "linkedClusterCount"] as const;
+
+/**
+ * Rows banked before this read the six wallet-win inputs (WALLET_WIN_FEATURES) as 0 on 92-99% of
+ * decision moments (10-13 18:00 to 10-17; usually 13% for knownWinnerFirstBuyers): the win side
+ * of the wallet scores had no source yet, so a 0 there is "unscored", not "no winners". From here
+ * on they read as missing, whatever they say (full audit 2026-11-02, MT-19). The market seats had
+ * learnt 10-13..17 as "no winners anywhere"; those rows leave the 21-day window about 11-07.
+ */
+export const WALLET_WIN_READ_SINCE = new Date("2026-10-17T00:00:00Z");
+
+/**
  * Rows anchored in this window stored a RugCheck holder reading of 0 where the report was not
  * indexed yet (data-correctness audit 2026-10-16). From 2026-10-14 13:00 UTC a cached "not found"
  * (#599) stood in for a young coin: holder count, risk and the growth built on RugCheck's count
@@ -1508,8 +1549,11 @@ export function withoutPreCanonicalPairAge<T extends Record<string, number | nul
  * to what an ns* input means bumps NS_RULES_VERSION, and the rows written under the old meaning
  * can be masked by version rather than by date (`nsRulesVersion !== NS_RULES_VERSION`); not
  * applied yet, version 1 is the first.
- * A 0 in nsLogoReuse24h through NS_LOGO_REUSE_FALSE_ZEROS and in nsXRead through
- * NS_X_READ_FALSE_ZEROS.
+ * A 0 in nsLogoReuse24h through NS_LOGO_REUSE_FALSE_ZEROS and NS_LOGO_REUSE_FALSE_ZEROS_OCT17, in
+ * nsXRead through NS_X_READ_FALSE_ZEROS, in nsTrendNovelty through NS_TREND_NOVELTY_FALSE_ZEROS,
+ * in nsCatNewsEvent through NS_CAT_NEWS_EVENT_FALSE_ZEROS, and in linkedWalletPct and
+ * linkedClusterCount through LINKED_WALLET_FALSE_ZEROS. The wallet-win inputs on every row banked
+ * before WALLET_WIN_READ_SINCE.
  * Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
@@ -1533,12 +1577,21 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   const rawWalletRisk = isRawWalletRiskRow(anchorAt, features);
   const unreadSocials = at < SOCIALS_UNREAD_NULL_SINCE.getTime();
   const unpricedEmpty = at < EMPTY_WALLETS_UNPRICED_NULL_SINCE.getTime();
-  const logoReuseZeros =
-    at >= NS_LOGO_REUSE_FALSE_ZEROS.from.getTime() && at < NS_LOGO_REUSE_FALSE_ZEROS.until.getTime();
-  const xReadZeros = at >= NS_X_READ_FALSE_ZEROS.from.getTime() && at < NS_X_READ_FALSE_ZEROS.until.getTime();
+  const inWindow = (w: { readonly from: Date; readonly until: Date }): boolean =>
+    at >= w.from.getTime() && at < w.until.getTime();
+  const logoReuseZeros = inWindow(NS_LOGO_REUSE_FALSE_ZEROS) || inWindow(NS_LOGO_REUSE_FALSE_ZEROS_OCT17);
+  const xReadZeros = inWindow(NS_X_READ_FALSE_ZEROS);
+  const trendNoveltyZeros = inWindow(NS_TREND_NOVELTY_FALSE_ZEROS);
+  const newsEventZeros = inWindow(NS_CAT_NEWS_EVENT_FALSE_ZEROS);
+  const linkedZeros = inWindow(LINKED_WALLET_FALSE_ZEROS);
+  const unreadWalletWin = at < WALLET_WIN_READ_SINCE.getTime();
   if (
     !logoReuseZeros &&
     !xReadZeros &&
+    !trendNoveltyZeros &&
+    !newsEventZeros &&
+    !linkedZeros &&
+    !unreadWalletWin &&
     at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() &&
     !unwaitedHourly &&
     !rebuiltBundled &&
@@ -1570,6 +1623,11 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   if (unpricedEmpty) clear("emptyTop10WalletPct");
   if (logoReuseZeros && features.nsLogoReuse24h === 0) clear("nsLogoReuse24h");
   if (xReadZeros && features.nsXRead === 0) clear("nsXRead");
+  if (trendNoveltyZeros && features.nsTrendNovelty === 0) clear("nsTrendNovelty");
+  if (newsEventZeros && features.nsCatNewsEvent === 0) clear("nsCatNewsEvent");
+  if (linkedZeros)
+    for (const name of LINKED_WALLET_FALSE_ZERO_FEATURES) if (features[name] === 0) clear(name);
+  if (unreadWalletWin) WALLET_WIN_FEATURES.forEach(clear);
   if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
   // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
   // its slack for the rounding of pathObservedMinutes and the reference tick's own).
