@@ -58,7 +58,7 @@ const logsNote = (subscription: number, signature: string, err: unknown = null) 
   });
 
 describe("HeliusAccountStream logs keys", () => {
-  it("follows a logs key with logsSubscribe and hands over each successful transaction's logs", () => {
+  it("follows a logs key with logsSubscribe and hands over each transaction's logs, a failed one's empty", () => {
     const { stream, socket, onLogs } = started();
     stream.watch("trades-curve:m", ["curve-acc"], 1_000, "logs");
     const sub = socket.sent.find((m) => m.method === "logsSubscribe")!;
@@ -69,12 +69,14 @@ describe("HeliusAccountStream logs keys", () => {
     const ok = logsNote(9, "sig-1");
     stream.handleMessage(ok);
     expect(onLogs).toHaveBeenCalledWith("trades-curve:m", "sig-1", ["Program data: AAAA"], ok.length, 42);
-    // A failed transaction is counted but not handed over.
-    stream.handleMessage(logsNote(9, "sig-2", { InstructionError: [0, "Custom"] }));
+    // A failed transaction is handed over with no logs, so its bytes are still billed (DS-2).
+    const failed = logsNote(9, "sig-2", { InstructionError: [0, "Custom"] });
+    stream.handleMessage(failed);
+    expect(onLogs).toHaveBeenLastCalledWith("trades-curve:m", "sig-2", [], failed.length, 42);
     // Another subscription's, or a malformed one: ignored.
     stream.handleMessage(logsNote(10, "sig-3"));
     stream.handleMessage(JSON.stringify({ method: "logsNotification", params: { subscription: 9 } }));
-    expect(onLogs).toHaveBeenCalledTimes(1);
+    expect(onLogs).toHaveBeenCalledTimes(2);
     expect(stream.takeStats()).toMatchObject({
       logsSubscriptions: 1,
       logsUpdates: 2,
