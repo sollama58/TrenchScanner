@@ -47,6 +47,7 @@ export function workerConfigMeta(env: Env): {
       // FDSA (owner decision 2026-10-31): the hidden #fdsa tab reads whether the scanner runs it
       // and with which screen threshold and models, since those are the worker's env, not the API's.
       fdsaEnabled: env.FDSA_ENABLED,
+      fdsaScreenSource: env.FDSA_SCREEN_SOURCE,
       fdsaScreenModel: env.FDSA_SCREEN_MODEL,
       fdsaScreenMinScore: env.FDSA_SCREEN_MIN_SCORE,
       fdsaScreenShortlistPct: env.FDSA_SCREEN_SHORTLIST_PCT,

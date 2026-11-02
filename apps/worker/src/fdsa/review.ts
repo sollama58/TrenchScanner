@@ -8,8 +8,10 @@ import {
   launcherTextInstructs,
   LAUNCHER_TEXT_GUARD_MODEL,
   decisionAnchor,
+  curatorProbabilityOf,
   readFdsaBudget,
   readFdsaDeskConfig,
+  readFdsaModelScreen,
   readFdsaScreenAnswer,
   readFdsaDecideAnswer,
   readFdsaReviseAnswer,
@@ -25,6 +27,8 @@ import {
   FDSA_REVISE_SYSTEM_PROMPT,
   FDSA_DESK_ID,
   FDSA_PROMPT_VERSIONS,
+  FDSA_MODEL_SCREEN_MODEL,
+  FDSA_MODEL_SCREEN_VERSION,
   type CurationDecision,
   type Env,
   type FdsaAnswerMeta,
@@ -56,8 +60,9 @@ const logger = createLogger("fdsa-review");
 
 /**
  * FDSA's review pipeline (owner decision 2026-10-31): every curated alert, one per token, is
- * screened on a cheap model, and the shortlist goes to a full decide call that says trade or
- * pass and sets the entry exit plan. It runs alongside the AI reviewer (ai/reviewer.ts) and
+ * screened - on the scanner model's own calibrated odds (FDSA_SCREEN_SOURCE "model", owner
+ * decision 2026-11-02) or on a cheap model - and the shortlist goes to a full decide call that
+ * says trade or pass and sets the entry exit plan. It runs alongside the AI reviewer (ai/reviewer.ts) and
  * changes nothing about it: its own prompts (core's fdsa/prompts.ts), its own table (FdsaReview),
  * its own spend cap (reserveFdsaSpend, ledger "fdsa"). It shares the reviewer's brief builder,
  * comparables, Anthropic client and launcher-text guard rather than forking them.
@@ -215,25 +220,49 @@ export function screenLineFrom(counts: readonly { score: number; n: number }[], 
   return line;
 }
 
+/**
+ * The screen's line, ranked on the source's own scale (FDSA_SCREEN_SOURCE): Haiku's odds against
+ * the last day's Haiku screens (the model's own answers only: not the guard's drops, failed calls
+ * or unusable answers), or the scanner model's calibrated odds against the last day's curated
+ * alerts that carry one - a pool that is full from the first minute, so the model-score screen
+ * never waits a day on the fixed line.
+ */
 export async function screenLine(
-  env: Pick<Env, "FDSA_SCREEN_MIN_SCORE" | "FDSA_SCREEN_SHORTLIST_PCT">,
+  env: Pick<
+    Env,
+    "FDSA_SCREEN_MIN_SCORE" | "FDSA_SCREEN_SHORTLIST_PCT" | "FDSA_SCREEN_SOURCE" | "FDSA_SCREEN_MODEL"
+  >,
 ): Promise<{ line: number; ranked: boolean }> {
   const fixed = { line: env.FDSA_SCREEN_MIN_SCORE, ranked: false };
   if (env.FDSA_SCREEN_SHORTLIST_PCT <= 0) return fixed;
   if (screenLineCache && Date.now() - screenLineCache.at < SCREEN_LINE_CACHE_MS) return screenLineCache;
-  // The model's own answers only: not the launcher-text guard's drops, failed calls or unusable answers.
-  const rows = await prisma.fdsaReview.groupBy({
-    by: ["score"],
-    where: {
-      stage: "screen",
-      createdAt: { gt: new Date(Date.now() - SCREEN_LINE_WINDOW_MS), lte: new Date() },
-      score: { not: null },
-      error: null,
-      model: { not: LAUNCHER_TEXT_GUARD_MODEL },
-    },
-    _count: { _all: true },
-  });
-  const counts = rows.flatMap((r) => (r.score === null ? [] : [{ score: r.score, n: r._count._all }]));
+  const since = new Date(Date.now() - SCREEN_LINE_WINDOW_MS);
+  let counts: { score: number; n: number }[];
+  if (env.FDSA_SCREEN_SOURCE === "model") {
+    const rows = await prisma.curatedAlert.groupBy({
+      by: ["calibratedPct"],
+      where: { createdAt: { gt: since, lte: new Date() }, calibratedPct: { not: null } },
+      _count: { _all: true },
+    });
+    counts = rows.flatMap((r) =>
+      r.calibratedPct === null
+        ? []
+        : [{ score: Math.min(1, Math.max(0, r.calibratedPct / 100)), n: r._count._all }],
+    );
+  } else {
+    const rows = await prisma.fdsaReview.groupBy({
+      by: ["score"],
+      where: {
+        stage: "screen",
+        createdAt: { gt: since, lte: new Date() },
+        score: { not: null },
+        error: null,
+        model: env.FDSA_SCREEN_MODEL,
+      },
+      _count: { _all: true },
+    });
+    counts = rows.flatMap((r) => (r.score === null ? [] : [{ score: r.score, n: r._count._all }]));
+  }
   const total = counts.reduce((s, c) => s + c.n, 0);
   const ranked =
     total >= SCREEN_LINE_MIN_SAMPLE ? screenLineFrom(counts, env.FDSA_SCREEN_SHORTLIST_PCT) : null;
@@ -480,7 +509,8 @@ export async function fdsaHeartbeat(env: Env): Promise<Record<string, string | n
     alertToVerdictP50Ms: median(stats.alertToVerdictMs),
     alertToVerdictMaxMs: stats.alertToVerdictMs.length > 0 ? Math.max(...stats.alertToVerdictMs) : null,
     maxSignalAgeSeconds: desk?.maxSignalAgeSeconds ?? null,
-    // The score a screen needs to be shortlisted now, and whether it is ranked on the last day.
+    // What the screen is, the score it needs to shortlist now, and whether that is ranked on the last day.
+    screenSource: env.FDSA_SCREEN_SOURCE,
     screenLine: line?.line ?? null,
     screenLineRanked: line?.ranked ?? null,
     // The 2x odds a decide needs to trade now, and whether it is ranked on the last day.
@@ -622,6 +652,7 @@ async function storeReview(
   verdict: Partial<Prisma.FdsaReviewUncheckedCreateInput>,
   error: string | null,
   refused: boolean,
+  promptVersion: string = FDSA_PROMPT_VERSIONS[stage],
 ): Promise<string | null> {
   try {
     const row = await prisma.fdsaReview.create({
@@ -633,7 +664,7 @@ async function storeReview(
         model,
         answeredBy: call?.answeredBy ?? null,
         effort,
-        promptVersion: FDSA_PROMPT_VERSIONS[stage],
+        promptVersion,
         playbookId: null,
         brief,
         ...verdict,
@@ -768,6 +799,31 @@ export async function reviewFdsaAlert(alert: FdsaAlert, env: Env): Promise<FdsaR
       false,
     );
     return { ...out("guard"), screen: { decision: "drop", score: 0, reason } };
+  }
+
+  // The model-score screen (owner decision 2026-11-02): the scanner model's own calibrated odds,
+  // ranked against the last day's alerts, with no call. Stored as a screen row under its own
+  // sentinel model and version, so the tab's record reads it apart from Haiku's.
+  if (env.FDSA_SCREEN_SOURCE === "model") {
+    const { line } = await screenLine(env);
+    const verdict = readFdsaModelScreen(curatorProbabilityOf(alert.decision), line);
+    stats.screened += 1;
+    await storeReview(
+      base,
+      "screen",
+      FDSA_MODEL_SCREEN_MODEL,
+      "none",
+      screenBrief,
+      null,
+      { decision: verdict.decision, score: verdict.score, reasoning: verdict.reason },
+      null,
+      false,
+      FDSA_MODEL_SCREEN_VERSION,
+    );
+    if (verdict.decision !== "shortlist") return { ...out("dropped"), screen: verdict };
+    stats.shortlisted += 1;
+    const decided = await decideFdsaAlert(alert, env, base, desk, verdict, models);
+    return { screen: verdict, ...decided };
   }
 
   const screenCall = await withSlot(env, false, () =>

@@ -148,6 +148,8 @@ describe.skipIf(!dbAvailable)("FDSA end to end: alert to exit", () => {
         ...base,
         ANTHROPIC_API_KEY: "test-key",
         FDSA_ENABLED: true,
+        // The Haiku screen: what this test mocks (the model-score screen is tested in review.test.ts).
+        FDSA_SCREEN_SOURCE: "haiku",
         FDSA_SCREEN_MIN_SCORE: 0.7,
         FDSA_DAILY_BUDGET_USD: 5,
         FDSA_EXIT_RESERVE_PCT: 25,
