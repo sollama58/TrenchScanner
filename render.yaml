@@ -455,8 +455,10 @@ services:
       # credits: each lookup costs 10 credits and the old budget filled every cycle (~88% of all
       # Helius spend). 10 is the floor - a top-10 holder group is all-or-nothing, so a smaller
       # budget could never complete a contender whose wallets are all uncached.
+      # 35 since 2026-11-02 (user decision, Helius audit: "Pages 15 to 10, freshness 50 to 35"), to
+      # bring Helius under 30M credits a month: new wallets' ages are looked up a little later.
       - key: WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE
-        value: "50"
+        value: "35"
       - key: WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
         value: "10"
       # The live tape (worker's liveTape.ts): newest-trade pages of the coins close to a call, the
@@ -467,8 +469,10 @@ services:
       # and launch bags (the PumpPortal free tier carries no trades), and at 8 the queue was about
       # saturated: ~40 coins held a page, re-read every 3 minutes, against 9-14 pages read a cycle
       # (the entry fast path reads under the same cap). 15 is at most ~150k more credits a day.
+      # User decision 2026-11-02 (Helius audit, 30M credits a month): 10. The cap now also pays for
+      # the logs feed (LIVE_TAPE_LOGS_MAX_COINS), whose 10 coins keep every trade without pages.
       - key: LIVE_TAPE_PAGES_PER_CYCLE
-        value: "15"
+        value: "10"
       - key: RUGCHECK_CACHE_TTL_MINUTES
         value: "5"
       # Wall-clock span holderGrowthPct is measured over, deliberately independent of the scan
