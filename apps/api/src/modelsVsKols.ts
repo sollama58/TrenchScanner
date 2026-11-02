@@ -1,12 +1,10 @@
 import { TOP_MODELS_COUNT, liveCallRecords, prisma, type Env } from "@trenchscanner/core";
-import { wilsonLowerBound } from "@trenchscanner/core/wilson";
 import { contestState } from "./contest.js";
-import { knownSideName, readKolRows } from "./kolRoster.js";
 import { SharedCache } from "./sharedCache.js";
 
 /**
  * The Models tab's "Models vs KOLs" (user ask 2026-11-02): the top three models' 2x, 4x and 10x
- * hit rates over 24 hours, 3 days and 7 days, beside the KOLs we track.
+ * hit rates over 24 hours, 3 days and 7 days, beside the typical KOL we track.
  *
  * Models: the default feed's top-3 pick (core curation/topModels.ts, ranked on its composite score
  * over 72h and refreshed every six hours), best first. Their live calls, graded as everywhere else
@@ -14,7 +12,7 @@ import { SharedCache } from "./sharedCache.js";
  * each before the 50% stop.
  *
  * KOLs: every wallet on the roster (KolWallet), a Known Side counting as its KOL, as the Lighthouse's
- * "Wallets to watch" counts them (walletScorecards.ts). A KOL's "call" is a tracked coin it bought
+ * "Wallets to watch" counts them (walletScorecards.ts). A KOL's "pick" is a tracked coin it bought
  * (one whose trade tape was read, TokenWalletActivity) AT OR BEFORE the moment our clock started on
  * that coin (the tape's anchor: the model's call, or a sampled decision moment). That coin is then
  * graded by the very label a model's call is (the tape's CandidateOutcome), so both sides run on
@@ -23,21 +21,21 @@ import { SharedCache } from "./sharedCache.js";
  * doubled. The KOL got in at or below the price the grade starts from, so the rate is, if anything,
  * generous to them.
  *
- * The top KOLs: the TOP_KOLS with the best 2x lower bound (Wilson, 90%) over the 7-day window,
- * among those with KOL_MIN_GRADED graded calls there: a high rate on a handful of coins doesn't
- * outrank a good one on many. The same KOLs (and models) are shown in every window. Read-only
+ * The typical KOL (user ask 2026-11-02, replacing a top-3 KOL ranking the same day): in each window,
+ * every KOL with at least KOL_MIN_PICKS graded picks in it counts, and the side's figure is the
+ * MEDIAN of their own rates, one KOL one vote. The median, not the mean: KOL rates skew (a few hot
+ * hands, many near nothing), and with a floor of a handful of picks one lucky streak would move a
+ * mean several points; the median is the KOL in the middle. The mean is served beside it. Read-only
  * aggregates over tables the worker keeps; a fill makes no outside calls.
  */
 
 const DAY_MS = 86_400_000;
 export const VS_KOLS_WINDOWS = [1, 3, 7] as const;
-/** The window the KOLs are ranked on: the longest, where their records are least noisy. */
-const RANK_DAYS = 7;
-export const TOP_KOLS = 3;
-/** Graded calls in the ranking window a KOL needs to be ranked. */
-export const KOL_MIN_GRADED = 10;
-/** z for the 90% lower bound the KOLs are ranked by (the dashboard's Z90). */
-const RANK_Z = 1.645;
+/**
+ * Graded picks a KOL needs in a window to count in it: about one a day, more in a day's window so a
+ * rate rests on more than one or two coins. Below it a KOL's rate is mostly noise (one coin = 0% or 100%).
+ */
+export const KOL_MIN_PICKS: Readonly<Record<number, number>> = { 1: 3, 3: 6, 7: 10 };
 /** Coin rows read, at most: bounds a fill whatever the roster grows to. */
 const MAX_ROWS = 60_000;
 
@@ -58,24 +56,38 @@ export interface VsTiers {
 
 export interface VsRow {
   id: string;
-  kind: "model" | "kol" | "kols";
   name: string;
-  /** KOLs: the X handle and the API path of its picture (kolRoster.ts); null on models. */
-  twitter: string | null;
-  avatar: string | null;
   /** One per VS_KOLS_WINDOWS, in that order. */
   windows: VsTiers[];
+}
+
+/** A rate per tier, in percent; null with no KOL to read it from. */
+export interface TierRates {
+  r2x: number | null;
+  r4x: number | null;
+  r10x: number | null;
+}
+
+/** The typical KOL over one window. */
+export interface KolTypical {
+  days: number;
+  /** Graded picks a KOL needed in this window to count. */
+  minPicks: number;
+  /** KOLs that counted; and every KOL with a graded pick in the window, counted or not. */
+  kols: number;
+  active: number;
+  /** Graded picks of the KOLs that counted. */
+  picks: number;
+  median: TierRates;
+  mean: TierRates;
 }
 
 export interface ModelsVsKols {
   windows: readonly number[];
   models: VsRow[];
-  kols: VsRow[];
-  /** Every KOL on the roster pooled: each coin once, however many of them bought it. */
-  allKols: VsRow;
-  /** KOLs with a graded call in the ranking window (ranked or not). */
-  kolsActive: number;
-  rule: { rankDays: number; minGraded: number; topKols: number; topModels: number };
+  /** One per VS_KOLS_WINDOWS, in that order. */
+  kol: KolTypical[];
+  rule: { topModels: number };
   computedAt: string;
 }
 
@@ -123,30 +135,33 @@ export function windowTiers(calls: readonly KolCall[], now: number, windows: rea
   });
 }
 
-/** The pooled roster's calls: each coin once, at the first buy any KOL made in it. */
-export function pooledCalls(calls: readonly KolCall[]): KolCall[] {
-  const first = new Map<string, KolCall>();
-  for (const c of calls) {
-    const seen = first.get(c.mint);
-    if (!seen || c.boughtAt < seen.boughtAt) first.set(c.mint, c);
-  }
-  return [...first.values()];
-}
+const median = (xs: number[]): number | null => {
+  if (xs.length === 0) return null;
+  const v = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m]! : (v[m - 1]! + v[m]!) / 2;
+};
+const mean = (xs: number[]): number | null => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
 
 /**
- * The top KOLs: by 2x lower bound over the ranking window, among those with `minGraded` graded calls
- * there; more graded calls breaks a tie. Pure: tested on its own.
+ * The typical KOL over one window from each KOL's tiers in it: the median and mean of the rates of
+ * those with `minPicks` graded picks. A KOL's 10x rate counts only once one of its picks has settled
+ * the 10x. Pure: tested on its own.
  */
-export function rankKols(
-  byWho: ReadonlyMap<string, VsTiers>,
-  opts: { top: number; minGraded: number },
-): string[] {
-  return [...byWho.entries()]
-    .filter(([, t]) => t.graded >= opts.minGraded)
-    .map(([who, t]) => ({ who, t, lb: wilsonLowerBound(t.won2x, t.graded, RANK_Z) }))
-    .sort((a, b) => b.lb - a.lb || b.t.graded - a.t.graded || a.who.localeCompare(b.who))
-    .slice(0, opts.top)
-    .map((r) => r.who);
+export function typicalKol(perKol: readonly VsTiers[], days: number, minPicks: number): KolTypical {
+  const counted = perKol.filter((t) => t.graded >= minPicks);
+  const r2 = counted.map((t) => (t.won2x / t.graded) * 100);
+  const r4 = counted.map((t) => (t.won4x / t.graded) * 100);
+  const r10 = counted.filter((t) => t.tenXGraded > 0).map((t) => (t.won10x / t.tenXGraded) * 100);
+  return {
+    days,
+    minPicks,
+    kols: counted.length,
+    active: perKol.filter((t) => t.graded > 0).length,
+    picks: counted.reduce((n, t) => n + t.graded, 0),
+    median: { r2x: median(r2), r4x: median(r4), r10x: median(r10) },
+    mean: { r2x: mean(r2), r4x: mean(r4), r10x: mean(r10) },
+  };
 }
 
 interface RawCall {
@@ -194,8 +209,6 @@ export async function readKolCalls(since: Date): Promise<KolCall[]> {
   }));
 }
 
-const shortAddress = (a: string) => (a.length > 10 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a);
-
 export async function buildModelsVsKols(env: Env, now = Date.now()): Promise<ModelsVsKols> {
   const windows = VS_KOLS_WINDOWS;
   const longest = Math.max(...windows);
@@ -211,10 +224,7 @@ export async function buildModelsVsKols(env: Env, now = Date.now()): Promise<Mod
     const spec = state.roster.find((c) => c.id === id);
     return {
       id,
-      kind: "model",
       name: spec?.name ?? id,
-      twitter: null,
-      avatar: null,
       windows: windows.map((days, i) => {
         const r = records[i]?.get(id);
         return {
@@ -236,47 +246,20 @@ export async function buildModelsVsKols(env: Env, now = Date.now()): Promise<Mod
     if (list) list.push(c);
     else byWho.set(c.who, [c]);
   }
-  const rankIndex = windows.indexOf(RANK_DAYS as (typeof windows)[number]);
-  const ranked = new Map<string, VsTiers>();
-  let kolsActive = 0;
-  for (const [who, list] of byWho) {
-    const t = windowTiers(list, now, [RANK_DAYS])[0]!;
-    if (t.graded > 0) kolsActive++;
-    ranked.set(who, t);
-  }
-  const topKols = rankKols(ranked, { top: TOP_KOLS, minGraded: KOL_MIN_GRADED });
-  const names = await readKolRows(topKols);
-  const kols: VsRow[] = topKols.map((who) => {
-    const kol = names.get(who);
-    return {
-      id: who,
-      kind: "kol",
-      name: (kol ? (kol.main ? knownSideName(kol.main) : kol.name) : null) ?? shortAddress(who),
-      twitter: kol?.twitter ?? null,
-      avatar: kol?.avatar ?? null,
-      windows: windowTiers(byWho.get(who) ?? [], now, windows),
-    };
-  });
+  const perKol = [...byWho.values()].map((list) => windowTiers(list, now, windows));
+  const kol = windows.map((days, i) =>
+    typicalKol(
+      perKol.map((w) => w[i]!),
+      days,
+      KOL_MIN_PICKS[days] ?? days,
+    ),
+  );
 
   return {
     windows,
     models,
-    kols,
-    allKols: {
-      id: "all-kols",
-      kind: "kols",
-      name: "Every KOL we track",
-      twitter: null,
-      avatar: null,
-      windows: windowTiers(pooledCalls(calls), now, windows),
-    },
-    kolsActive,
-    rule: {
-      rankDays: windows[rankIndex] ?? RANK_DAYS,
-      minGraded: KOL_MIN_GRADED,
-      topKols: TOP_KOLS,
-      topModels: TOP_MODELS_COUNT,
-    },
+    kol,
+    rule: { topModels: TOP_MODELS_COUNT },
     computedAt: new Date(now).toISOString(),
   };
 }

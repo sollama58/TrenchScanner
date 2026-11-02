@@ -2,14 +2,7 @@
 import "./bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import {
-  pooledCalls,
-  rankKols,
-  readKolCalls,
-  windowTiers,
-  type KolCall,
-  type VsTiers,
-} from "./modelsVsKols.js";
+import { readKolCalls, typicalKol, windowTiers, type KolCall, type VsTiers } from "./modelsVsKols.js";
 
 const NOW = Date.parse("2026-11-02T12:00:00Z");
 const HOUR = 3_600_000;
@@ -52,29 +45,44 @@ describe("windowTiers", () => {
   });
 });
 
-describe("pooledCalls", () => {
-  it("keeps each coin once, at the first KOL's buy", () => {
-    const early = new Date(NOW - 2 * HOUR);
-    const pooled = pooledCalls([
-      call({ who: "a", mint: "x" }),
-      call({ who: "b", mint: "x", boughtAt: early }),
-      call({ who: "b", mint: "y" }),
-    ]);
-    expect(pooled).toHaveLength(2);
-    expect(pooled.find((c) => c.mint === "x")?.who).toBe("b");
+describe("typicalKol", () => {
+  const kol = (graded: number, won2x: number, tenXGraded = graded, won10x = 0): VsTiers => ({
+    ...tiers(graded, won2x),
+    won4x: Math.floor(won2x / 2),
+    won10x,
+    tenXGraded,
   });
-});
 
-describe("rankKols", () => {
-  it("ranks by the 2x lower bound, so a high rate on a handful of coins doesn't win", () => {
-    const by = new Map<string, VsTiers>([
-      ["lucky", tiers(10, 6)],
-      ["steady", tiers(80, 40)],
-      ["cold", tiers(50, 5)],
-      ["tiny", tiers(4, 4)],
-    ]);
-    expect(rankKols(by, { top: 3, minGraded: 10 })).toEqual(["steady", "lucky", "cold"]);
-    expect(rankKols(by, { top: 1, minGraded: 60 })).toEqual(["steady"]);
+  it("takes the median of the KOLs past the floor, one KOL one vote", () => {
+    const t = typicalKol(
+      [
+        kol(10, 1),
+        kol(20, 6),
+        // A hot hand: moves the mean, not the median.
+        kol(10, 9, 10, 4),
+        // Under the floor: left out, though its rate is perfect.
+        kol(3, 3),
+        // No graded pick: not even active.
+        kol(0, 0),
+      ],
+      7,
+      10,
+    );
+    expect(t).toMatchObject({ days: 7, minPicks: 10, kols: 3, active: 4, picks: 40 });
+    expect(t.median.r2x).toBeCloseTo(30);
+    expect(t.mean.r2x).toBeCloseTo((10 + 30 + 90) / 3);
+    expect(t.median.r4x).toBeCloseTo(15);
+    expect(t.median.r10x).toBe(0);
+    expect(t.mean.r10x).toBeCloseTo(40 / 3);
+  });
+
+  it("averages the middle two on an even count, and has nothing with no KOL past the floor", () => {
+    expect(typicalKol([kol(10, 2), kol(10, 4)], 3, 6).median.r2x).toBeCloseTo(30);
+    // 10x only from KOLs with a settled pick.
+    expect(typicalKol([kol(10, 2, 0), kol(10, 4, 5, 1)], 3, 6).median.r10x).toBeCloseTo(20);
+    const none = typicalKol([kol(2, 1)], 1, 3);
+    expect(none).toMatchObject({ kols: 0, active: 1, picks: 0 });
+    expect(none.median).toEqual({ r2x: null, r4x: null, r10x: null });
   });
 });
 

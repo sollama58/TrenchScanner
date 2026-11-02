@@ -1,9 +1,9 @@
-import type { VsRow, VsTiers } from "../api";
+import type { KolTypical, VsRow, VsTiers } from "../api";
 
 /**
  * The arithmetic behind the Models tab's "Models vs KOLs" panel and its share image, kept apart
- * from both so they read the same figures: a tier's rate and the count it is a share of, each
- * side's calls summed, and who leads.
+ * from both so they read the same figures: a tier's rate and the count it is a share of, the
+ * models' calls summed, the typical KOL's rate, and who leads.
  */
 
 export type Tier = "2x" | "4x" | "10x";
@@ -49,24 +49,56 @@ export function sideTotal(rows: readonly VsRow[], days: number): VsTiers {
   return sum;
 }
 
+/** The id that marks the typical KOL among the leaders. */
+export const KOL_ID = "kol";
+
+/** KOLs that must count in a window before the typical KOL can lead a column. */
+export const MIN_KOLS_TO_LEAD = 3;
+
+/** The typical KOL's median and mean in a tier. */
+export function kolRate(
+  k: KolTypical | undefined,
+  tier: Tier,
+): { median: number | null; mean: number | null } {
+  if (!k) return { median: null, mean: null };
+  const key = tier === "2x" ? "r2x" : tier === "4x" ? "r4x" : "r10x";
+  return { median: k.median[key], mean: k.mean[key] };
+}
+
+/** The window's typical KOL; undefined when the answer has none. */
+export const kolAt = (kol: readonly KolTypical[], days: number) => kol.find((k) => k.days === days);
+
 /**
- * The row with the best rate in a tier, among rows with at least `minN` behind it: null when none
- * has, or the best is 0% (nobody leads a column nobody scored in).
+ * Who has the best rate in a tier: a model with at least `minN` behind it, or the typical KOL
+ * (KOL_ID) once MIN_KOLS_TO_LEAD KOLs count. Null when none qualifies or the best is 0% (nobody
+ * leads a column nobody scored in).
  */
-export function leaderOf(rows: readonly VsRow[], days: number, tier: Tier, minN: number): string | null {
+export function leaderOf(
+  rows: readonly VsRow[],
+  kol: KolTypical | undefined,
+  days: number,
+  tier: Tier,
+  minN: number,
+): string | null {
   let best: { id: string; pct: number } | null = null;
   for (const r of rows) {
     const { pct, n } = rateOf(tiersAt(r, days), tier);
     if (pct === null || n < minN) continue;
     if (!best || pct > best.pct) best = { id: r.id, pct };
   }
+  const k = kolRate(kol, tier).median;
+  if (kol && kol.kols >= MIN_KOLS_TO_LEAD && k !== null && (!best || k > best.pct))
+    best = { id: KOL_ID, pct: k };
   return best && best.pct > 0 ? best.id : null;
 }
 
-/** Who leads a tier between the two sides' totals, by how many points; null when either has nothing graded. */
-export function edge(models: Rate, kols: Rate): { side: "models" | "kols" | "tie"; pts: number } | null {
-  if (models.pct === null || kols.pct === null) return null;
-  const d = models.pct - kols.pct;
+/** Who leads a tier between the two sides, by how many points; null when either has nothing. */
+export function edge(
+  models: number | null,
+  kols: number | null,
+): { side: "models" | "kols" | "tie"; pts: number } | null {
+  if (models === null || kols === null) return null;
+  const d = models - kols;
   if (Math.abs(d) < 0.5) return { side: "tie", pts: 0 };
   return { side: d > 0 ? "models" : "kols", pts: Math.abs(d) };
 }
