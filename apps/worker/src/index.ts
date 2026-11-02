@@ -136,6 +136,8 @@ import {
   seedCurveStreamSpend,
   startCurveTape,
 } from "./jobs/curveTape.js";
+import { setLiveTapeLogs } from "./jobs/liveTape.js";
+import { TapeLogsFeed } from "./jobs/tapeLogsFeed.js";
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { startCurveCandles } from "./jobs/curveCandles.js";
 import { seedCandleChainFillSpend, startCandleChainFill } from "./jobs/candleChainFill.js";
@@ -364,8 +366,11 @@ async function main() {
   // The young coins' bonding curves ride the same socket (curveTape.ts, CURVE_TAPE).
   const curveTapeOn = scans && env.CURVE_TAPE;
   const burnStreamOn = runsJob(role, "burn-scan") && env.HELIUS_BURN_STREAM;
+  // The live tape's trades off the chain's logs, on the same socket (tapeLogsFeed.ts).
+  const tapeLogsOn = scans && env.LIVE_TAPE_LOGS_MAX_COINS > 0 && env.LIVE_TAPE_PAGES_PER_CYCLE > 0;
+  let tapeLogs: TapeLogsFeed | null = null;
   const heliusStream =
-    (holderStreamOn || burnStreamOn || curveTapeOn) && env.HELIUS_API_KEY
+    (holderStreamOn || burnStreamOn || curveTapeOn || tapeLogsOn) && env.HELIUS_API_KEY
       ? new HeliusAccountStream(
           HeliusAccountStream.urlFor(env.HELIUS_API_KEY),
           (key, signature, tx) => {
@@ -377,10 +382,17 @@ async function main() {
             if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes, slot);
             else if (key.startsWith(POOL_STREAM_KEY_PREFIX)) onPoolStreamUpdate(key, data, bytes, slot);
           },
+          (key, signature, logs, bytes) => void tapeLogs?.onLogs(key, signature, logs, bytes),
         )
           .metered("stream/holders-curves-burns")
           .maxTxKeys(env.HELIUS_HOLDER_STREAM_MAX_KEYS)
+          // Two keys a coin: its curve and its pool.
+          .maxLogsKeys(Math.max(1, env.LIVE_TAPE_LOGS_MAX_COINS * 2))
       : null;
+  if (heliusStream && tapeLogsOn) {
+    tapeLogs = new TapeLogsFeed(heliusStream, env.LIVE_TAPE_LOGS_MAX_COINS);
+    setLiveTapeLogs(tapeLogs);
+  }
   heliusStream?.start();
   if (heliusStream && burnStreamOn) heliusStream.watch(BURN_STREAM_KEY, [SUBSCRIPTION_MINT]);
   setHolderTransferStream(holderStreamOn ? heliusStream : null);
