@@ -1,0 +1,12 @@
+-- The trainer's hourly kol-side-wallets job counts each listed side wallet's coins over 30 days
+-- (kolSideWalletsJob.ts, `a."wallet" = ANY(sides)`). On the wallet index alone each wallet's rows
+-- came from the heap, scattered over a month of inserts: the single costliest statement in
+-- production, mean 45 s and ~150k blocks read from disk a call (audit 2026-11-02, from
+-- /stats/ops/db). With firstBuyAt and tokenId in a partial index on "buys" > 0 it reads the index
+-- alone (a local 1.7M-row copy: 13,671 heap blocks read to 261). The same shape serves the job's
+-- KOL buys (KolWallet joined on wallet, firstBuyAt in the window). Not in schema.prisma's @@index
+-- list for the reason in 20261024004700. CONCURRENTLY, alone in its file: no write lock on the
+-- live table. IF NOT EXISTS makes a retry safe; an interrupted build can leave an INVALID index,
+-- which `DROP INDEX CONCURRENTLY "TokenWalletActivity_wallet_firstBuyAt_idx"` clears before
+-- re-running.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "TokenWalletActivity_wallet_firstBuyAt_idx" ON "TokenWalletActivity"("wallet", "firstBuyAt") INCLUDE ("tokenId") WHERE "buys" > 0;
