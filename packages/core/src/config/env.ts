@@ -654,8 +654,8 @@ const envSchema = z.object({
   // the ledgers) and leaves no room to reclaim space in place; on 2026-10-16 the database was
   // growing 1.3 GB a day toward a 15 GB disk with nothing watching. Keep it about 3 GB under the
   // Postgres disk on Render (the database -> Info) and raise both together; 0 turns it off.
-  // 27 GB since the disk went to 30 GB on 2026-10-16.
-  DB_DISK_ALERT_MB: z.coerce.number().min(0).default(27_000),
+  // 37 GB since the disk went to 40 GB on 2026-11-02 (27 while it was 30 GB, from 2026-10-16).
+  DB_DISK_ALERT_MB: z.coerce.number().min(0).default(37_000),
   // The short horizon for snapshots of tokens nothing else points at - no CandidateOutcome, Match,
   // curated or shadow call, or AI verdict (see untrackedTokenIds in cleanupJob.ts). Those are
   // almost all launches that failed the rug screen on every scan, and they write most of the

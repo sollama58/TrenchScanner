@@ -530,10 +530,10 @@ services:
       - key: MATCH_ARCHIVE_HIT_RETENTION_DAYS
         value: "180"
       # pipeline-watch's warning line for the database's size: about 3 GB under the Postgres disk
-      # (30 GB since 2026-10-16), raised together with it. See DB_DISK_ALERT_MB in
-      # packages/core/src/config/env.ts and "When the database disk is nearly full" in the README.
+      # (40 GB since 2026-11-02; 30 from 2026-10-16), raised together with it. See DB_DISK_ALERT_MB
+      # in packages/core/src/config/env.ts and "When the database disk is nearly full" in the README.
       - key: DB_DISK_ALERT_MB
-        value: "27000"
+        value: "37000"
       - key: OUTCOME_TRACKING_HOUR_UTC
         value: "5"
       - key: ACTIVE_VIEW_WINDOW_MINUTES
@@ -958,8 +958,10 @@ databases:
     # 0.3-0.6 s took 5-20 s in those bursts (notes/server-load-audit-2026-10-13.md in the project).
     plan: basic-4gb
     # 30 GB since 2026-10-16 (database audit): at the 15 GB default the data was 1.3 GB a day from
-    # filling it, and Render suspends a database that outgrows its disk. DB_DISK_ALERT_MB above
-    # warns 3 GB under this; raise both together.
-    diskSizeGB: 30
+    # filling it, and Render suspends a database that outgrows its disk. 40 GB since 2026-11-02
+    # (audit DB-2, owner decision): at 17.5 GB and ~0.5 GB a day the 30 GB disk would have filled
+    # between 12-21 and 01-08; the extra 10 GB is about $10 a month and keeps today's retention.
+    # DB_DISK_ALERT_MB above warns 3 GB under this; raise both together.
+    diskSizeGB: 40
     databaseName: trenchscanner
     user: trenchscanner
