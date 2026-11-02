@@ -89,25 +89,23 @@ describe("sendAlert", () => {
     expect((call.params.photo as Blob).type).toBe("image/png");
   });
 
-  it("hands Telegram the URL when the fetch fails, then falls back to text on a 400", async () => {
+  it("sends the alert as text at once when no gateway served the picture", async () => {
     for (const bad of [
       () => Promise.reject(new Error("ECONNRESET")),
       async () => image(429, "text/plain"),
       async () => image(200, "text/html"),
     ]) {
       const api = new FakeTelegramApi(bad as typeof fetch);
-      await api.sendAlert(5, { html: "x", imageUrl: "https://cdn.example/a.png" });
-      expect(api.sent().map((m) => m.photo)).toEqual(["https://cdn.example/a.png"]);
+      const result = await api.sendAlert(5, {
+        html: "x",
+        imageUrl: "https://cdn.example/a.png",
+        imageFallbacks: ["https://gw.example/a.png"],
+      });
+      expect(result.ok).toBe(true);
+      // Never the URL for Telegram to fetch itself: it meets the same refusals we just did.
+      expect(api.calls.map((c) => c.method)).toEqual(["sendMessage"]);
+      expect(api.sent().map((m) => m.photo)).toEqual([null]);
     }
-    const api = new FakeTelegramApi(async () => image(200, "text/plain"));
-    api.answers.set("sendPhoto", {
-      ok: false,
-      code: 400,
-      description: "Bad Request: failed to get HTTP URL content",
-    });
-    const result = await api.sendAlert(5, { html: "x", imageUrl: "https://cdn.example/a.png" });
-    expect(result.ok).toBe(true);
-    expect(api.sent().map((m) => m.photo)).toEqual(["https://cdn.example/a.png", null]);
   });
 
   it("falls back to text on any refusal of the photo itself, not on a blocked chat or a rate limit", async () => {

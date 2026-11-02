@@ -268,6 +268,15 @@ export function neverSent(err: unknown): boolean {
  * other than the chat refusing the bot (403) or a rate limit (429), both of which a text would
  * meet too.
  */
+/** A URL's host for a log line, or the URL's first characters when it doesn't parse. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url.slice(0, 40);
+  }
+}
+
 export function photoRefused(code: number): boolean {
   return code >= 400 && code < 500 && code !== 403 && code !== 429;
 }
@@ -489,8 +498,11 @@ export class TelegramApi {
    * text fits a caption, else the text alone. A picture Telegram already holds (`photos`) goes by
    * its file_id; otherwise it is fetched here and uploaded, from `imageFallbacks` in order when
    * the main URL fails (only a JPEG or PNG from those: they are full-size originals, and Telegram
-   * refuses the GIFs and WebPs launchers upload); if all fail the URL is handed to Telegram to
-   * try; a picture Telegram won't take (a 400) costs nothing but the retry as plain text, so an
+   * refuses the GIFs and WebPs launchers upload); if all fail the alert goes out as text at once.
+   * Telegram was handed the URL to try itself until 2026-11-02, and met the same 429s and 403s
+   * every gateway had just answered us: 116 of 2,337 photo sends a day came back 400 and were
+   * resent as text, a wasted round trip on each of those alerts (full audit 2026-11-02, WB-40).
+   * A picture Telegram won't take (a 400) still costs nothing but the retry as plain text, so an
    * alert is never lost to its artwork.
    */
   async sendAlert(
@@ -522,7 +534,15 @@ export class TelegramApi {
           fetched = got;
         }
       }
-      const withPhoto = await this.sendPhoto(chatId, fetched ?? url, message.html, sendOpts);
+      if (!fetched) {
+        // The host is logged so the gateway order (format.ts alertImageFallbacks) can be tuned from data.
+        logger.info("no gateway served the token artwork; sending the alert as text", {
+          host: hostOf(url),
+          fallbackHosts: fallbacks.map(hostOf),
+        });
+        return this.sendMessage(chatId, message.html, sendOpts);
+      }
+      const withPhoto = await this.sendPhoto(chatId, fetched, message.html, sendOpts);
       if (withPhoto.ok) {
         const fileId = withPhoto.result.photo?.at(-1)?.file_id;
         if (photos && fileId) photos.fileIds.set(url, fileId);
@@ -534,7 +554,6 @@ export class TelegramApi {
       if (!photoRefused(withPhoto.code)) return withPhoto;
       logger.warn("telegram refused the photo, sending the alert as text", {
         url,
-        uploaded: fetched !== null,
         description: withPhoto.description,
       });
     }

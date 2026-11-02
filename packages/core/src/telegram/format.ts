@@ -173,6 +173,12 @@ function ipfsCid(url: string): string | undefined {
  * there yet): the launcher's own URL, then for an IPFS file a second public gateway. Full-size
  * originals, so the sender keeps only the ones Telegram takes as a photo. Empty when alertImage
  * already is the original.
+ *
+ * The second gateway is Filebase's, which answers any CID in under half a second (the launch
+ * metadata path's finding, datasources/pumpfun.ts LAUNCH_METADATA_GATEWAYS), or Pinata's public
+ * one when the launcher's URL is Filebase's already. Until 2026-11-02 it was ipfs.io or dweb.link,
+ * and both answered 429 to every one of the 676 artwork reads of a day (full audit 2026-11-02,
+ * DA-7): 670 of the dispatch's 912 errors, for nothing.
  */
 export function alertImageFallbacks(token: Pick<AlertToken, "imageUrl">): string[] {
   const primary = alertImage(token);
@@ -182,7 +188,9 @@ export function alertImageFallbacks(token: Pick<AlertToken, "imageUrl">): string
   const cid = ipfsCid(url);
   if (cid)
     out.push(
-      new URL(url).hostname === "ipfs.io" ? `https://dweb.link/ipfs/${cid}` : `https://ipfs.io/ipfs/${cid}`,
+      new URL(url).hostname === "ipfs.filebase.io"
+        ? `https://gateway.pinata.cloud/ipfs/${cid}`
+        : `https://ipfs.filebase.io/ipfs/${cid}`,
     );
   return [...new Set(out)].filter((u) => u !== primary);
 }
