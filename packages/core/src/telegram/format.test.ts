@@ -178,11 +178,11 @@ describe("telegram alert text", () => {
     // Then the original, then a second gateway; nothing else for a plain https image.
     expect(alertImageFallbacks({ imageUrl: `https://ipfs.io/ipfs/${cid}` })).toEqual([
       `https://ipfs.io/ipfs/${cid}`,
-      `https://dweb.link/ipfs/${cid}`,
+      `https://ipfs.filebase.io/ipfs/${cid}`,
     ]);
-    expect(alertImageFallbacks({ imageUrl: `https://cf-ipfs.com/ipfs/${cid}` })).toEqual([
-      `https://cf-ipfs.com/ipfs/${cid}`,
-      `https://ipfs.io/ipfs/${cid}`,
+    expect(alertImageFallbacks({ imageUrl: `https://ipfs.filebase.io/ipfs/${cid}` })).toEqual([
+      `https://ipfs.filebase.io/ipfs/${cid}`,
+      `https://gateway.pinata.cloud/ipfs/${cid}`,
     ]);
     expect(alertImageFallbacks({ imageUrl: "https://cdn.example/doge.png" })).toEqual([]);
     expect(alertImageFallbacks({ imageUrl: null })).toEqual([]);

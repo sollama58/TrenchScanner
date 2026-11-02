@@ -291,8 +291,8 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(sent[0]!.text).toContain("Rules flagged it and your filter caught it");
     expect(sent[0]!.text).toContain("<b>“Mine”</b>  ·  score <b>71</b>");
     expect(sent[0]!.text).not.toContain("Trees");
-    // The token has artwork, so the alert went out as a photo with the text as its caption.
-    expect(sent[0]!.photo).toBe("https://cdn.example/tst.png");
+    // The token has artwork, so the alert went out as a photo (fetched and uploaded) with the text as its caption.
+    expect(sent[0]!.photo).toBe("upload");
     const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBe(at.getTime() + 1_000);
     expect(row?.lastSentAt).not.toBeNull();
@@ -758,7 +758,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(summary.failed).toBe(0);
     expect(summary.sent + summary.digests).toBe(1);
     const sent = api.sent();
-    expect(sent.map((m) => m.photo)).toEqual(["https://cdn.example/tst.png", null]);
+    expect(sent.map((m) => m.photo)).toEqual(["upload", null]);
     expect(sent[1]!.text).toContain("$TST");
     const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(at.getTime());
