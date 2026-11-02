@@ -24,14 +24,15 @@ const kol = (kols: number, r2x: number | null): KolTypical => ({
 });
 
 describe("vsKolsView", () => {
-  it("shows the KOLs' average at 10x, where the median KOL almost always reads 0%", () => {
+  it("shows the KOLs' average in every tier, where the median KOL often reads 0%", () => {
     const k: KolTypical = {
       ...kol(20, 25),
       median: { r2x: 25, r4x: 5, r10x: 0 },
       mean: { r2x: 28, r4x: 6, r10x: 1.7 },
     };
     expect(kolRate(k, "10x")).toEqual({ median: 0, mean: 1.7, shown: 1.7 });
-    expect(kolRate(k, "4x").shown).toBe(5);
+    expect(kolRate(k, "4x").shown).toBe(6);
+    expect(kolRate(k, "2x").shown).toBe(28);
   });
 
   it("reads 10x as a share of the settled calls, the rest of the graded ones", () => {
@@ -57,7 +58,7 @@ describe("vsKolsView", () => {
     // The typical KOL leads once enough KOLs count.
     expect(leaderOf(rows, kol(12, 40), 7, "2x", 30)).toBe(KOL_ID);
     expect(leaderOf(rows, kol(2, 40), 7, "2x", 30)).toBe("a");
-    expect(kolRate(kol(12, 40), "2x")).toEqual({ median: 40, mean: 45, shown: 40 });
+    expect(kolRate(kol(12, 40), "2x")).toEqual({ median: 40, mean: 45, shown: 45 });
     expect(kolRate(undefined, "10x")).toEqual({ median: null, mean: null, shown: null });
   });
 

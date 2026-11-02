@@ -35,7 +35,7 @@ import {
 
 /**
  * The share image of the Models tab's "Models vs KOLs": the top three models and the typical KOL
- * (the median of the KOLs with enough picks), a row each, with their 2x, 4x and 10x rates over one
+ * (the average of the KOLs with enough picks), a row each, with their 2x, 4x and 10x rates over one
  * window, and the models together against the typical KOL on the right, in the shared branded
  * frame (shareCard.ts).
  */
@@ -91,7 +91,7 @@ function rowsOf(d: ModelsVsKols, days: number): { models: CardRow[]; kol: CardRo
       name: "The typical KOL",
       sub:
         k && k.kols > 0
-          ? `median of ${k.kols} KOL${k.kols === 1 ? "" : "s"} with ${k.minPicks}+ picks`
+          ? `average of ${k.kols} KOL${k.kols === 1 ? "" : "s"} with ${k.minPicks}+ picks`
           : "no KOL has enough picks yet",
       rate: (tier) => ({ pct: kolRate(k, tier).shown, thin: (k?.kols ?? 0) < MIN_KOLS_TO_LEAD }),
     },
@@ -227,7 +227,7 @@ export async function renderVsKolsCard(d: ModelsVsKols, days: number): Promise<H
     "How often their picks hit 2x in 15 min, 4x in 30, 10x in the hour, before a 50% stop.",
     {
       badge: (c, right, cy) => pill(c, right, cy, `Last ${windowName(days)}`),
-      footer: "Same grade both sides · KOL = median KOL (10x: average)",
+      footer: "Same grade both sides · KOL = the average KOL with enough picks",
       link: "trenchscanner.app",
       time: true,
     },

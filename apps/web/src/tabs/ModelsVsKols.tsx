@@ -27,7 +27,7 @@ import {
 
 /**
  * "Models vs KOLs" (user asks 2026-11-02): the top three models' 2x, 4x and 10x rates over 24h,
- * 3 days and 7 days beside the typical KOL we track (the median of the KOLs with enough picks in
+ * 3 days and 7 days beside the typical KOL we track (the average of the KOLs with enough picks in
  * the window), near the top of the Models tab, with a share image. The figures and what counts as
  * a KOL's pick are the API's (apps/api modelsVsKols.ts).
  */
@@ -101,7 +101,7 @@ export function ModelsVsKolsPanel({ api, targets, now }: { api: string; targets:
           </span>
           <h3>Top {d.models.length || d.rule.topModels} models vs the typical KOL</h3>
           <p className="muted small">
-            The three models the default feed follows, against the median KOL we track. Both sides are graded
+            The three models the default feed follows, against the average KOL we track. Both sides are graded
             the same way: from the moment our clock starts on a coin, did it reach 2x within 15 minutes, 4x
             within 30 or 10x within the hour, before a 50% stop.
           </p>
@@ -193,14 +193,14 @@ export function ModelsVsKolsPanel({ api, targets, now }: { api: string; targets:
       )}
 
       <p className="faint small vk-note">
-        The typical KOL is the median: each KOL&apos;s own rate over the window, among those with at least{" "}
-        {d.kol.map((k) => `${k.minPicks} graded picks in ${windowName(k.days)}`).join(", ")}, and the one in
-        the middle, so a few hot hands don&apos;t pull it up (the average is under each figure). At 10x it is
-        the average instead: most KOLs land no 10x in a window, so the middle one reads 0%. A pick is a coin
-        we tracked that they bought before our clock started on it, so a coin that had already run can&apos;t
-        count for them, and a Known Side counts as its KOL. The models&apos; figures are their calls together.
-        Rates on fewer than {MIN_GRADED_FOR_RATE} graded calls, or fewer than {MIN_KOLS_TO_LEAD} KOLs, are
-        faded, and a bar fills at the goal. {RULE_NOTE} <AsOf computedAt={d.computedAt} now={now} />
+        The typical KOL is the average of each KOL&apos;s own rate over the window, one KOL one vote, among
+        those with at least{" "}
+        {d.kol.map((k) => `${k.minPicks} graded picks in ${windowName(k.days)}`).join(", ")} (the median is
+        under each figure). A pick is a coin we tracked that they bought before our clock started on it, so a
+        coin that had already run can&apos;t count for them, and a Known Side counts as its KOL. The
+        models&apos; figures are their calls together. Rates on fewer than {MIN_GRADED_FOR_RATE} graded calls,
+        or fewer than {MIN_KOLS_TO_LEAD} KOLs, are faded, and a bar fills at the goal. {RULE_NOTE}{" "}
+        <AsOf computedAt={d.computedAt} now={now} />
       </p>
 
       {sharing && (
@@ -340,7 +340,7 @@ function KolRow({
           <span className="vk-title">The typical KOL</span>
           <span className="faint small">
             {kol && kol.kols > 0
-              ? `median of ${kol.kols} KOL${kol.kols === 1 ? "" : "s"}, ${kol.picks.toLocaleString()} graded picks`
+              ? `average of ${kol.kols} KOL${kol.kols === 1 ? "" : "s"}, ${kol.picks.toLocaleString()} graded picks`
               : "no KOL has enough picks yet"}
           </span>
         </span>
@@ -360,9 +360,7 @@ function KolRow({
               <i style={{ width: `${barWidth(k.shown, targets[tier])}%` }} />
             </span>
             <span className="vk-avg faint">
-              {KOL_BASIS[tier] === "median"
-                ? `avg ${rateText(k.mean)}`
-                : `average · median ${rateText(k.median)}`}
+              {KOL_BASIS[tier] === "median" ? `avg ${rateText(k.mean)}` : `median ${rateText(k.median)}`}
             </span>
           </span>
         );
