@@ -568,11 +568,11 @@ describe("FDSA desk", () => {
     expect(readFdsaMode(undefined)).toBe("paper");
   });
 
-  it("defaults to 0.5 SOL a trade, 6 open, 100 SOL a day on a 10 SOL bankroll, with the bot's guards", () => {
-    expect(DEFAULT_FDSA_BANKROLL_SOL).toBe(10);
+  it("defaults to 0.5 SOL a trade, 12 open, 100 SOL a day on a 25 SOL bankroll, with the bot's guards", () => {
+    expect(DEFAULT_FDSA_BANKROLL_SOL).toBe(25);
     expect(DEFAULT_FDSA_DESK_CONFIG).toMatchObject({
       buySol: 0.5,
-      maxOpenPositions: 6,
+      maxOpenPositions: 12,
       maxDailySpendSol: 100,
     });
     // Not the bot's one-buy-a-day 0.5 SOL.
