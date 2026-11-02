@@ -55,7 +55,23 @@ export interface WalletHoldingsOptions {
    * walletValuation.ts. Used whenever given and WALLET_HOLDINGS_SOURCE is "balances".
    */
   valuation?: Pick<ValuationDeps, "dexScreener">;
+  /**
+   * Coins no decision is near (not a contender, alerted, in the alert feeds, watched or called -
+   * scanJob.ts quietCoinMints): a wallet held only on these counts as cached for
+   * QUIET_COIN_REREAD_MINUTES, not the TTL, so its empty check is read once and then hourly. A
+   * wallet also on a coin outside the set keeps the TTL (Helius cut E, owner decision 2026-11-02).
+   */
+  quietMints?: ReadonlySet<string>;
 }
+
+/**
+ * How long a quiet coin's wallet readings stand (see WalletHoldingsOptions.quietMints). Until
+ * 2026-11-02 every in-band coin's top 10 was re-read on the 10-minute TTL for as long as it stayed
+ * in band: 134-144 getTokenAccountsByOwnerV2 calls a cycle, ~70k of the balances' 169k credits a
+ * day, for a figure nothing waited on (`emptyTop10WalletPct` AUC 0.499; the Empty cut applies at
+ * the decision from the cached figure). The hour is the cadence old coins already had.
+ */
+export const QUIET_COIN_REREAD_MINUTES = 60;
 
 /** Which route prices uncached wallets this call: the cheap balances one, or DAS. */
 function holdingsSource(env: Env, opts: WalletHoldingsOptions): "balances" | "das" {
@@ -133,28 +149,39 @@ export async function resolveWalletHoldings(
   const source = holdingsSource(env, opts);
   const changeCheck = source === "balances" && env.WALLET_HOLDINGS_FULL_READ_MINUTES > 0;
   const fullReadCutoff = new Date(now - env.WALLET_HOLDINGS_FULL_READ_MINUTES * 60_000);
+  const ownMints = mintsByWallet(groups);
+  // A wallet held only on quiet coins stands for QUIET_COIN_REREAD_MINUTES (see the option).
+  const quietCutoff = new Date(
+    now - Math.max(env.WALLET_HOLDINGS_CACHE_TTL_MINUTES, QUIET_COIN_REREAD_MINUTES) * 60_000,
+  );
+  const quiet = opts.quietMints ?? new Set<string>();
+  const quietWallet = (address: string) => {
+    const mints = ownMints.get(address);
+    return quiet.size > 0 && !!mints && [...mints].every((m) => quiet.has(m));
+  };
+  const isFresh = (row: { address: string; checkedAt: Date }) =>
+    row.checkedAt > freshCutoff || (row.checkedAt > quietCutoff && quietWallet(row.address));
   const rows = await prisma.walletHoldingsCache.findMany({
     where: {
       address: { in: unique },
       OR: [
-        { checkedAt: { gt: freshCutoff } },
+        { checkedAt: { gt: quiet.size > 0 ? quietCutoff : freshCutoff } },
         ...(changeCheck ? [{ balancesReadAt: { gt: fullReadCutoff } }] : []),
       ],
     },
   });
-  const cached = rows.filter((row) => row.checkedAt > freshCutoff);
+  const cached = rows.filter(isFresh);
   // Past the TTL but read in full within the hour, with what that read held and its SOL then:
   // the change check below may re-price these instead of reading them again.
   const stored = new Map<string, { balances: StoredBalances; lamports: bigint }>();
   if (changeCheck) {
     for (const row of rows) {
-      if (row.checkedAt > freshCutoff || row.lamports === null) continue;
+      if (isFresh(row) || row.lamports === null) continue;
       if (!row.balancesReadAt || row.balancesReadAt <= fullReadCutoff) continue;
       const balances = parseStoredBalances(row.balances);
       if (balances) stored.set(row.address, { balances, lamports: row.lamports });
     }
   }
-  const ownMints = mintsByWallet(groups);
   for (const row of cached) {
     const perMintUsd = asPerMintUsd(row.perMintUsd);
     if (row.breakdownComplete) {
