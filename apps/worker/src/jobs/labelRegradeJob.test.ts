@@ -2,7 +2,7 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { HttpError, prisma, type MinuteCandle } from "@trenchscanner/core";
-import { resetRegradeCursor, runLabelRegradeJob } from "./labelRegradeJob.js";
+import { RESTORE_EVERY_MS, resetRegradeCursor, runLabelRegradeJob } from "./labelRegradeJob.js";
 import { CandlesUnavailableError, PUMP_PAUSED_NO_KEY } from "./minuteCandleReader.js";
 import { GIVE_UP_TRIES, RETRY_MAX_MS } from "./candleRetry.js";
 
@@ -159,6 +159,40 @@ describe.skipIf(!dbAvailable)("label regrade job", () => {
     expect((back.rule4Grade as Record<string, number>).freshGapPct).toBeCloseTo(60);
     expect(back.hit2xAt?.getTime()).toBe(ANCHOR + 3 * 60_000);
     expect((back.features as Record<string, unknown>).freshGapPct).toBeUndefined();
+  });
+
+  it("looks for alert rows to restore every RESTORE_EVERY_MS while nothing is re-graded", async () => {
+    const candles = path(-3, [1, 1.3, 1.6, 2, 2.5, ...Array(40).fill(1.5)]);
+    const late = await seed("restore-throttle");
+    await runLabelRegradeJob(
+      { minuteCandles: async (mint) => (mint === late.token.mintAddress ? candles : []) },
+      { spacingMs: 0, now: () => NOW, coinsPerRun: 1000 },
+    );
+    // A run that re-graded nothing: the next one has no reason to look before the interval.
+    await runLabelRegradeJob({ minuteCandles: async () => [] }, { spacingMs: 0, now: () => NOW });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: late.token.id,
+        candidateOutcomeId: late.row.id,
+        source: "heuristic-v1",
+        confidence: 80,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 1e9,
+      },
+    });
+    const soon = await runLabelRegradeJob(
+      { minuteCandles: async () => [] },
+      { spacingMs: 0, now: () => NOW + 60_000 },
+    );
+    expect(soon.restored).toBe(0);
+    const later = await runLabelRegradeJob(
+      { minuteCandles: async () => [] },
+      { spacingMs: 0, now: () => NOW + RESTORE_EVERY_MS },
+    );
+    expect(later.restored).toBeGreaterThanOrEqual(1);
+    expect((await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: late.row.id } })).labelRule).toBe(
+      3,
+    );
   });
 
   it("stops at Pump.fun's first 429 and leaves the coin for a later run", async () => {
