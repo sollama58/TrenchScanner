@@ -145,6 +145,7 @@ import {
   recordTransferEvents,
   holderListStreamed,
   resolveHolderTransfers,
+  transferReadGroups,
   takeHolderStreamStats,
   takeHolderTransferStats,
 } from "./holderTransfers.js";
@@ -967,11 +968,11 @@ function startLinkedWalletStage(
     });
     readsLeft -= spent.reads;
     watchedLeft -= spent.watchedReads;
-    // Holder-to-holder transfers over the same top 25, for the coins about to be decided on,
-    // alongside the funder reads (holderTransfers.ts; never rejects); and behind the cycle for the
-    // coins whose bubble map is open, so their transfer links follow their new holders too.
-    const watchedPart = contenders ? [] : part.filter((g) => watched.has(g.mintAddress));
-    const transferGroups = contenders ? part : watchedPart;
+    // Holder-to-holder transfers over the same top 25, alongside the funder reads
+    // (holderTransfers.ts; never rejects), for the coins whose bubble map is open and the coins a
+    // model called, so their transfer links follow their new holders too. Not for every coin about
+    // to be decided on (Helius cut C, owner decision 2026-11-02: see transferReadGroups).
+    const transferGroups = transferReadGroups(part, watched, wideMints);
     const transfers =
       transferGroups.length > 0
         ? resolveHolderTransfers(transferGroups, helius, {

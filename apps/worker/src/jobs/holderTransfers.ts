@@ -252,6 +252,22 @@ export interface TransferGroup {
 }
 
 /**
+ * Of `groups`, the coins whose holder transfers are read: the ones whose bubble map someone has
+ * open (`watched`) and the ones a model has called (`called`, wideMapMints). Until 2026-11-02 every
+ * coin about to be decided on was read too, ~55k of the reading's 77k credits a day, for a figure
+ * that feeds display and an input with no measured lift (`transferredSupplyPct` AUC 0.515 on 38%
+ * coverage; audit 2026-11-02, Helius cut C, owner decision). A coin's transfer links arrive when it
+ * is opened or called, as the 10-24 "full info for a coin a user opens" decision has it.
+ */
+export function transferReadGroups<G extends TransferGroup>(
+  groups: readonly G[],
+  watched: ReadonlySet<string>,
+  called: ReadonlySet<string>,
+): G[] {
+  return groups.filter((g) => watched.has(g.mintAddress) || called.has(g.mintAddress));
+}
+
+/**
  * The holders a coin's reading is over, each with its token accounts, and the coin's raw supply:
  * the top 25 the Linked count reads (pools and the creator aside), and the creator when it is
  * among the largest holders read. Undefined until the chain's list (with its accounts) is in.

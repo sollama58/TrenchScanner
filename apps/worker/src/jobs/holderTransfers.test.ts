@@ -14,6 +14,7 @@ import {
   setHolderTransferStream,
   STREAM_READ_WAIT_MS,
   takeHolderTransferStats,
+  transferReadGroups,
 } from "./holderTransfers.js";
 import { STREAM_SETTLE_MS } from "../discovery/heliusAccountStream.js";
 
@@ -520,5 +521,18 @@ describe("holder transfers", () => {
         watchedReads: 1,
       });
     });
+  });
+});
+
+describe("transferReadGroups (Helius cut C, 2026-11-02)", () => {
+  const groups = [{ mintAddress: "contender" }, { mintAddress: "opened" }, { mintAddress: "called" }];
+
+  it("reads the coins someone has open or a model called, not every coin about to be decided on", () => {
+    const read = transferReadGroups(groups, new Set(["opened"]), new Set(["called"]));
+    expect(read.map((g) => g.mintAddress)).toEqual(["opened", "called"]);
+  });
+
+  it("reads nothing when no coin is open or called", () => {
+    expect(transferReadGroups(groups, new Set(), new Set())).toEqual([]);
   });
 });
