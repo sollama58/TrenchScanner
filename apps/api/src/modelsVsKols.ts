@@ -1,6 +1,13 @@
-import { TOP_MODELS_COUNT, liveCallRecords, prisma, type Env } from "@trenchscanner/core";
+import {
+  REPORTED_LABEL_RULE,
+  TOP_MODELS_COUNT,
+  liveCallRecords,
+  prisma,
+  type Env,
+} from "@trenchscanner/core";
 import { contestState } from "./contest.js";
 import { SharedCache } from "./sharedCache.js";
+import { READ_KEEPS_WARM_MS } from "./marketLighthouse.js";
 
 /**
  * The Models tab's "Models vs KOLs" (user ask 2026-11-02): the top three models' 2x, 4x and 10x
@@ -194,6 +201,9 @@ export async function readKolCalls(since: Date): Promise<KolCall[]> {
     JOIN "Token" tk ON tk.id = a."tokenId"
     WHERE a."buys" > 0 AND a."solIn" > 0
       AND a."firstBuyAt" >= ${since}
+      -- Graded by the rule every other hit rate reports (laneStore.ts reads the models' side with
+      -- the same bound): a legacy row would be graded as 2x within the hour (audit 2026-11-02, WB-43).
+      AND co."labelRule" >= ${REPORTED_LABEL_RULE}
       -- Bought before our clock started on the coin: see the note at the top.
       AND a."firstBuyAt" <= tp."anchorAt"
     GROUP BY t.who, tk.id, co.id
@@ -265,10 +275,27 @@ export async function buildModelsVsKols(env: Env, now = Date.now()): Promise<Mod
 }
 
 /** One shared answer for every reader, subscribers and guests alike: it names no live coin. */
+/**
+ * The report's cache. `keepWarm` refills it ahead of expiry once at startup and then while someone
+ * has read it in the last READ_KEEPS_WARM_MS, the lighthouse's rule: the Models tab fetches it on
+ * mount, and with nothing keeping it warm the first reader after 70 idle minutes or a deploy waited
+ * the whole fill, p95 17 s in the busy hour (audit 2026-11-02, WB-42).
+ */
 export function createModelsVsKolsCache(env: Env) {
   const cache = new SharedCache<ModelsVsKols>(CACHE_MS, {
     staleWhileRevalidateMs: STALE_MS,
     name: "models vs kols",
   });
-  return () => cache.get(() => buildModelsVsKols(env));
+  let lastReadAt: number | null = null;
+  let warmedOnce = false;
+  const read = () => {
+    lastReadAt = Date.now();
+    return cache.get(() => buildModelsVsKols(env));
+  };
+  const keepWarm = async (aheadMs = 0): Promise<void> => {
+    const wanted = !warmedOnce || (lastReadAt !== null && Date.now() - lastReadAt < READ_KEEPS_WARM_MS);
+    warmedOnce = true;
+    if (wanted) await cache.warm(() => buildModelsVsKols(env), aheadMs);
+  };
+  return Object.assign(read, { keepWarm });
 }

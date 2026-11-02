@@ -361,7 +361,11 @@ export function createReportCaches(env: Env) {
    * behind them. Windows no tab opens (insights 30/90, the 90-day board) fill on demand, as before.
    * `extra` runs after the Models tab's and before the rest (the Live tab's stats panel). Never rejects.
    */
-  const keepWarm = async (extra: () => Promise<void> = async () => {}) => {
+  const modelsVsKols = createModelsVsKolsCache(env);
+  const keepWarm = async (
+    extra: () => Promise<void> = async () => {},
+    extra2: () => Promise<void> = async () => {},
+  ) => {
     const ahead = REPORT_KEEP_AHEAD_MS;
     // The Models tab (PAGE_DAYS in apps/web/src/tabs/modelShared.tsx): its board and report.
     await leaderboardFor(7).warm(() => buildLeaderboard(env, 7, market), ahead);
@@ -371,6 +375,10 @@ export function createReportCaches(env: Env) {
     await leaderboardFor(30).warm(() => buildLeaderboard(env, 30, market), ahead);
     await lighthouse.keepWarm(env, ahead);
     await lighthouseHistory.keepWarm(ahead);
+    // The Models tab's "Models vs KOLs" (read on mount; 17 s cold) and the Lighthouse's wallets
+    // panel (18 s cold), each refilled while read lately (audit 2026-11-02, WB-42).
+    await modelsVsKols.keepWarm(ahead);
+    await extra2();
     // The Models vs baseline chart's 24h and 3-day views, and the model detail's.
     await leaderboardFor(1).warm(() => buildLeaderboard(env, 1, market), ahead);
     await leaderboardFor(3).warm(() => buildLeaderboard(env, 3, market), ahead);
@@ -387,7 +395,7 @@ export function createReportCaches(env: Env) {
     lighthouseHistory,
     tokenSageShowcase: createTokenSageShowcaseCache(),
     /** The Models tab's "Models vs KOLs" (modelsVsKols.ts), for subscribers and guests alike. */
-    modelsVsKols: createModelsVsKolsCache(env),
+    modelsVsKols,
     weather,
     keepWarm,
   };
@@ -1106,7 +1114,10 @@ export async function registerCuratedRoutes(
     if (keeperRunning) return Promise.resolve();
     keeperRunning = true;
     return opts.reports
-      .keepWarm(() => statsCache.warm(buildStats, REPORT_KEEP_AHEAD_MS))
+      .keepWarm(
+        () => statsCache.warm(buildStats, REPORT_KEEP_AHEAD_MS),
+        () => walletScorecards.keepWarm(REPORT_KEEP_AHEAD_MS),
+      )
       .catch((err: unknown) => logger.warn("report keeper failed", { err: String(err) }))
       .finally(() => {
         keeperRunning = false;

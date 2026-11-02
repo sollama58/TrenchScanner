@@ -2,6 +2,7 @@ import { z } from "zod";
 import { MIN_BUY_SOL_PER_TOKEN, OVERSOLD_TOKENS, prisma } from "@trenchscanner/core";
 import { readKolRows, knownSideName } from "./kolRoster.js";
 import { SharedCache } from "./sharedCache.js";
+import { READ_KEEPS_WARM_MS } from "./marketLighthouse.js";
 
 /**
  * The Utilities tab's "Wallets to watch" (user ask 2026-10-16): how the most important wallets we
@@ -434,9 +435,21 @@ export async function buildWalletScorecards(
   };
 }
 
+/** The panel's opening view (loadView in apps/web/src/components/WalletsToWatch.tsx): filled at startup. */
+export const DEFAULT_WALLET_VIEW = { days: 7, group: "kols" } as const;
+
+/**
+ * The scorecards' caches, one per window and group. `keepWarm` refills, ahead of expiry, the
+ * opening view once at startup and then every view someone has read in the last READ_KEEPS_WARM_MS
+ * (the lighthouse's rule): a fill reads the tape for a month of coins and took 18 s, and nothing
+ * refilled it, so a visitor after 70 idle minutes or a deploy waited that long (audit 2026-11-02,
+ * WB-42).
+ */
 export function createWalletScorecardsCache() {
   const caches = new Map<string, SharedCache<WalletScorecards>>();
-  return (days: number, group: WalletGroup) => {
+  const lastRead = new Map<string, number>();
+  let warmedOnce = false;
+  const cacheFor = (days: number, group: WalletGroup) => {
     const key = `${days}:${group}`;
     let cache = caches.get(key);
     if (!cache) {
@@ -447,6 +460,23 @@ export function createWalletScorecardsCache() {
       // Bounded by the schema: windows x groups.
       caches.set(key, cache);
     }
-    return cache.get(() => buildWalletScorecards(days, group));
+    return cache;
   };
+  const read = (days: number, group: WalletGroup) => {
+    lastRead.set(`${days}:${group}`, Date.now());
+    return cacheFor(days, group).get(() => buildWalletScorecards(days, group));
+  };
+  const keepWarm = async (aheadMs = 0): Promise<void> => {
+    const now = Date.now();
+    for (const days of WALLET_WINDOWS)
+      for (const group of WALLET_GROUPS) {
+        const at = lastRead.get(`${days}:${group}`);
+        const wanted =
+          (!warmedOnce && days === DEFAULT_WALLET_VIEW.days && group === DEFAULT_WALLET_VIEW.group) ||
+          (at !== undefined && now - at < READ_KEEPS_WARM_MS);
+        if (wanted) await cacheFor(days, group).warm(() => buildWalletScorecards(days, group), aheadMs);
+      }
+    warmedOnce = true;
+  };
+  return Object.assign(read, { keepWarm });
 }

@@ -1,8 +1,16 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "./bootstrap-env.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { buildWalletScorecards, scorecardOf, summaryOf, type WalletCoinRow } from "./walletScorecards.js";
+import {
+  buildWalletScorecards,
+  createWalletScorecardsCache,
+  scorecardOf,
+  summaryOf,
+  type WalletCoinRow,
+} from "./walletScorecards.js";
+import { cacheReport } from "./sharedCache.js";
+import { READ_KEEPS_WARM_MS } from "./marketLighthouse.js";
 
 const row = (over: Partial<WalletCoinRow>): WalletCoinRow => ({
   who: "w",
@@ -260,4 +268,34 @@ describe.skipIf(!dbAvailable)("buildWalletScorecards", () => {
     expect(d.wallets.find((w) => w.wallet === WINNER)).toMatchObject({ coins: 2, closed: 0, name: null });
     expect(d.wallets.some((w) => w.wallet === KOL)).toBe(false);
   });
+});
+
+describe.skipIf(!dbAvailable)("createWalletScorecardsCache keepWarm", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("fills the opening view at startup, then every view read lately", async () => {
+    const scorecards = createWalletScorecardsCache();
+    const fills = (days: number, group: string) =>
+      cacheReport()
+        .filter((r) => r.name === `lighthouse wallets ${days}d ${group}`)
+        .reduce((n, r) => n + r.fills, 0);
+    const AHEAD = 365 * 86_400_000;
+    const opening = fills(7, "kols");
+    await scorecards.keepWarm(AHEAD);
+    expect(fills(7, "kols")).toBe(opening + 1);
+    expect(fills(30, "winners")).toBe(0);
+    // Nobody read: nothing refilled.
+    await scorecards.keepWarm(AHEAD);
+    expect(fills(7, "kols")).toBe(opening + 1);
+    // A view read is kept warm; the others are not.
+    await scorecards(30, "winners");
+    const month = fills(30, "winners");
+    await scorecards.keepWarm(AHEAD);
+    expect(fills(30, "winners")).toBe(month + 1);
+    expect(fills(7, "kols")).toBe(opening + 1);
+    // An hour on with no read, let go.
+    vi.useFakeTimers({ now: Date.now() + READ_KEEPS_WARM_MS + 1, toFake: ["Date"] });
+    await scorecards.keepWarm(AHEAD);
+    expect(fills(30, "winners")).toBe(month + 1);
+  }, 60_000);
 });
