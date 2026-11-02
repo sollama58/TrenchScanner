@@ -10,8 +10,10 @@ import {
   paperStats,
   paperSwapFee,
   penalizedFill,
+  resetPaperExitRests,
   runPaperTrading,
   DEFAULT_PAPER_CONFIG,
+  UNSELLABLE_REST_MS,
   type PaperSkip,
   type PaperTradingDeps,
 } from "./paper.js";
@@ -156,6 +158,7 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
   });
 
   beforeEach(async () => {
+    resetPaperExitRests();
     market = new FakeMarket();
     market.lamportsPerRaw.set(mint, 0.05); // 0.05 SOL buys 1e9 raw units (1,000 tokens)
     clock = new Date();
@@ -336,6 +339,34 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     const p = await position();
     expect(p.status).toBe("open");
     expect(p.error).toMatch(/no route to sell/);
+
+    // Passed over until its rest is up: no quotes for it meanwhile.
+    const quotes = market.quotes;
+    clock = new Date(clock.getTime() + 10_000);
+    await runPaperTrading(deps());
+    expect(market.quotes).toBe(quotes);
+
+    // Tried again once the rest is up, and sold now the route is back.
+    market.noRoute.delete(mint);
+    clock = new Date(clock.getTime() + UNSELLABLE_REST_MS);
+    await runPaperTrading(deps());
+    expect(market.quotes).toBeGreaterThan(quotes);
+    expect((await position()).closeReason).toBe("stop_loss");
+  });
+
+  it("tries a requested close at once, whatever the rest", async () => {
+    await strategyWithSignal();
+    await runPaperTrading(deps());
+    market.noRoute.add(mint);
+    market.lamportsPerRaw.set(mint, 0.02);
+    clock = new Date(clock.getTime() + 60_000);
+    await runPaperTrading(deps());
+    market.noRoute.delete(mint);
+    market.lamportsPerRaw.set(mint, 0.05);
+    await prisma.paperPosition.updateMany({ where: { strategyId }, data: { closeRequested: true } });
+    clock = new Date(clock.getTime() + 10_000);
+    await runPaperTrading(deps());
+    expect((await position()).closeReason).toBe("manual");
   });
 
   it("follows the AI gate and records why it passed", async () => {
