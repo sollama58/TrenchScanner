@@ -204,11 +204,14 @@ export function classifyApiRequest(url: string, httpMethod: string, body: unknow
     return [{ provider: "unknown", endpoint: `${httpMethod} ?`, calls: 1, credits: 0 }];
   }
   const provider = providerOf(parsed.hostname);
+  // Helius Sender (sender.helius-rpc.com, regional ones like ewr-sender.helius-rpc.com) bills no
+  // credits: the trade panel's resends every 2 s read as ~38 credits a trade (audit 2026-10-19),
+  // and its keyless GET /ping (the trade canary's and the API's health checks) read as 100 each,
+  // ~11.6k phantom credits a day in the projection (Helius audit 2026-11-02).
+  const sender = provider === "helius" && /(^|[.-])sender\.helius-rpc\.com$/.test(parsed.hostname);
   const methods = rpcMethods(body);
   if (methods) {
-    // Helius Sender (sender.helius-rpc.com, regional ones like ewr-sender.helius-rpc.com) bills no
-    // credits: the trade panel's resends every 2 s read as ~38 credits a trade (audit 2026-10-19).
-    const billed = provider === "helius" && !/(^|[.-])sender\.helius-rpc\.com$/.test(parsed.hostname);
+    const billed = provider === "helius" && !sender;
     const byMethod = new Map<string, number>();
     for (const m of methods) byMethod.set(m, (byMethod.get(m) ?? 0) + 1);
     return [...byMethod].map(([method, calls]) => ({
@@ -224,7 +227,9 @@ export function classifyApiRequest(url: string, httpMethod: string, body: unknow
   const endpoint = `${httpMethod} ${normalizePath(parsed.pathname)}${keylessJupiter ? " (keyless)" : ""}`;
   const credits =
     provider === "helius"
-      ? HELIUS_REST_CREDITS
+      ? sender
+        ? 0
+        : HELIUS_REST_CREDITS
       : provider === "jupiter"
         ? keylessJupiter
           ? 0

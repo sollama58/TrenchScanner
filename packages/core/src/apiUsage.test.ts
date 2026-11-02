@@ -82,6 +82,16 @@ describe("classifyApiRequest", () => {
     ).toBe(1);
   });
 
+  it("charges nothing for Sender's keyless ping, which a REST call on Helius would be billed", () => {
+    expect(classifyApiRequest("https://sender.helius-rpc.com/ping", "GET", undefined)).toEqual([
+      { provider: "helius", endpoint: "GET /ping", calls: 1, credits: 0 },
+    ]);
+    expect(classifyApiRequest("http://ewr-sender.helius-rpc.com/ping", "GET", undefined)[0]!.credits).toBe(0);
+    expect(classifyApiRequest("https://api.helius.xyz/v0/transactions", "POST", undefined)[0]!.credits).toBe(
+      100,
+    );
+  });
+
   it("gives a REST call its route with the ids taken out", () => {
     const mint = "So11111111111111111111111111111111111111112";
     expect(
