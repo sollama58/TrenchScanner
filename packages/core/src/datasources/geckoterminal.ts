@@ -106,6 +106,13 @@ const FREE_BASE_URL = "https://api.geckoterminal.com/api/v2";
  * burst; past it the backfill spends a paid credit within the day's budget, as it did when busy.
  */
 export const GECKOTERMINAL_FREE_PER_MINUTE = 15;
+/**
+ * How long a 429 from the free API rests its gate. The retry delay alone (half a second) let the
+ * backfill knock again at once: on 2026-11-01 14,130 of 22,409 free candle calls were 429s
+ * (audit 2026-11-02). Its limit is a minute's, so a rest of half of one; meanwhile a keyed
+ * client's backfill spends a paid credit within the day's lane, or waits.
+ */
+export const GECKOTERMINAL_FREE_RATE_LIMITED_PAUSE_MS = 30_000;
 
 export class GeckoTerminalClient {
   private readonly baseUrl: string;
@@ -142,6 +149,7 @@ export class GeckoTerminalClient {
       name: "geckoterminal-free",
       perMinute: GECKOTERMINAL_FREE_PER_MINUTE,
       burst: GATE_BURST,
+      minPauseMs: GECKOTERMINAL_FREE_RATE_LIMITED_PAUSE_MS,
     });
   }
 
