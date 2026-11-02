@@ -230,8 +230,12 @@ export async function buildErrorsReport(hours: number) {
   };
 }
 
-/** The trainer's recent model fits, the requests it picked up, and the deployed lineup. */
-export async function buildTrainerReport(limit: number) {
+/**
+ * The trainer's recent model fits, the requests it picked up, and the deployed lineup. Without
+ * `metrics` the fits leave out evalMetrics, which is most of the answer (1.2 MB for 30 fits,
+ * audit 2026-11-02).
+ */
+export async function buildTrainerReport(limit: number, metrics = true) {
   const [models, statusCounts, retrains, runs] = await Promise.all([
     prisma.curatorModel.findMany({
       orderBy: { createdAt: "desc" },
@@ -245,7 +249,7 @@ export async function buildTrainerReport(limit: number) {
         trainingRows: true,
         trainingFrom: true,
         trainingTo: true,
-        evalMetrics: true,
+        evalMetrics: metrics,
         activatedAt: true,
         retiredAt: true,
       },
@@ -273,7 +277,13 @@ export async function buildTrainerReport(limit: number) {
   };
 }
 
-const trainerSchema = z.object({ limit: z.coerce.number().int().min(1).max(100).default(30) });
+const trainerSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  metrics: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+});
 
 export async function registerStatsOpsRoutes(
   app: FastifyInstance,
@@ -347,7 +357,7 @@ export async function registerStatsOpsRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    return buildTrainerReport(parsed.data.limit);
+    return buildTrainerReport(parsed.data.limit, parsed.data.metrics);
   });
 
   await registerAdminOpsRoutes(app, {
