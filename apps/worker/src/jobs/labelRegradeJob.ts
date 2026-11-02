@@ -57,10 +57,24 @@ let cursor = RULE_3_SINCE;
 /** Coins no candle source could answer, and when to ask again (candleRetry.ts). */
 const retry = new CandleRetry();
 
+/**
+ * How often restoreAlertRows looks for an alert row to put back. Its query matches nothing almost
+ * every time (an alert comes to point at an already re-graded row rarely), but it walks the
+ * re-graded rows to say so: 0.9 s a minute, every minute, on production's database, the most
+ * expensive zero-row statement in pg_stat_statements (audit 2026-11-02). A run that re-graded
+ * rows still checks at once, since it may have re-graded an alert's row.
+ */
+export const RESTORE_EVERY_MS = 30 * 60_000;
+let lastRestoreAt: number | null = null;
+/** Whether a run re-graded rows since restoreAlertRows last looked. */
+let regradedSinceRestore = false;
+
 /** Test hook. */
 export function resetRegradeCursor(): void {
   cursor = RULE_3_SINCE;
   retry.clear();
+  lastRestoreAt = null;
+  regradedSinceRestore = false;
 }
 
 /** The fields a re-grade rewrites, which rule3Grade keeps the old values of. */
@@ -225,7 +239,12 @@ export async function runLabelRegradeJob(
   const now = opts.now ?? Date.now;
   const coinsPerRun = opts.coinsPerRun ?? REGRADE_COINS_PER_RUN;
   const spacingMs = opts.spacingMs ?? CALL_SPACING_MS;
-  const restored = await restoreAlertRows();
+  const due = lastRestoreAt === null || regradedSinceRestore || now() - lastRestoreAt >= RESTORE_EVERY_MS;
+  const restored = due ? await restoreAlertRows() : 0;
+  if (due) {
+    lastRestoreAt = now();
+    regradedSinceRestore = false;
+  }
   // The oldest pending rows name the next coins; each coin's pending rows are then done together
   // from one candle read. Backed-off coins are left out, so the rows after them fill the run
   // (audit 2026-10-23, WC-1), but the cursor stays at the oldest pending row, theirs included.
@@ -364,6 +383,7 @@ export async function runLabelRegradeJob(
     }
     if (tries !== null && waiting === 0) retry.forget(tokenId);
   }
+  if ((counts.regraded ?? 0) > 0) regradedSinceRestore = true;
   const remaining = await prisma.candidateOutcome.count({ where: pendingWhere(now(), cursor) });
   if (throttled) logger.warn("pump.fun throttled the candle reads - the rest wait for the next run");
   if (pumpPaused) logger.warn("Pump.fun paused and no CoinGecko key - the rest wait for the next run");
