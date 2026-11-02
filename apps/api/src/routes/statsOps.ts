@@ -102,27 +102,48 @@ const SECRET_PARAM = /[?&](?:api[-_]?key|key|token|secret|access_token|auth)=/i;
 /** Hosts that carry the key in the path (Helius, QuickNode, Alchemy RPC URLs). */
 const KEYED_HOST = /(?:helius|quiknode|quicknode|alchemy|ankr|triton|syndica|rpcpool)/i;
 
+/** A value after a name or a scheme: the characters a key, token or password is made of. */
+const SECRET_VALUE = "[A-Za-z0-9._~+/=-]{12,}";
+/** The separator between a name and its value, in plain text or in JSON (escaped quotes). */
+const NAME_SEP = `\\\\?["']?\\s*[:=]\\s*\\\\?["']?`;
+
 /**
  * Removes anything shaped like a credential from a serialized answer: a URL with userinfo, a key
- * param or a keyed RPC host goes through core's redactUrl; Anthropic/OpenAI-style keys, bearer
- * values and long hex/base64 secrets after "key"/"secret"/"password" are replaced outright. Plain
- * URLs (a token's image, a website) are left as they are, so the data stays useful.
+ * param or a keyed RPC host goes through core's redactUrl; Telegram bot tokens (in a URL path or
+ * bare), Anthropic/OpenAI-style keys, AWS access key ids, Bearer and Basic values, and long
+ * hex/base64 secrets after "key"/"secret"/"password"/"token" (or any upper-case env-style name
+ * ending in one, such as STATS_API_TOKEN or WEB_PUSH_PRIVATE_KEY) are replaced outright. Plain
+ * URLs (a token's image, a website) are left as they are, so the data stays useful. Defence in
+ * depth: no ops answer is known to carry one (audit 2026-11-02, AP-12, 7 of 16 shapes got through
+ * before the bot-token, Basic, env-name and AWS rules).
  */
 export function scrubSecrets(text: string): string {
-  return text
-    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>\\]+/gi, (url) => {
-      const hasUserinfo = /^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@/i.test(url);
-      if (!hasUserinfo && !SECRET_PARAM.test(url) && !KEYED_HOST.test(url)) return url;
-      const redacted = redactUrl(url);
-      // redactUrl leaves a string it can't parse alone; drop the whole thing then.
-      return redacted === url ? "<redacted-url>" : redacted;
-    })
-    .replace(/\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}/g, "<redacted-key>")
-    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]{12,}/gi, "$1 <redacted>")
-    .replace(
-      /\b((?:api[-_]?key|secret|password|passwd|token)\\?["']?\s*[:=]\s*\\?["']?)[A-Za-z0-9._~+/=-]{12,}/gi,
-      "$1<redacted>",
-    );
+  return (
+    text
+      .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>\\]+/gi, (url) => {
+        const hasUserinfo = /^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@/i.test(url);
+        if (!hasUserinfo && !SECRET_PARAM.test(url) && !KEYED_HOST.test(url)) return url;
+        const redacted = redactUrl(url);
+        // redactUrl leaves a string it can't parse alone; drop the whole thing then.
+        return redacted === url ? "<redacted-url>" : redacted;
+      })
+      // A Telegram bot token: the bot id, a colon and the secret, whether in a Bot API URL or bare.
+      .replace(/(?<![0-9])\d{6,12}:[A-Za-z0-9_-]{30,}/g, "<redacted-bot-token>")
+      .replace(/\bsk-(?:ant-)?[A-Za-z0-9_-]{16,}/g, "<redacted-key>")
+      .replace(/\bAKIA[0-9A-Z]{16}\b/g, "<redacted-key>")
+      .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi, "$1 <redacted>")
+      .replace(
+        new RegExp(`\\b((?:api[-_]?key|secret|password|passwd|token)${NAME_SEP})${SECRET_VALUE}`, "gi"),
+        "$1<redacted>",
+      )
+      .replace(
+        new RegExp(
+          `\\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_(?:KEY|SECRET|TOKEN|PASSWORD)${NAME_SEP})${SECRET_VALUE}`,
+          "g",
+        ),
+        "$1<redacted>",
+      )
+  );
 }
 
 const hoursSchema = z.object({ hours: z.coerce.number().int().min(1).max(168).default(24) });
