@@ -8,6 +8,7 @@ import { usePolling } from "../hooks";
 import { MIN_GRADED_FOR_RATE, RULE_NOTE, isEarly } from "../rates";
 import { renderVsKolsCard } from "./vsKolsCard";
 import {
+  KOL_BASIS,
   KOL_ID,
   MIN_KOLS_TO_LEAD,
   TIERS,
@@ -125,8 +126,8 @@ export function ModelsVsKolsPanel({ api, targets, now }: { api: string; targets:
             {TIERS.map((tier) => {
               const m = rateOf(modelsTotal, tier);
               const k = kolRate(kol, tier);
-              const e = edge(m.pct, kolThin ? null : k.median);
-              const max = Math.max(m.pct ?? 0, k.median ?? 0, targets[tier], 1);
+              const e = edge(m.pct, kolThin ? null : k.shown);
+              const max = Math.max(m.pct ?? 0, k.shown ?? 0, targets[tier], 1);
               return (
                 <div key={tier} className="vk-duel-tile" role="listitem">
                   <div className="vk-duel-top">
@@ -144,7 +145,7 @@ export function ModelsVsKolsPanel({ api, targets, now }: { api: string; targets:
                   <DuelBar
                     side="kols"
                     label="KOL"
-                    pct={k.median}
+                    pct={k.shown}
                     max={max}
                     faded={kolThin}
                     title={kolTitle(kol, k)}
@@ -194,12 +195,12 @@ export function ModelsVsKolsPanel({ api, targets, now }: { api: string; targets:
       <p className="faint small vk-note">
         The typical KOL is the median: each KOL&apos;s own rate over the window, among those with at least{" "}
         {d.kol.map((k) => `${k.minPicks} graded picks in ${windowName(k.days)}`).join(", ")}, and the one in
-        the middle, so a few hot hands don&apos;t pull it up (the average is under each figure). A pick is a
-        coin we tracked that they bought before our clock started on it, so a coin that had already run
-        can&apos;t count for them, and a Known Side counts as its KOL. The models&apos; figures are their
-        calls together. Rates on fewer than {MIN_GRADED_FOR_RATE} graded calls, or fewer than{" "}
-        {MIN_KOLS_TO_LEAD} KOLs, are faded, and a bar fills at the goal. {RULE_NOTE}{" "}
-        <AsOf computedAt={d.computedAt} now={now} />
+        the middle, so a few hot hands don&apos;t pull it up (the average is under each figure). At 10x it is
+        the average instead: most KOLs land no 10x in a window, so the middle one reads 0%. A pick is a coin
+        we tracked that they bought before our clock started on it, so a coin that had already run can&apos;t
+        count for them, and a Known Side counts as its KOL. The models&apos; figures are their calls together.
+        Rates on fewer than {MIN_GRADED_FOR_RATE} graded calls, or fewer than {MIN_KOLS_TO_LEAD} KOLs, are
+        faded, and a bar fills at the goal. {RULE_NOTE} <AsOf computedAt={d.computedAt} now={now} />
       </p>
 
       {sharing && (
@@ -227,7 +228,7 @@ export function ModelsVsKolsPanel({ api, targets, now }: { api: string; targets:
 
 function kolTitle(kol: KolTypical | undefined, k: { median: number | null; mean: number | null }) {
   if (!kol || kol.kols === 0) return "No KOL has enough picks in this window yet";
-  return `Median of ${kol.kols} KOLs (${kol.picks.toLocaleString()} graded picks); average ${rateText(k.mean)}`;
+  return `${kol.kols} KOLs (${kol.picks.toLocaleString()} graded picks): median ${rateText(k.median)}, average ${rateText(k.mean)}`;
 }
 
 function DuelBar({
@@ -354,11 +355,15 @@ function KolRow({
             className={`vk-cell${lead ? " lead" : ""}${thin ? " early" : ""}`}
             title={`${TIER_TEXT[tier]}: ${kolTitle(kol, k)}`}
           >
-            <span className="vk-rate">{rateText(k.median)}</span>
+            <span className="vk-rate">{rateText(k.shown)}</span>
             <span className="vk-track" aria-hidden="true">
-              <i style={{ width: `${barWidth(k.median, targets[tier])}%` }} />
+              <i style={{ width: `${barWidth(k.shown, targets[tier])}%` }} />
             </span>
-            <span className="vk-avg faint">avg {rateText(k.mean)}</span>
+            <span className="vk-avg faint">
+              {KOL_BASIS[tier] === "median"
+                ? `avg ${rateText(k.mean)}`
+                : `average · median ${rateText(k.median)}`}
+            </span>
           </span>
         );
       })}

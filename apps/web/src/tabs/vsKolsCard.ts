@@ -93,7 +93,7 @@ function rowsOf(d: ModelsVsKols, days: number): { models: CardRow[]; kol: CardRo
         k && k.kols > 0
           ? `median of ${k.kols} KOL${k.kols === 1 ? "" : "s"} with ${k.minPicks}+ picks`
           : "no KOL has enough picks yet",
-      rate: (tier) => ({ pct: kolRate(k, tier).median, thin: (k?.kols ?? 0) < MIN_KOLS_TO_LEAD }),
+      rate: (tier) => ({ pct: kolRate(k, tier).shown, thin: (k?.kols ?? 0) < MIN_KOLS_TO_LEAD }),
     },
   };
 }
@@ -177,7 +177,7 @@ function duel(ctx: CanvasRenderingContext2D, d: ModelsVsKols, days: number, x0: 
   TIERS.forEach((tier, i) => {
     const by = top + 48 + blockH * i;
     const mr = rateOf(m, tier);
-    const kr = kolRate(k, tier).median;
+    const kr = kolRate(k, tier).shown;
     const max = Math.max(mr.pct ?? 0, kr ?? 0, 1);
     const e = edge(mr.pct, kolThin ? null : kr);
     ctx.fillStyle = INK;
@@ -227,7 +227,7 @@ export async function renderVsKolsCard(d: ModelsVsKols, days: number): Promise<H
     "How often their picks hit 2x in 15 min, 4x in 30, 10x in the hour, before a 50% stop.",
     {
       badge: (c, right, cy) => pill(c, right, cy, `Last ${windowName(days)}`),
-      footer: "Same grade both sides · KOL = the median KOL with enough picks",
+      footer: "Same grade both sides · KOL = median KOL (10x: average)",
       link: "trenchscanner.app",
       time: true,
     },

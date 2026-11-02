@@ -55,14 +55,27 @@ export const KOL_ID = "kol";
 /** KOLs that must count in a window before the typical KOL can lead a column. */
 export const MIN_KOLS_TO_LEAD = 3;
 
-/** The typical KOL's median and mean in a tier. */
+/**
+ * Which figure stands for the typical KOL in a tier: the median, except at 10x, where it is the
+ * mean (user decision 2026-11-02). Most KOLs land no 10x in a window, so the median KOL reads 0%
+ * almost always; the mean is the real rate spread over them, never a made-up floor.
+ */
+export const KOL_BASIS: Record<Tier, "median" | "average"> = {
+  "2x": "median",
+  "4x": "median",
+  "10x": "average",
+};
+
+/** The typical KOL's median and mean in a tier, and the one shown (`shown`, per KOL_BASIS). */
 export function kolRate(
   k: KolTypical | undefined,
   tier: Tier,
-): { median: number | null; mean: number | null } {
-  if (!k) return { median: null, mean: null };
+): { median: number | null; mean: number | null; shown: number | null } {
+  if (!k) return { median: null, mean: null, shown: null };
   const key = tier === "2x" ? "r2x" : tier === "4x" ? "r4x" : "r10x";
-  return { median: k.median[key], mean: k.mean[key] };
+  const median = k.median[key];
+  const mean = k.mean[key];
+  return { median, mean, shown: KOL_BASIS[tier] === "median" ? median : mean };
 }
 
 /** The window's typical KOL; undefined when the answer has none. */
@@ -86,7 +99,7 @@ export function leaderOf(
     if (pct === null || n < minN) continue;
     if (!best || pct > best.pct) best = { id: r.id, pct };
   }
-  const k = kolRate(kol, tier).median;
+  const k = kolRate(kol, tier).shown;
   if (kol && kol.kols >= MIN_KOLS_TO_LEAD && k !== null && (!best || k > best.pct))
     best = { id: KOL_ID, pct: k };
   return best && best.pct > 0 ? best.id : null;
