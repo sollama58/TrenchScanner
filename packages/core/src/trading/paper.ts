@@ -56,7 +56,24 @@ export const MAX_PAPER_STRATEGIES = 10;
 export const DEFAULT_PAPER_BANKROLL_SOL = 10;
 /** Skips kept on a strategy for the admin to read. */
 const RECENT_SKIPS = 30;
-/** A sale with no route is tried again each pass; noted on the position meanwhile. */
+/**
+ * A position that could not be priced or sold (no price and no sell route: a coin that died) is
+ * passed over for this long, then tried again; noted on the position meanwhile. Every pass (10 s)
+ * used to quote each one twice, and production's handful of dead positions made 115k Jupiter
+ * quotes a day, 92% of them failing (audit 2026-11-02, /stats/ops/api-usage "paper-trading"). A
+ * close the admin asks for is tried at once whatever the rest.
+ */
+export const UNSELLABLE_REST_MS = 2 * 60_000;
+const unsellableUntil = new Map<string, number>();
+/** Test hook. */
+export function resetPaperExitRests(): void {
+  unsellableUntil.clear();
+}
+function restUnsellable(positionId: string, now: Date): void {
+  // Bounded by MAX_POSITIONS_PER_PASS in practice; a closed position's entry is dropped on its next pass.
+  if (unsellableUntil.size > 10 * MAX_POSITIONS_PER_PASS) unsellableUntil.clear();
+  unsellableUntil.set(positionId, now.getTime() + UNSELLABLE_REST_MS);
+}
 const MAX_POSITIONS_PER_PASS = 300;
 const PAPER_PASS_BUDGET_MS = 60_000;
 
@@ -190,6 +207,11 @@ async function managePaperExits(
   const solUsd = prices.get(WSOL_MINT);
   for (const position of open) {
     if (!inBudget()) return;
+    const restUntil = unsellableUntil.get(position.id);
+    if (restUntil !== undefined) {
+      if (!position.closeRequested && now().getTime() < restUntil) continue;
+      unsellableUntil.delete(position.id);
+    }
     summary.exitsChecked++;
     try {
       if (await managePaperExit(deps, position, prices.get(position.mint), solUsd, now(), notes))
@@ -245,6 +267,7 @@ async function managePaperExit(
           where: { id: position.id },
           data: { error: "no price for the token right now" },
         });
+        restUnsellable(position.id, now);
         return false;
       }
       decision = { all: true, fraction: 1, reason: position.rungsTaken > 0 ? "trail_max_hold" : "max_hold" };
@@ -287,11 +310,12 @@ async function managePaperExit(
     out = penalizedFill(BigInt(quote.outAmount), config.fillPenaltyBps);
   } catch (err) {
     if (err instanceof NoRouteError) {
-      // As a real sale would: no route, nothing sold. Tried again next pass.
+      // As a real sale would: no route, nothing sold. Tried again after UNSELLABLE_REST_MS.
       await prisma.paperPosition.update({
         where: { id: position.id },
         data: { error: `no route to sell (${decision.reason})` },
       });
+      restUnsellable(position.id, now);
       return false;
     }
     throw err;
