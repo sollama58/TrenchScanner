@@ -67,6 +67,7 @@ import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
 import { registerStatsModelRoutes } from "./routes/statsModels.js";
+import { registerStatsOpsRoutes } from "./routes/statsOps.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerWatchlistRoutes } from "./routes/watchlist.js";
 import { registerModelAlertKeyRoutes } from "./routes/modelAlertKeys.js";
@@ -869,6 +870,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
   await app.register(registerStatsModelRoutes, { prefix: "/stats", env });
+  // The Admin tab's reads for the same token holders, read-only - see routes/statsOps.ts.
+  await app.register(registerStatsOpsRoutes, { prefix: "/stats/ops", env, timings, liveRefresher, reports });
   // Every admin write lands in AdminAction (adminActionLog.ts), in each /admin plugin below.
   await app.register(registerAdminRoutes, { prefix: "/admin", env, admins });
   // Same /admin prefix and the same authenticateAdmin gate, registered separately only to keep
