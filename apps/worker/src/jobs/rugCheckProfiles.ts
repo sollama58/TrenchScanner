@@ -120,8 +120,16 @@ export async function settleRugCheckRefresh(): Promise<void> {
   await backgroundRefresh;
 }
 
-/** How long the scan waits on RugCheck for mints with no usable report - see resolveRugProfiles. */
-export const DEFAULT_AWAIT_DEADLINE_MS = 10_000;
+/**
+ * How long the scan waits on RugCheck for mints with no usable report - see resolveRugProfiles.
+ * Was 10 s (the client's own request timeout). Audit 2026-11-02 (DS-1): 1-2 awaited lookups
+ * stalled past it in every cycle, so every cycle's decisions waited the full 10 s plus the grace
+ * (`stagesMs.rugCheck` 12.0-12.4 s in each sampled cycle, with `fetched` 0-6 and `timedOut` 1-2),
+ * and the first early decision landed at 16-22 s. A lookup that has not answered in 3 s is
+ * stalled, not slow: it finishes behind the cycle and lands in the cache for the next one, and
+ * the coin is decided then. Nothing is lost but the wait.
+ */
+export const DEFAULT_AWAIT_DEADLINE_MS = 3_000;
 
 /**
  * Mints whose awaited lookup last came back "failed" (a transport error, a 429, a 5xx - never a
@@ -382,8 +390,9 @@ export async function resolveRugProfiles(
         else lookupBackoff.fail(mint, now);
       }
     }
+    // Info, not a warning: with a 3 s wait a stalled lookup outruns it in most cycles by design.
     if (late)
-      logger.warn("rugcheck lookups outran the cycle's wait", {
+      logger.info("rugcheck lookups outran the cycle's wait", {
         awaited: awaited.length,
         timedOut,
         deadlineMs,
