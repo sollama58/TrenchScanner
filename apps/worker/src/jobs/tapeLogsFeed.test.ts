@@ -52,7 +52,13 @@ describe("tape logs feed", () => {
   it("turns new coins away at its cap and counts them", () => {
     const feed = new TapeLogsFeed(fakeStream(), 1);
     feed.follow([MINT, MINT2], 0);
-    expect(feed.takeStats(0)).toEqual({ logsCoins: 1, logsCovered: 0, logsTrades: 0, logsCapped: 1 });
+    expect(feed.takeStats(0)).toEqual({
+      logsCoins: 1,
+      logsCovered: 0,
+      logsTrades: 0,
+      logsCapped: 1,
+      logsCredits: 0,
+    });
     expect(feed.takeStats(0).logsCapped).toBe(0);
   });
 
@@ -112,6 +118,19 @@ describe("tape logs feed", () => {
     decoded.trades = [trade({ sol: null })];
     feed.onLogs(CURVE_KEY_PREFIX + MINT, "sig1", []);
     expect(feed.coveredSince(MINT, 1)).toBeNull();
+  });
+
+  it("counts its logs' bytes as credits, for the page budget and the heartbeat", () => {
+    const feed = new TapeLogsFeed(fakeStream(), 10);
+    feed.follow([MINT], 0);
+    feed.onLogs(CURVE_KEY_PREFIX + MINT, "sig1", [], 30_000);
+    // Billed after the coin was let go too; not another feed's key.
+    feed.onLogs(POOL_KEY_PREFIX + MINT2, "sig2", [], 20_000);
+    feed.onLogs("other:key", "sig3", [], 50_000);
+    expect(feed.takeCredits()).toBeCloseTo(1, 6);
+    expect(feed.takeCredits()).toBe(0);
+    expect(feed.takeStats(0).logsCredits).toBe(1);
+    expect(feed.takeStats(0).logsCredits).toBe(0);
   });
 
   it("keeps the newest MAX_TRADES trades", () => {

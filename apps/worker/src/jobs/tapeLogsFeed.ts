@@ -2,6 +2,7 @@ import {
   createLogger,
   pumpCurveAddressOf,
   pumpSwapPoolOf,
+  streamCredits,
   tradesFromLogs,
   type HeliusAccountStream,
   type TapeTrade,
@@ -20,7 +21,8 @@ const logger = createLogger("tape-logs");
  *
  * Followed: the coins the live tape queues (contenders, then alerts held for a wallet figure), up
  * to `maxCoins`, on the scanner's existing Helius socket. A coin not asked about for IDLE_MS is
- * let go. The live tape (liveTape.ts) keeps a page it read current from these trades instead of
+ * let go. Its bytes are billed like any stream's, and the live tape pays them out of its page
+ * budget (takeCredits), so following a coin never raises the tape's spend, only moves it. The live tape (liveTape.ts) keeps a page it read current from these trades instead of
  * reading it again, and builds a page from them alone once they cover what a page would.
  */
 
@@ -53,12 +55,18 @@ export type TapeLogsStats = {
   logsTrades: number;
   /** Coins turned away at maxCoins since the last call. */
   logsCapped: number;
+  /** Helius credits the followed coins' logs cost since the last call (their bytes). */
+  logsCredits: number;
 };
 
 export class TapeLogsFeed {
   private readonly followed = new Map<string, Followed>();
   private tradesRead = 0;
   private capped = 0;
+  /** Bytes of this feed's logs not yet charged to the page budget (takeCredits). */
+  private unchargedBytes = 0;
+  /** Bytes since the last takeStats. */
+  private statBytes = 0;
 
   constructor(
     private readonly stream: Stream,
@@ -115,14 +123,20 @@ export class TapeLogsFeed {
     return f ? f.trades.filter((t) => t.atMs >= sinceMs) : [];
   }
 
-  /** One transaction's logs from the socket, for one of this feed's keys. Never throws. */
-  onLogs(key: string, signature: string, logs: readonly string[]): boolean {
+  /**
+   * One transaction's logs from the socket, for one of this feed's keys, `bytes` the message's size
+   * as billed. Never throws.
+   */
+  onLogs(key: string, signature: string, logs: readonly string[], bytes = 0): boolean {
     const mint = key.startsWith(CURVE_KEY_PREFIX)
       ? key.slice(CURVE_KEY_PREFIX.length)
       : key.startsWith(POOL_KEY_PREFIX)
         ? key.slice(POOL_KEY_PREFIX.length)
         : null;
     if (mint === null) return false;
+    // Billed whether or not the coin is still followed: a message after its unsubscribe costs too.
+    this.unchargedBytes += bytes;
+    this.statBytes += bytes;
     const f = this.followed.get(mint);
     if (!f) return true;
     try {
@@ -158,6 +172,13 @@ export class TapeLogsFeed {
     return true;
   }
 
+  /** Helius credits this feed's logs cost since the last call: the live tape charges them to its page budget. */
+  takeCredits(): number {
+    const credits = (this.unchargedBytes / 100_000) * 2;
+    this.unchargedBytes = 0;
+    return credits;
+  }
+
   /** The counts since the last call, for the scan's heartbeat. */
   takeStats(now: number = Date.now()): TapeLogsStats {
     let covered = 0;
@@ -167,9 +188,11 @@ export class TapeLogsFeed {
       logsCovered: covered,
       logsTrades: this.tradesRead,
       logsCapped: this.capped,
+      logsCredits: streamCredits(this.statBytes),
     };
     this.tradesRead = 0;
     this.capped = 0;
+    this.statBytes = 0;
     return out;
   }
 

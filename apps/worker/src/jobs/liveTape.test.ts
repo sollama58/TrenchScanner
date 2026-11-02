@@ -389,6 +389,24 @@ describe("live tape", () => {
       expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
     });
 
+    it("pays the logs' credits out of the page budget, a page per 10 credits", async () => {
+      const helius = fakeHelius();
+      const logs = { ...fakeLogs(null, []), takeCredits: vi.fn(() => 20) };
+      await readLiveTape(["a", "b", "c", "d"], helius, { maxPages: 4, refreshMs: 60_000, nowMs: 0, logs });
+      // 20 credits of logs is 2 of the minute's 4 pages.
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
+
+      // A minute on, logs worth more than a minute's pages leave none, and the debt stops at a minute.
+      logs.takeCredits.mockReturnValue(1_000);
+      await readLiveTape(["e"], helius, { maxPages: 4, refreshMs: 60_000, nowMs: 60_000, logs });
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
+      logs.takeCredits.mockReturnValue(0);
+      await readLiveTape(["e"], helius, { maxPages: 4, refreshMs: 60_000, nowMs: 90_000, logs });
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
+      await readLiveTape(["e"], helius, { maxPages: 4, refreshMs: 60_000, nowMs: 150_000, logs });
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(3);
+    });
+
     it("builds a page from the logs alone once they cover what a page would", async () => {
       const helius = fakeHelius();
       const logs = fakeLogs(0, [logsTrade(RISKY, 2_000)]);

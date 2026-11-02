@@ -382,7 +382,7 @@ async function main() {
             if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes, slot);
             else if (key.startsWith(POOL_STREAM_KEY_PREFIX)) onPoolStreamUpdate(key, data, bytes, slot);
           },
-          (key, signature, logs) => void tapeLogs?.onLogs(key, signature, logs),
+          (key, signature, logs, bytes) => void tapeLogs?.onLogs(key, signature, logs, bytes),
         )
           .metered("stream/holders-curves-burns")
           .maxTxKeys(env.HELIUS_HOLDER_STREAM_MAX_KEYS)

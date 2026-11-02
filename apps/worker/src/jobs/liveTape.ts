@@ -90,6 +90,18 @@ function takePages(want: number, perMinute: number, nowMs: number): number {
   return got;
 }
 
+/**
+ * Charges the logs feed's credits to the page budget, at a page's 10 credits, so pages and logs
+ * together stay under LIVE_TAPE_PAGES_PER_CYCLE's ceiling. The budget may go into debt (no pages
+ * until it is paid off) but at most a minute's worth: past it the logs alone are over the ceiling
+ * and a deeper debt would only starve the pages for longer after they quiet down.
+ */
+function chargeLogs(credits: number, perMinute: number, nowMs: number): void {
+  if (!(credits > 0)) return;
+  takePages(0, perMinute, nowMs);
+  pageBudget.tokens = Math.max(-perMinute, pageBudget.tokens - credits / 10);
+}
+
 /** A page taken from the budget that Helius did not bill. */
 function returnPage(perMinute: number): void {
   pageBudget.tokens = Math.min(perMinute, pageBudget.tokens + 1);
@@ -108,12 +120,15 @@ export interface LogsTrades {
   follow(mints: readonly string[], now: number): void;
   coveredSince(mint: string, now: number): number | null;
   tradesSince(mint: string, sinceMs: number): TapeTrade[];
+  /** Helius credits the feed's logs cost since the last call, charged to the page budget. */
+  takeCredits?(): number;
   /** The feed's own counts for the heartbeat (coins followed and covered, trades read). */
   takeStats?(now?: number): {
     logsCoins: number;
     logsCovered: number;
     logsTrades: number;
     logsCapped: number;
+    logsCredits: number;
   };
 }
 let logsFeed: LogsTrades | null = null;
@@ -166,6 +181,7 @@ export function takeLiveTapeStats(): {
   logsCovered?: number;
   logsTrades?: number;
   logsCapped?: number;
+  logsCredits?: number;
 } {
   const out = {
     pages: pagesRead,
@@ -231,6 +247,7 @@ export async function readLiveTape(
   const now = opts.nowMs ?? Date.now();
   const logs = opts.logs !== undefined ? opts.logs : logsFeed;
   logs?.follow(mints, now);
+  if (logs?.takeCredits) chargeLogs(logs.takeCredits(), opts.maxPages, now);
   const missing: string[] = [];
   const stale: string[] = [];
   for (const m of mints) {
