@@ -245,6 +245,10 @@ describe("holder counts", () => {
     expect(countCutFor(20, 19)).toBe(16);
     expect(countCutFor(21, 20)).toBe(17);
     expect(countCutFor(21, null)).toBe(21);
+    // Under five holders read no count cut fires (owner decision 2026-11-02).
+    expect(countCutFor(21, 1)).toBe(Number.POSITIVE_INFINITY);
+    expect(countCutFor(21, 4)).toBe(Number.POSITIVE_INFINITY);
+    expect(countCutFor(21, 5)).toBe(5);
   });
 
   it("reads snipers over the top 25, else the top-10 share as a count", () => {

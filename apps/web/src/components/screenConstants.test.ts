@@ -19,13 +19,14 @@ describe("the alert card's safety-screen cuts", () => {
       "SAFETY_REJECT_LINKED_COUNT",
       "SAFETY_REJECT_CEX_FUNDED_COUNT",
       "SAFETY_COUNT_CUT_HOLDERS",
+      "SAFETY_COUNT_CUT_MIN_HOLDERS",
     ] as const;
     for (const name of names) expect({ name, value: card[name] }).toEqual({ name, value: core[name] });
   });
 
   it("scale count cuts to the holders read as core does", () => {
     for (const cut of [core.SAFETY_REJECT_LINKED_COUNT, core.SAFETY_REJECT_CEX_FUNDED_COUNT])
-      for (const checked of [null, undefined, -1, 0, 1, 2, 10, 19, 24, 25, 26, 40])
+      for (const checked of [null, undefined, -1, 0, 1, 2, 4, 5, 10, 19, 24, 25, 26, 40])
         expect({ cut, checked, at: card.countCutFor(cut, checked) }).toEqual({
           cut,
           checked,

@@ -1527,13 +1527,17 @@ export const SAFETY_REJECT_LINKED_COUNT = 20;
 export const SAFETY_REJECT_CEX_FUNDED_COUNT = 21;
 /** SAFETY_COUNT_CUT_HOLDERS: the holder list the count cuts are set on. */
 export const SAFETY_COUNT_CUT_HOLDERS = 25;
+/** SAFETY_COUNT_CUT_MIN_HOLDERS: under this many read, no count cut fires (2026-11-02). */
+export const SAFETY_COUNT_CUT_MIN_HOLDERS = 5;
 
 /**
  * countCutFor: a count cut set on the top 25, for a reading over fewer holders - the same share,
- * rounded up (20 of 25 is 16 of 19). The screen applies it the same way.
+ * rounded up (20 of 25 is 16 of 19), and no cut at all under SAFETY_COUNT_CUT_MIN_HOLDERS read.
+ * The screen applies it the same way.
  */
 export function countCutFor(cut: number, checked: number | null | undefined): number {
   if (checked == null || checked <= 0 || checked >= SAFETY_COUNT_CUT_HOLDERS) return cut;
+  if (checked < SAFETY_COUNT_CUT_MIN_HOLDERS) return Number.POSITIVE_INFINITY;
   return Math.ceil((cut * checked) / SAFETY_COUNT_CUT_HOLDERS);
 }
 

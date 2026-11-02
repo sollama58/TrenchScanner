@@ -9,6 +9,7 @@ import {
   SAFETY_REJECT_LINKED_COUNT,
   SAFETY_REJECT_CEX_FUNDED_PCT,
   SAFETY_COUNT_CUT_HOLDERS,
+  SAFETY_COUNT_CUT_MIN_HOLDERS,
   countCutFor,
   SAFETY_MAX_LARGEST_HOLDER_PCT,
   SAFETY_MIN_PREBOND_SECONDS,
@@ -292,8 +293,12 @@ export function walletSafetyCutsSql(features: Prisma.Sql = Prisma.raw('"features
     AND COALESCE((${features}->>'largestHolderPct')::float8 <= ${SAFETY_MAX_LARGEST_HOLDER_PCT}, true)`;
 }
 
-/** countCutFor in SQL, over a holders-read expression (null or 25 and over keep the cut as set). */
+/**
+ * countCutFor in SQL, over a holders-read expression (null or 25 and over keep the cut as set;
+ * under SAFETY_COUNT_CUT_MIN_HOLDERS read the cut is infinity, which no count reaches).
+ */
 function countCutSql(cut: number, checked: Prisma.Sql): Prisma.Sql {
-  return Prisma.sql`(CASE WHEN ${checked} > 0 AND ${checked} < ${SAFETY_COUNT_CUT_HOLDERS}
+  return Prisma.sql`(CASE WHEN ${checked} > 0 AND ${checked} < ${SAFETY_COUNT_CUT_MIN_HOLDERS} THEN 'Infinity'::float8
+    WHEN ${checked} > 0 AND ${checked} < ${SAFETY_COUNT_CUT_HOLDERS}
     THEN CEIL(${cut}::float8 * ${checked} / ${SAFETY_COUNT_CUT_HOLDERS}) ELSE ${cut} END)`;
 }

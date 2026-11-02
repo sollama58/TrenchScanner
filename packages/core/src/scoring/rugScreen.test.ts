@@ -64,6 +64,11 @@ describe("runRugScreen", () => {
     expect(countCutFor(20, 19)).toBe(16);
     expect(countCutFor(21, 20)).toBe(17);
     expect(countCutFor(20, undefined)).toBe(20);
+    // Under SAFETY_COUNT_CUT_MIN_HOLDERS read, no count cut fires: 21/25 scaled to one holder read
+    // was 1/1 (owner decision 2026-11-02, audit SW-3).
+    expect(countCutFor(21, 1)).toBe(Number.POSITIVE_INFINITY);
+    expect(countCutFor(20, 4)).toBe(Number.POSITIVE_INFINITY);
+    expect(countCutFor(21, 5)).toBe(5);
     const linked = (n: number) =>
       runRugScreen({ ...safeProfile, linkedWalletCount: n, linkedWalletsChecked: 19 });
     expect(linked(16).passed).toBe(false);
@@ -386,9 +391,11 @@ function parityRows(): Features[] {
     ["freshTopHolderCount", "freshTopHoldersChecked", Math.floor((SAFETY_MAX_FRESH_WALLET_PCT * 25) / 100)],
   ];
   for (const [count, checked, cut] of counts) {
-    for (const of of [null, -1, 0, 1, 2, 10, 19, 20, 24, SAFETY_COUNT_CUT_HOLDERS, 26]) {
+    for (const of of [null, -1, 0, 1, 2, 4, 5, 10, 19, 20, 24, SAFETY_COUNT_CUT_HOLDERS, 26]) {
       const at = countCutFor(cut, of);
-      for (const n of [0, at - 1, at, at + 1]) rows.push({ [count]: n, [checked]: of });
+      // Under the floor the cut is Infinity (no JSON number): every count must pass.
+      const ns = Number.isFinite(at) ? [0, at - 1, at, at + 1] : [0, 1, of ?? 0, 25];
+      for (const n of ns) rows.push({ [count]: n, [checked]: of });
     }
     rows.push({ [count]: null, [checked]: 25 });
   }

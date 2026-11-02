@@ -66,15 +66,25 @@ export const SAFETY_REJECT_CEX_FUNDED_PCT = 84;
 
 /** The holder list the count cuts are set on: the top 25, pools aside (core's LINKED_TOP_N). */
 export const SAFETY_COUNT_CUT_HOLDERS = 25;
+/**
+ * Under this many holders read, no count cut fires (owner decision 2026-11-02, audit SW-3). Scaled
+ * to one or two holders read, 21/25 became 1/1, and a coin whose chain list held one holder past
+ * its pools was rejected on "1 of the 1 top holders were funded from an exchange": 11 of 76 CEX
+ * first rejections in 7 days fired on fewer than 10 read, most passing later as the list grew.
+ * Cutting on data not yet read is noise, not safety; the cut applies once the list is in.
+ */
+export const SAFETY_COUNT_CUT_MIN_HOLDERS = 5;
 
 /**
  * A count cut set on the top 25, for a reading that covered fewer holders: the same share of the
  * list, rounded up. A coin with 19 holders past its pools, or one read from RugCheck's 20 accounts
  * before the chain's top 25 came in, would otherwise need 20 of its 19 linked to fail - a cut that
- * can never fire. 20/25 on 19 read is 16/19; on 25 or more the cut stands as set.
+ * can never fire. 20/25 on 19 read is 16/19; on 25 or more the cut stands as set. Under
+ * SAFETY_COUNT_CUT_MIN_HOLDERS read the cut is Infinity: no count reaches it.
  */
 export function countCutFor(cut: number, checked: number | null | undefined): number {
   if (typeof checked !== "number" || checked <= 0 || checked >= SAFETY_COUNT_CUT_HOLDERS) return cut;
+  if (checked < SAFETY_COUNT_CUT_MIN_HOLDERS) return Number.POSITIVE_INFINITY;
   return Math.ceil((cut * checked) / SAFETY_COUNT_CUT_HOLDERS);
 }
 
