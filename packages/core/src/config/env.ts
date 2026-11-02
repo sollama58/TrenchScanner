@@ -468,7 +468,10 @@ const envSchema = z.object({
   // be decided on trades ~30-50 times a minute (outcomes 2026-10-31), ~4-6 credits a minute on the
   // logs against ~3 for a page every 3 minutes that holds only its last 2: 10 such coins take
   // ~40% of the budget, and at most all of it at the 90th percentile's rate. At most this many
-  // coins at once; 0 turns it off.
+  // coins at once; 0 turns it off. The budget is enforced on the feed itself (audit 2026-11-02,
+  // DS-2): a busy curve's messages are mostly failed swaps, billed all the same, and the feed's
+  // first hours ran 4-6x the budget, so a coin whose logs take the last minute over it is let go
+  // (back to pages) and held off for ten minutes (worker's tapeLogsFeed.ts).
   LIVE_TAPE_LOGS_MAX_COINS: z.coerce.number().int().nonnegative().default(10),
 
   // The empty-top-10-wallet signal (apps/worker/src/jobs/walletHoldings.ts): how much a top-10

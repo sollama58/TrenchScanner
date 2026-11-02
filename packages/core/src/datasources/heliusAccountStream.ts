@@ -215,8 +215,11 @@ export class HeliusAccountStream {
     private readonly onAccount:
       ((key: string, data: string, bytes: number, slot: number | null) => void) | null = null,
     /**
-     * Each successful transaction's logs delivered for a "logs" key, with its signature, the
-     * message's size and its slot. Failed transactions are dropped here: they traded nothing.
+     * Each transaction's logs delivered for a "logs" key, with its signature, the message's size
+     * and its slot. A failed transaction traded nothing, so it comes with no logs, but it still
+     * comes: Helius bills its bytes like any other message, and on a busy curve most messages are
+     * failed swaps (audit 2026-11-02, DS-2: the live tape's feed charged itself for a quarter of
+     * what the socket cost while the failed ones went unbilled to its budget).
      */
     private readonly onLogs:
       | ((key: string, signature: string, logs: string[], bytes: number, slot: number | null) => void)
@@ -564,10 +567,10 @@ export class HeliusAccountStream {
       const value = result?.value;
       if (key === undefined || typeof value?.signature !== "string" || !Array.isArray(value.logs)) return;
       this.stats.logsUpdates += 1;
-      if (value.err !== null && value.err !== undefined) return;
+      const failed = value.err !== null && value.err !== undefined;
       const slot = typeof result?.context?.slot === "number" ? result.context.slot : null;
       try {
-        this.onLogs?.(key, value.signature, value.logs as string[], raw.length, slot);
+        this.onLogs?.(key, value.signature, failed ? [] : (value.logs as string[]), raw.length, slot);
       } catch (err) {
         logger.warn("stream logs handler failed", { key, error: String(err) });
       }

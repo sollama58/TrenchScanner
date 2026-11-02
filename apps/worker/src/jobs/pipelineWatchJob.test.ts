@@ -35,6 +35,9 @@ import {
   type TrainerJobCheck,
   findTelegramHoldProblems,
   TELEGRAM_HOLD_ALERT_MS,
+  findFdsaProblems,
+  FDSA_QUIET_MS,
+  FDSA_QUIET_MIN_ALERTS,
 } from "./pipelineWatchJob.js";
 
 const MIN = 60_000;
@@ -692,6 +695,54 @@ describe("pipeline watch: warning before a run-out (audit 2026-10-27, T3)", () =
     expect(problems[0]!.text).toContain(
       "Trainer job curator-training: no run has completed for 30 h - each one was cut",
     );
+  });
+});
+
+describe("pipeline watch: the AI desk (audit 2026-11-02, DB-4)", () => {
+  const check = (over: Partial<Parameters<typeof findFdsaProblems>[0] & object> = {}) => ({
+    deskRunning: true,
+    scannerEnabled: true,
+    lastReviewAt: new Date(NOW - MIN),
+    alertsInWindow: 40,
+    ...over,
+  });
+
+  it("tells the admins when the desk is set to run but the scanner has FDSA off", () => {
+    const problems = findFdsaProblems(check({ scannerEnabled: false }), NOW);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ key: "fdsa-off", side: true });
+    expect(problems[0]!.text).toContain("FDSA_ENABLED");
+    // Off at the scanner is not judged on the review flow too: one notice, not two.
+    expect(findFdsaProblems(check({ scannerEnabled: false, lastReviewAt: null }), NOW)).toHaveLength(1);
+  });
+
+  it("flags a desk that stored no review for half an hour while alerts kept arriving, and no restart", () => {
+    const quiet = check({ lastReviewAt: new Date(NOW - FDSA_QUIET_MS) });
+    const problems = findFdsaProblems(quiet, NOW);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ key: "fdsa-quiet", side: true });
+    expect(problems[0]!.text).toContain("40 curated alerts");
+    // Never a review at all counts as quiet too.
+    expect(findFdsaProblems(check({ lastReviewAt: null }), NOW)).toHaveLength(1);
+    // The scanner's view unknown (an old heartbeat): judged on the flow alone.
+    expect(findFdsaProblems(check({ scannerEnabled: null, lastReviewAt: null }), NOW)).toHaveLength(1);
+  });
+
+  it("stays quiet when the market is: few alerts, a recent review, a paused desk, or no desk", () => {
+    expect(
+      findFdsaProblems(check({ lastReviewAt: null, alertsInWindow: FDSA_QUIET_MIN_ALERTS - 1 }), NOW),
+    ).toEqual([]);
+    expect(findFdsaProblems(check({ lastReviewAt: new Date(NOW - FDSA_QUIET_MS + MIN) }), NOW)).toEqual([]);
+    expect(
+      findFdsaProblems(check({ deskRunning: false, scannerEnabled: false, lastReviewAt: null }), NOW),
+    ).toEqual([]);
+    expect(findFdsaProblems(null, NOW)).toEqual([]);
+  });
+
+  it("words the notice under the scanner-jobs heading, not as a stall", () => {
+    const text = notificationText(findFdsaProblems(check({ scannerEnabled: false }), NOW), [], []);
+    expect(text).toContain("scanner jobs need a look");
+    expect(text).not.toContain("pipeline stalled");
   });
 });
 

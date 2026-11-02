@@ -363,7 +363,8 @@ describe("live tape", () => {
       const logs = fakeLogs(null, []);
       const opts = { maxPages: 2, refreshMs: 60_000, logs };
       await readLiveTape([MINT], helius, { ...opts, nowMs: 1000 });
-      expect(logs.follow).toHaveBeenCalledWith([MINT], 1000);
+      // The page budget, 2 pages at 10 credits, is the feed's ceiling in credits a minute (DS-2).
+      expect(logs.follow).toHaveBeenCalledWith([MINT], 1000, 20);
       expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
 
       // Covered since before the page was read: due by age, but brought up to now from the logs,

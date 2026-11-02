@@ -8,6 +8,7 @@ import {
   type RugCheckProfileResult,
 } from "@trenchscanner/core";
 import {
+  DEFAULT_AWAIT_DEADLINE_MS,
   STALE_MAX_AGE_MS,
   YOUNG_ABSENT_RECHECK_MINUTES,
   absentTtlFor,
@@ -488,6 +489,13 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(again.profiles.has(queued)).toBe(true);
     expect(again.stats.heldOff).toBeUndefined();
     expect(next.calls.flat()).toContain(queued);
+  });
+
+  it("waits well under the client's 10 s request timeout by default", () => {
+    // Audit 2026-11-02 (DS-1): at 10 s one stalled RugCheck request held every decision of every
+    // cycle for 12 s. The default wait must stay short of the client's request timeout, so a
+    // stalled request is left behind, not waited out.
+    expect(DEFAULT_AWAIT_DEADLINE_MS).toBeLessThanOrEqual(3_000);
   });
 
   it("makes no request at all for an empty candidate list", async () => {

@@ -15,6 +15,12 @@
 #     .env.example never hear of.
 #  4. Every key .env.example sets must be a schema key (or one of the lists below): it documented
 #     CURATOR_MODEL_FAMILIES long after the schema stopped reading it (full audit 2026-10-27, CH-16).
+#  5. No key in render.yaml carries a literal "true" or "false" value. A literal is re-applied by
+#     every Blueprint sync, so an on/off switch the owner flips in the dashboard is flipped back by
+#     the next merge that touches render.yaml, without notice: FDSA_ENABLED went back to "false" on
+#     2026-11-02 (#1209) and the AI desk was off for a day (full audit 2026-11-02, FD-1 / DB-6).
+#     Toggles are declared `sync: false` with their default in env.ts; TOGGLE_LITERALS_ALLOWED
+#     names any that must stay literal, with the reason.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -50,6 +56,9 @@ DIRECT_READS=(
   # Optional override of donate.gg's API base (apps/api/src/donateGg.ts), for tests; unset in prod.
   DONATE_GG_BASE_URL
 )
+
+# Toggles that may carry a literal "true"/"false" in render.yaml after all (point 5), with why.
+TOGGLE_LITERALS_ALLOWED=()
 
 # "service KEY" pairs: the service reads KEY, so render.yaml must declare it there (point 2).
 REQUIRED=(
@@ -182,6 +191,25 @@ if [ "${#dead[@]}" -gt 0 ]; then
   echo "check-env-keys: .env.example sets keys that $ENV_TS does not read:" >&2
   printf '  %s\n' "${dead[@]}" >&2
   echo "Remove them from .env.example, or add them to envSchema." >&2
+  failed=1
+fi
+
+# 5. No literal "true"/"false" value in render.yaml (comment lines excluded).
+literal_toggles=$(awk '
+  /^[ \t]*#/ { next }
+  /^[ \t]*- key: ["'"'"']?[A-Za-z][A-Za-z0-9_]*["'"'"']?[ \t]*(#.*)?$/ { key = $3; gsub(/["'"'"']/, "", key); next }
+  /^[ \t]*value: ["'"'"']?(true|false)["'"'"']?[ \t]*(#.*)?$/ { if (key != "") print key; key = "" }
+  { key = "" }
+' "$RENDER_YAML" | sort -u)
+toggles=()
+for key in $literal_toggles; do
+  if printf '%s\n' "${TOGGLE_LITERALS_ALLOWED[@]+"${TOGGLE_LITERALS_ALLOWED[@]}"}" | grep -qx "$key"; then continue; fi
+  toggles+=("$key")
+done
+if [ "${#toggles[@]}" -gt 0 ]; then
+  echo "check-env-keys: $RENDER_YAML sets these toggles to a literal \"true\"/\"false\", which every Blueprint sync re-applies over the dashboard:" >&2
+  printf '  %s\n' "${toggles[@]}" >&2
+  echo "Declare each \`sync: false\` with its default in $ENV_TS, or list it with a reason in TOGGLE_LITERALS_ALLOWED in $0." >&2
   failed=1
 fi
 
