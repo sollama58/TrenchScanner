@@ -749,10 +749,11 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     void solPrice.warm();
   });
   // One quote-coin price for both: a coin quoted in PUMP or USD1 is read once for its chart and trades.
-  // Jupiter first, then DexScreener (its decimals off the mint, by Helius) when Jupiter fails.
+  // DexScreener first (its decimals off the mint, by Helius), then Jupiter's keyless host, which
+  // refuses most reads from Render's shared egress (full audit 2026-11-02, DA-1).
   const quotePrice = new QuotePrice(
     walletHelius
-      ? [jupiterQuote, dexScreenerQuote(dexScreener, (mints) => walletHelius.getMintDecimals(mints))]
+      ? [dexScreenerQuote(dexScreener, (mints) => walletHelius.getMintDecimals(mints)), jupiterQuote]
       : [jupiterQuote],
   );
   // Its RPC reads go on their own Helius 429 lane, and what Helius doesn't answer is asked once more
