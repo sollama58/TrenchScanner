@@ -63,6 +63,8 @@ export const STREAM_COVERAGE_MS = 15 * 60_000;
 
 /** A page older than this says nothing about now: the reading is unknown again. */
 const MAX_PAGE_AGE_MS = 15 * 60_000;
+/** What Helius bills for one getTransactionsForAddress page. */
+export const PAGE_CREDITS = 10;
 const MAX_ENTRIES = 2_000;
 
 /** A coin's newest page: its trades, and whether they are its whole history (no older page). */
@@ -94,12 +96,14 @@ function takePages(want: number, perMinute: number, nowMs: number): number {
  * Charges the logs feed's credits to the page budget, at a page's 10 credits, so pages and logs
  * together stay under LIVE_TAPE_PAGES_PER_CYCLE's ceiling. The budget may go into debt (no pages
  * until it is paid off) but at most a minute's worth: past it the logs alone are over the ceiling
- * and a deeper debt would only starve the pages for longer after they quiet down.
+ * and a deeper debt would only starve the pages for longer after they quiet down. The feed itself
+ * keeps under the ceiling by letting its costliest coins go (tapeLogsFeed.ts follow(); audit
+ * 2026-11-02, DS-2): this charge alone never bounded the logs, only the pages.
  */
 function chargeLogs(credits: number, perMinute: number, nowMs: number): void {
   if (!(credits > 0)) return;
   takePages(0, perMinute, nowMs);
-  pageBudget.tokens = Math.max(-perMinute, pageBudget.tokens - credits / 10);
+  pageBudget.tokens = Math.max(-perMinute, pageBudget.tokens - credits / PAGE_CREDITS);
 }
 
 /** A page taken from the budget that Helius did not bill. */
@@ -117,7 +121,8 @@ let fromLogs = 0;
  * set once by the worker; null runs the tape on Helius pages alone, as before.
  */
 export interface LogsTrades {
-  follow(mints: readonly string[], now: number): void;
+  /** `creditsPerMinute`: the ceiling on the followed coins' logs over the last minute (the page budget). */
+  follow(mints: readonly string[], now: number, creditsPerMinute?: number): void;
   coveredSince(mint: string, now: number): number | null;
   tradesSince(mint: string, sinceMs: number): TapeTrade[];
   /** Helius credits the feed's logs cost since the last call, charged to the page budget. */
@@ -129,6 +134,7 @@ export interface LogsTrades {
     logsTrades: number;
     logsCapped: number;
     logsCredits: number;
+    logsDropped?: number;
   };
 }
 let logsFeed: LogsTrades | null = null;
@@ -182,11 +188,12 @@ export function takeLiveTapeStats(): {
   logsTrades?: number;
   logsCapped?: number;
   logsCredits?: number;
+  logsDropped?: number;
 } {
   const out = {
     pages: pagesRead,
     failed: pagesFailed,
-    credits: 10 * pagesRead,
+    credits: PAGE_CREDITS * pagesRead,
     coins: pages.size,
     streamed,
     fromLogs,
@@ -246,7 +253,8 @@ export async function readLiveTape(
   if (opts.maxPages <= 0) return;
   const now = opts.nowMs ?? Date.now();
   const logs = opts.logs !== undefined ? opts.logs : logsFeed;
-  logs?.follow(mints, now);
+  // The page budget, in credits a minute, is the feed's ceiling too (DS-2).
+  logs?.follow(mints, now, opts.maxPages * PAGE_CREDITS);
   if (logs?.takeCredits) chargeLogs(logs.takeCredits(), opts.maxPages, now);
   const missing: string[] = [];
   const stale: string[] = [];
