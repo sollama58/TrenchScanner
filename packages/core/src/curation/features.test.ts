@@ -37,7 +37,12 @@ import {
   FRESH_QUOTE_GAP_SINCE,
   RUGCHECK_UNINDEXED_FILL,
   NS_LOGO_REUSE_FALSE_ZEROS,
+  NS_LOGO_REUSE_FALSE_ZEROS_OCT17,
   NS_X_READ_FALSE_ZEROS,
+  NS_TREND_NOVELTY_FALSE_ZEROS,
+  NS_CAT_NEWS_EVENT_FALSE_ZEROS,
+  LINKED_WALLET_FALSE_ZEROS,
+  WALLET_WIN_READ_SINCE,
   PATH_TAPE_REFILL_SINCE,
   PATH_RETURNS_ACROSS_GAPS_SINCE,
   PRICE_PATH_FEATURES,
@@ -1038,6 +1043,69 @@ describe("maskKnownBadInputs", () => {
       mcapUsd: 50_000,
     });
     expect(maskKnownBadInputs(FRESH_QUOTE_GAP_SINCE, row)).toEqual(row);
+  });
+
+  it("reads the zero eras the run guard alarmed on as missing, and a real reading in them as itself", () => {
+    const inside = (w: { from: Date; until: Date }) => new Date((w.from.getTime() + w.until.getTime()) / 2);
+    const row = {
+      nsLogoReuse24h: 0,
+      nsTrendNovelty: 0,
+      nsCatNewsEvent: 0,
+      linkedWalletPct: 0,
+      linkedClusterCount: 0,
+      linkedLargestClusterPct: 0,
+      mcapUsd: 1,
+    };
+    // Logo reuse's second era, before the one masked on 10-27.
+    expect(maskKnownBadInputs(inside(NS_LOGO_REUSE_FALSE_ZEROS_OCT17), row)).toEqual({
+      ...row,
+      nsLogoReuse24h: null,
+    });
+    expect(maskKnownBadInputs(NS_LOGO_REUSE_FALSE_ZEROS_OCT17.until, row)).toBe(row);
+    expect(
+      maskKnownBadInputs(inside(NS_LOGO_REUSE_FALSE_ZEROS_OCT17), { ...row, nsLogoReuse24h: 3 })
+        .nsLogoReuse24h,
+    ).toBe(3);
+    expect(maskKnownBadInputs(inside(NS_TREND_NOVELTY_FALSE_ZEROS), row)).toEqual({
+      ...row,
+      nsTrendNovelty: null,
+    });
+    expect(maskKnownBadInputs(NS_TREND_NOVELTY_FALSE_ZEROS.until, row)).toBe(row);
+    // 10-23 is also inside the logo-reuse window masked on 10-27.
+    expect(maskKnownBadInputs(inside(NS_CAT_NEWS_EVENT_FALSE_ZEROS), row)).toEqual({
+      ...row,
+      nsCatNewsEvent: null,
+      nsLogoReuse24h: null,
+    });
+    expect(
+      maskKnownBadInputs(new Date(NS_CAT_NEWS_EVENT_FALSE_ZEROS.from.getTime() - 1), row).nsCatNewsEvent,
+    ).toBe(0);
+    // The two linked-wallet inputs only: the largest cluster's 0 is a reading.
+    expect(maskKnownBadInputs(inside(LINKED_WALLET_FALSE_ZEROS), row)).toEqual({
+      ...row,
+      linkedWalletPct: null,
+      linkedClusterCount: null,
+    });
+    expect(
+      maskKnownBadInputs(inside(LINKED_WALLET_FALSE_ZEROS), { ...row, linkedWalletPct: 12 }).linkedWalletPct,
+    ).toBe(12);
+  });
+
+  it("reads the wallet-win inputs as missing on every row banked before they had a source", () => {
+    const row = {
+      walletWinTop10Max: 0,
+      walletWinFirstBuyersMean: 0,
+      walletWinHighSupplyPct: 0,
+      knownWinnerFirstBuyers: 0,
+      winnerRecentBuyers: 2,
+      winnerRecentSellers: 0,
+      kolFirstBuyers: 1,
+      mcapUsd: 1,
+    };
+    const before = maskKnownBadInputs(new Date(WALLET_WIN_READ_SINCE.getTime() - 1), row);
+    for (const name of WALLET_WIN_FEATURES) expect(before[name]).toBeNull();
+    expect(before.kolFirstBuyers).toBe(1);
+    expect(maskKnownBadInputs(WALLET_WIN_READ_SINCE, row)).toBe(row);
   });
 
   it("reads path inputs as missing before the tape refill when the tape is shorter than the coin's age", () => {
