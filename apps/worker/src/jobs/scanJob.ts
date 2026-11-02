@@ -1106,7 +1106,12 @@ export function withBlockZero(
 
 export function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
   // Each outside call is counted under the stage it was made in ("scan/wallets"), named as lap()
-  // closes the stage - see withApiStages in core's apiUsage.ts.
+  // closes the stage - see withApiStages in core's apiUsage.ts. That names the calls in flight when
+  // a stage closes after it, so the stages that run side by side (the wallet block: wallets,
+  // snipers, linkedWallets, liveTape, and the reads left behind the cycle) each start under a
+  // feature of their own instead (withApiFeature): on 2026-11-02 "scan/wallets" carried the
+  // snipers', linked-wallets' and live tape's Helius credits too, 3-6M a month filed on the wrong
+  // row, and the Helius plan was sized on it (full audit 2026-11-02, DA-14).
   return withApiStages("scan", (apiStage) => scanCycle(deps, env, apiStage));
 }
 
@@ -1921,10 +1926,8 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   // The coins whose bubble map someone has open, among this cycle's candidates only: their top
   // holders are re-read faster (user ask 2026-10-19). Started here so it overlaps RugCheck, and
   // waited on below where the wallet stage needs it.
-  const watchedHoldersRead = refreshWatchedHolders(
-    env,
-    Date.now(),
-    new Set(candidates.map((c) => c.mintAddress)),
+  const watchedHoldersRead = withApiFeature("watchedHolders", () =>
+    refreshWatchedHolders(env, Date.now(), new Set(candidates.map((c) => c.mintAddress))),
   );
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
@@ -2342,7 +2345,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
         b.churn - a.churn,
     );
   const sniperStageStartedAt = Date.now();
-  const sniperWork = startSniperStage(sniperGroups, deps.helius, env, cycle);
+  const sniperWork = withApiFeature("snipers", () => startSniperStage(sniperGroups, deps.helius, env, cycle));
   // The linked-wallets reading: who paid for each top-25 holder and the creator, in the wallet
   // stage's order (contenders first), on its own budget and the same wait.
   const linkedGroups: LinkedGroup[] = walletGroups.map((g) => {
@@ -2383,32 +2386,36 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   const wideMints = env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0 ? await wideMapMints() : new Set<string>();
   // Old coins no decision is near: their top holders and wallet holdings are read less often.
   const oldMints = oldCoinMints(walletGroups, wideMints);
-  const linkedWork = startLinkedWalletStage(
-    linkedGroups,
-    linkedWaited,
-    deps.helius,
-    env,
-    wideMints,
-    watchedHolders,
-    deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
-    oldMints,
-    cycle,
+  const linkedWork = withApiFeature("linkedWallets", () =>
+    startLinkedWalletStage(
+      linkedGroups,
+      linkedWaited,
+      deps.helius,
+      env,
+      wideMints,
+      watchedHolders,
+      deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
+      oldMints,
+      cycle,
+    ),
   );
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
   // for a wallet figure), for the flagged wallets trading it - on the same wait. With
   // LIVE_TAPE_ALL_SCORED every screened coin queues, in the same order, for its 5m order flow
   // and launch bags (model audit 2026-10-26, §16); the page budget caps either queue.
-  const liveTapeWork = startLiveTapeStage(
-    (env.LIVE_TAPE_ALL_SCORED ? sniperGroups : sniperGroups.filter((g) => g.contender || g.alerted)).map(
-      (g) => g.mintAddress,
+  const liveTapeWork = withApiFeature("liveTape", () =>
+    startLiveTapeStage(
+      (env.LIVE_TAPE_ALL_SCORED ? sniperGroups : sniperGroups.filter((g) => g.contender || g.alerted)).map(
+        (g) => g.mintAddress,
+      ),
+      deps.helius,
+      env,
+      // Test doubles may stub the client without it.
+      deps.dexScreener.solPricesOf ? (m) => deps.dexScreener.solPricesOf(m) : undefined,
+      deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
+      cycle,
+      deps.stream?.recentTrades ? (mint) => deps.stream!.recentTrades!(mint) : undefined,
     ),
-    deps.helius,
-    env,
-    // Test doubles may stub the client without it.
-    deps.dexScreener.solPricesOf ? (m) => deps.dexScreener.solPricesOf(m) : undefined,
-    deps.stream?.quietSince ? (mint, sinceMs) => deps.stream!.quietSince!(mint, sinceMs) : undefined,
-    cycle,
-    deps.stream?.recentTrades ? (mint) => deps.stream!.recentTrades!(mint) : undefined,
   );
 
   // A user filter with a wallet criterion holds a match until the figure is in, up to
@@ -2901,19 +2908,21 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   } else {
     let freshnessUsed = 0;
     let holdingsUsed = 0;
-    const work = Promise.all([
-      resolveEarliestActivity(freshness.groups, deps.helius, {
-        maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
-        lookupGroups: freshness.waited,
-        onLookups: (n) => (freshnessUsed = n),
-      }),
-      resolveWalletHoldings(walletGroups, deps.helius, env, {
-        maxNewLookups: holdingsLookupBudget(env),
-        lookupGroups: waitedGroups,
-        onLookups: (n) => (holdingsUsed = n),
-        valuation,
-      }),
-    ]);
+    const work = withApiFeature("wallets", () =>
+      Promise.all([
+        resolveEarliestActivity(freshness.groups, deps.helius, {
+          maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
+          lookupGroups: freshness.waited,
+          onLookups: (n) => (freshnessUsed = n),
+        }),
+        resolveWalletHoldings(walletGroups, deps.helius, env, {
+          maxNewLookups: holdingsLookupBudget(env),
+          lookupGroups: waitedGroups,
+          onLookups: (n) => (holdingsUsed = n),
+          valuation,
+        }),
+      ]),
+    );
     if (cycle) {
       const settled = work.then(
         () => undefined,
@@ -2934,20 +2943,22 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
       });
       walletResults = await fromCacheOnly();
     } else if (cycle) {
-      startWalletBackfill(
-        // Not the old coins no decision is near: their top 10's empty-wallet check was re-run on the
-        // 60-minute cache for as long as they stayed in band (user decision 2026-10-20 (Helius
-        // audit)); one turning contender is read in the stage above. Unless a user filter caps
-        // the empty share, which every candidate's figure is then waited on for (waitedGroups).
-        walletFiltersActive ? walletGroups : walletGroups.filter((g) => !oldMints.has(g.mintAddress)),
-        freshness.groups,
-        deps.helius,
-        env,
-        {
-          freshness: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE - freshnessUsed,
-          holdings: holdingsLookupBudget(env) - holdingsUsed,
-        },
-        valuation,
+      withApiFeature("walletBackfill", () =>
+        startWalletBackfill(
+          // Not the old coins no decision is near: their top 10's empty-wallet check was re-run on the
+          // 60-minute cache for as long as they stayed in band (user decision 2026-10-20 (Helius
+          // audit)); one turning contender is read in the stage above. Unless a user filter caps
+          // the empty share, which every candidate's figure is then waited on for (waitedGroups).
+          walletFiltersActive ? walletGroups : walletGroups.filter((g) => !oldMints.has(g.mintAddress)),
+          freshness.groups,
+          deps.helius,
+          env,
+          {
+            freshness: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE - freshnessUsed,
+            holdings: holdingsLookupBudget(env) - holdingsUsed,
+          },
+          valuation,
+        ),
       );
     }
   }
@@ -2994,7 +3005,9 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   // The launch buyers' fresh-wallet share, from the buyers the sniper stage just read: started
   // now so it overlaps the quotes below, and waited on briefly before the decisions.
   const launchBuyerMints = sniperGroups.map((g) => g.mintAddress);
-  const launchBuyerWork = startLaunchBuyerFreshness(launchBuyerMints, deps.helius, env, cycle);
+  const launchBuyerWork = withApiFeature("launchBuyers", () =>
+    startLaunchBuyerFreshness(launchBuyerMints, deps.helius, env, cycle),
+  );
 
   // Seconds-old prices for the coins about to be decided on (ScoredToken.freshQuote), read now
   // rather than with the refresh: DexScreener's figures were already 45-60 s behind the market,
