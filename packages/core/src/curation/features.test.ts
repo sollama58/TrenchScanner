@@ -1080,14 +1080,17 @@ describe("maskKnownBadInputs", () => {
     expect(
       maskKnownBadInputs(new Date(NS_CAT_NEWS_EVENT_FALSE_ZEROS.from.getTime() - 1), row).nsCatNewsEvent,
     ).toBe(0);
-    // The two linked-wallet inputs only: the largest cluster's 0 is a reading.
-    expect(maskKnownBadInputs(inside(LINKED_WALLET_FALSE_ZEROS), row)).toEqual({
-      ...row,
+    // The two linked-wallet inputs only: the largest cluster's 0 is a reading. (The ns* inputs are
+    // out of this row: on 10-13 they are masked anyway as unversioned.)
+    const linked = { linkedWalletPct: 0, linkedClusterCount: 0, linkedLargestClusterPct: 0, mcapUsd: 1 };
+    expect(maskKnownBadInputs(inside(LINKED_WALLET_FALSE_ZEROS), linked)).toEqual({
+      ...linked,
       linkedWalletPct: null,
       linkedClusterCount: null,
     });
     expect(
-      maskKnownBadInputs(inside(LINKED_WALLET_FALSE_ZEROS), { ...row, linkedWalletPct: 12 }).linkedWalletPct,
+      maskKnownBadInputs(inside(LINKED_WALLET_FALSE_ZEROS), { ...linked, linkedWalletPct: 12 })
+        .linkedWalletPct,
     ).toBe(12);
   });
 
