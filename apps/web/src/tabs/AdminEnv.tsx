@@ -109,7 +109,8 @@ function SystemGrid({ s, onlyProblems }: { s: EnvSystem; onlyProblems: boolean }
 /**
  * Admin > Environment: whether each env var a service is meant to have is set on it, for every
  * TrenchScanner service and TokenSage's. Values never leave the server: a secret shows its length,
- * a URL its host, and only plain settings their value.
+ * a URL its host, an account identifier (wallet, bucket, storage endpoint) only that it is set,
+ * and only plain settings their value.
  */
 export function EnvAdmin() {
   const q = usePolling<EnvReport>("/admin/env", 120_000);
@@ -119,8 +120,8 @@ export function EnvAdmin() {
       <p className="muted small">
         The api is read live. Each worker reports when it boots, and Render applies an env change only by
         restarting the service, so a column shows what that service is running with now. A secret shows only
-        its length, a URL only its host. Red is required, amber is expected (render.yaml ships it), and "off"
-        is an optional feature left unset.
+        its length, a URL only its host, and a wallet, bucket or storage endpoint only that it is set. Red is
+        required, amber is expected (render.yaml ships it), and "off" is an optional feature left unset.
       </p>
       <label className="small">
         <input type="checkbox" checked={onlyProblems} onChange={(e) => setOnlyProblems(e.target.checked)} />{" "}
