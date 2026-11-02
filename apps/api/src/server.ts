@@ -116,11 +116,14 @@ const LIVE_REFRESH_TOKEN_LIMIT = LIVE_TICK_MAX_TOKENS;
 /**
  * DexScreener calls the API may spend on live refreshes per minute, across all readers. Its batch
  * endpoint allows 300 a minute per IP, and Render's services in one region leave from shared
- * addresses (inferred): the scanner's 180, this 90 and the trainer's 30 (render.yaml) add up to
- * the 300, where 180 + 120 + 60 went 60 past it (full audit 2026-10-27, DA-12). 90 covers ~15
- * distinct pages ticking every 10s; past it readers see the worker's once-a-minute numbers.
+ * addresses (inferred): the scanner's 150, this 120 and the trainer's 30 (render.yaml) add up to
+ * the 300, where 180 + 120 + 60 went 60 past it (full audit 2026-10-27, DA-12). 120 covers ~20
+ * distinct pages ticking every 10s; past it readers see the worker's once-a-minute numbers. It
+ * was 90 until the refresher ran over budget on 665 of 1,127 lookups and open pages' readings
+ * were p50 140 s, p95 12 min behind (audit 2026-11-02); 30 moved here from the scanner (user
+ * decision 2026-11-02).
  */
-const LIVE_REFRESH_CALLS_PER_MINUTE = 90;
+const LIVE_REFRESH_CALLS_PER_MINUTE = 120;
 /**
  * The share of that one reader may spend. One dashboard ticking every 10s needs about 6 a minute;
  * 15 leaves room for paging and a second tab, while keeping one subscriber walking
