@@ -552,7 +552,7 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
 });
 
 describe("FDSA screen line", () => {
-  it("takes the lowest score whose ties keep the shortlist within the share", () => {
+  it("takes the score level whose shortlist comes nearest to the share", () => {
     const counts = [
       { score: 0.08, n: 80 },
       { score: 0.12, n: 10 },
@@ -563,6 +563,32 @@ describe("FDSA screen line", () => {
     expect(screenLineFrom(counts, 5)).toBe(0.35);
     expect(screenLineFrom(counts, 20)).toBe(0.12);
     expect(screenLineFrom(counts, 100)).toBe(0.08);
+  });
+  it("lets a tie at the line through when that is nearer the share than holding it back (audit 2026-11-02)", () => {
+    // The decide's odds on 2026-11-01/02: a 20% share of 40 is 8; excluding the 0.20 block left 3.
+    const odds = [
+      { score: 0.25, n: 1 },
+      { score: 0.22, n: 1 },
+      { score: 0.21, n: 1 },
+      { score: 0.2, n: 9 },
+      { score: 0.15, n: 20 },
+      { score: 0.12, n: 8 },
+    ];
+    expect(screenLineFrom(odds, 20)).toBe(0.2);
+    // 10% of 40 is 4: 3 above the block (1 off) beats 12 (8 off).
+    expect(screenLineFrom(odds, 10)).toBe(0.21);
+    // An even distance goes to the fuller shortlist: 75% of 4 is 3, and 2 and 4 are both 1 off.
+    expect(
+      screenLineFrom(
+        [
+          { score: 0.3, n: 2 },
+          { score: 0.2, n: 2 },
+        ],
+        75,
+      ),
+    ).toBe(0.2);
+    // 2 allowed: 2 above (0 off) -> 0.22.
+    expect(screenLineFrom(odds, 5)).toBe(0.22);
   });
   it("still lets the day's top score through when it alone is over the share, and is null with no screens", () => {
     expect(

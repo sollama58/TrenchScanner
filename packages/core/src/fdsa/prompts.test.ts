@@ -69,6 +69,18 @@ describe("FDSA prompts", () => {
     expect(p).toContain("among the top 20% of the day's decided alerts");
     expect(p).toContain("the exit plan on every answer");
     expect(p).not.toContain("at 50% or more");
+    // Ranked, the goal is the ranking, not a win rate no alert in the pool clears (audit 2026-11-02).
+    expect(p).not.toContain("at least 75% of its trades win");
+    expect(p).toContain("the alerts you rate highest win more often than the rest");
+    expect(fdsaDecideSystemPrompt(0.5, 0)).toContain("at least 75% of its trades win");
+  });
+
+  it("both stages ask for odds to the percent, and the screen for the odds of a win (audit 2026-11-02)", () => {
+    for (const p of [FDSA_SCREEN_SYSTEM_PROMPT, FDSA_DECIDE_SYSTEM_PROMPT, fdsaDecideSystemPrompt(0.5, 20)])
+      expect(p).toContain("0.17 rather than 0.15 or 0.20");
+    expect(FDSA_SCREEN_SYSTEM_PROMPT).toContain("the chance that this alert wins");
+    expect(FDSA_SCREEN_SYSTEM_PROMPT).toContain("a run that has already happened counts for nothing");
+    expect(FDSA_SCREEN_SYSTEM_PROMPT).not.toContain("should score 0.7 or more");
   });
 
   it("quote the launcher's symbol in the revise brief, flattened and capped", () => {

@@ -1242,7 +1242,7 @@ const envSchema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   // Stage 1, the screen (owner decision 2026-10-31, decision 1): every alert, on Haiku at low
-  // effort with a compact brief, returns a 0-1 shortlist score. Alerts scoring at least
+  // effort with a compact brief, returns its 0-1 odds of a win as the score. Alerts scoring at least
   // FDSA_SCREEN_MIN_SCORE go to the decide stage. The aim is about 10% shortlisted; 0.7 was a
   // starting guess, and it shortlisted none of the first 233 alerts (2026-11-01: Haiku's scores
   // topped out near 0.35). So by default the line is relative (owner decision 2026-11-01): an

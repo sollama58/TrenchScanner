@@ -181,11 +181,18 @@ let screenLineCache: { at: number; line: number; ranked: boolean } | null = null
 /**
  * Where a screen score is shortlisted from (owner decision 2026-11-01). The fixed 0.7 line
  * shortlisted none of the first 233 alerts: Haiku's scores sat at 0.08-0.35, with sound reasons,
- * so the screen never handed Opus anything to decide. The line is now relative: the lowest score
- * that keeps the shortlist to at most FDSA_SCREEN_SHORTLIST_PCT percent of the last day's model
- * screens. Scores come in coarse steps (0.08, 0.12, 0.30...), so a tie at the line counts against
- * the share rather than past it, unless even the top score alone is over the share - then the top
- * score is the line, so the best of the day still reaches the decide.
+ * so the screen never handed Opus anything to decide. The line is now relative: the score level
+ * whose shortlist (every score at or above it) comes nearest to FDSA_SCREEN_SHORTLIST_PCT percent
+ * of the last day's model screens.
+ *
+ * Scores come in coarse steps (0.08, 0.12, 0.30...; Opus's odds in 0.12, 0.15, 0.20), so a tie
+ * at the line is a whole block of alerts. Until 2026-11-02 a tie counted against the share, never
+ * past it, and the decide's line starved the desk: with a 20% share over 40 decides (8 allowed),
+ * the odds ran 0.25 x1, 0.22 x1, 0.21 x1, 0.20 x9, so the line sat at 0.21-0.22 and 0-3 decides
+ * traded instead of 8 (FDSA AI audit 2026-11-02). Now the level nearest the share wins, over or
+ * under (0.20 there: 12 trades, the nearest to 8), and an even distance goes to the fuller
+ * shortlist. The top score alone, over the share, is still the line, so the best of the day
+ * always reaches the next stage.
  *
  * Fixed at FDSA_SCREEN_MIN_SCORE when the share is 0, or while fewer than 50 model screens are
  * on record to rank against. Read at most every 5 minutes.
@@ -195,14 +202,17 @@ export function screenLineFrom(counts: readonly { score: number; n: number }[], 
   if (total === 0) return null;
   const allowed = (total * pct) / 100;
   const desc = [...counts].sort((a, b) => b.score - a.score);
-  let line: number | null = null;
+  let line = desc[0]!.score;
+  let best = Infinity;
   let atOrAbove = 0;
   for (const c of desc) {
     atOrAbove += c.n;
-    if (atOrAbove > allowed) break;
+    const distance = Math.abs(atOrAbove - allowed);
+    if (distance > best) break;
+    best = distance;
     line = c.score;
   }
-  return line ?? desc[0]!.score;
+  return line;
 }
 
 export async function screenLine(
@@ -241,8 +251,8 @@ let tradeLineCache: { at: number; line: number; ranked: boolean } | null = null;
  * Where a decide's probability2x trades from (owner decision 2026-11-01). Opus put every decide
  * at 12-20% against the fixed 50% bar, under the pool's own ~22%, so nothing ever traded. With
  * FDSA_TRADE_TOP_PCT set the desk paper-trades the decides its odds rank highest: the lowest
- * probability2x that keeps trades within that share of the last day's usable decides (ties count
- * against the share, as the screen's line). Fixed at FDSA_TRADE_MIN_P2X when the share is 0, or
+ * probability2x whose trades come nearest to that share of the last day's usable decides (ties at
+ * the line go whichever way is nearer, as the screen's line; see screenLineFrom). Fixed at FDSA_TRADE_MIN_P2X when the share is 0, or
  * while fewer than 20 decides are on record. Read at most every 5 minutes.
  */
 export async function tradeLine(
