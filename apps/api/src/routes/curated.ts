@@ -44,6 +44,7 @@ import {
 } from "../marketLighthouse.js";
 import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
 import { createWalletScorecardsCache, walletScorecardsQuerySchema } from "../walletScorecards.js";
+import { createModelsVsKolsCache } from "../modelsVsKols.js";
 import { createTokenSageShowcaseCache } from "../tokenSageShowcase.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import type { MarketBar } from "../marketBar.js";
@@ -385,6 +386,8 @@ export function createReportCaches(env: Env) {
     lighthouse,
     lighthouseHistory,
     tokenSageShowcase: createTokenSageShowcaseCache(),
+    /** The Models tab's "Models vs KOLs" (modelsVsKols.ts), for subscribers and guests alike. */
+    modelsVsKols: createModelsVsKolsCache(env),
     weather,
     keepWarm,
   };
@@ -693,6 +696,9 @@ export async function registerCuratedRoutes(
       same: sameMix(best, mine),
     };
   });
+
+  /** The top three models' 2x/4x/10x rates beside the top KOLs' (modelsVsKols.ts). */
+  app.get("/models/vs-kols", () => opts.reports.modelsVsKols());
 
   /** One model's training runs (the Models tab's model detail view). */
   app.get("/models/:id/runs", (request, reply) => modelRunsRoute(opts.env, opts.reports, request, reply));

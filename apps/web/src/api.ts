@@ -1736,6 +1736,43 @@ export interface Leaderboard {
   };
 }
 
+/** Calls and their grades over one window (/curated/models/vs-kols). */
+export interface VsTiers {
+  days: number;
+  calls: number;
+  graded: number;
+  won2x: number;
+  won4x: number;
+  /** A share of tenXGraded, not of graded: a clean 2x still inside its hour isn't settled yet. */
+  won10x: number;
+  tenXGraded: number;
+}
+
+/** A top model, a top KOL or every KOL pooled, with one VsTiers per window. */
+export interface VsRow {
+  id: string;
+  kind: "model" | "kol" | "kols";
+  name: string;
+  twitter: string | null;
+  /** The API path of a KOL's X picture ("/kol-avatars/..."); null without one. */
+  avatar: string | null;
+  windows: VsTiers[];
+}
+
+/**
+ * The Models tab's "Models vs KOLs" (/curated/models/vs-kols, /guest/models/vs-kols): the top-3
+ * models' live calls beside the top KOLs' buys, graded by the same label (apps/api modelsVsKols.ts).
+ */
+export interface ModelsVsKols {
+  windows: number[];
+  models: VsRow[];
+  kols: VsRow[];
+  allKols: VsRow;
+  kolsActive: number;
+  rule: { rankDays: number; minGraded: number; topKols: number; topModels: number };
+  computedAt: string;
+}
+
 /** One mix of models scored as a single feed, each token once (/curated/models/compare). */
 export interface FeedMixRecord {
   models: string[];
