@@ -268,7 +268,10 @@ const envSchema = z.object({
   // before. A candidate's top 25 and creator go together or wait a cycle. 0 turns the reading off.
   // Spent on the contenders and held alerts, the coins whose bubble map is open and the alerted
   // coins only (user decision 2026-10-24); every other band coin reads from the funders stored.
-  LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
+  // 30 until 2026-11-02, 10 since (audit, Helius cut D, owner decision): decisions wait only on
+  // the contenders' readings, which have their own budget below, and the Linked and CEX cuts
+  // keep applying once a coin's funders are read.
+  LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(10),
   // The same for contenders (the coins about to be decided on, read first), on top of the above
   // (user decision 2026-10-14, audit D1 "bigger budget"): a cold coin's top 25 needs about that
   // many new funders, so the shared 30 covered about one a cycle. Spent only on the pass the cycle
@@ -551,8 +554,10 @@ const envSchema = z.object({
   // 0 turns it off.
   TRADE_TAPE_CLOSING_CREDITS_PER_RUN: z.coerce.number().int().nonnegative().default(30),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
-  // every few minutes for the band, every minute for a token about to be decided on.
-  SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(300),
+  // every 15 minutes for the band (5 until 2026-11-02; audit, Helius cut F, owner decision: the
+  // Block 0 held share is read at the decision for contenders every minute as before), every
+  // minute for a token about to be decided on or held on Block 0.
+  SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(900),
   SNIPER_CONTENDER_REFRESH_SECONDS: z.coerce.number().positive().default(60),
   // Most buyer token accounts re-read per cycle; each 100 is one credit, so this caps the refresh
   // at 5 credits a cycle.
