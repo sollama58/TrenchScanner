@@ -149,6 +149,44 @@ describe("the chart backfill with paid budget left", () => {
   });
 });
 
+describe("the chart backfill after the free API's 429", () => {
+  afterEach(() => {
+    coinGeckoBudget.reset();
+    vi.restoreAllMocks();
+  });
+
+  // Audit 2026-11-02: 14,130 of 22,409 free candle calls in a day were 429s.
+  it("rests the free API instead of knocking again at once", async () => {
+    coinGeckoBudget.configure({ dailyCredits: 100, peakDailyCredits: 0, chartDailyCredits: 0 });
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("slow down", { status: 429 }));
+    const client = new GeckoTerminalClient({ apiKey: "k" });
+    const backfill = () =>
+      withOwnApiFeature("candle-backfill", () => client.poolMinuteCandles("POOL", "MINT", Date.now(), 1_000));
+    await expect(backfill()).rejects.toThrow();
+    // No paid credit left in the lane: the second page waits for the rest to end, past its 1 s.
+    await expect(backfill()).rejects.toBeInstanceOf(RateGateDeadlineError);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("spends a paid credit while the free API rests, if the lane has one", async () => {
+    coinGeckoBudget.configure(config);
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () => new Response("slow down", { status: 429 }))
+      .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }));
+    const client = new GeckoTerminalClient({ apiKey: "k" });
+    const backfill = () =>
+      withOwnApiFeature("candle-backfill", () => client.poolMinuteCandles("POOL", "MINT", Date.now(), 1_000));
+    await expect(backfill()).rejects.toThrow();
+    await backfill();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(String(fetch.mock.calls[1]![0])).toMatch(/^https:\/\/pro-api\.coingecko\.com\//);
+    expect(coinGeckoBudget.spent().charts).toBe(1);
+  });
+});
+
 describe("CoinGeckoBudget.sync", () => {
   const PROCESS = "coingecko-budget-test";
   afterEach(async () => {
