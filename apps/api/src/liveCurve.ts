@@ -69,6 +69,12 @@ const IDLE_MS = 30_000;
  * 5 seconds since 2026-10-22 (was 2). The stream path is unchanged: one read, then the socket.
  */
 export const READ_EVERY_MS = 5_000;
+/**
+ * The same for a curve only the feed cards ask about (no chart has within IDLE_MS): a card's live
+ * tick needs no 5-second tail. 15 seconds since 2026-11-02 (audit DA-11, owner decision): the
+ * cards held most of the 400 slots and most of live-curves' ~27k credits a day.
+ */
+export const CARD_READ_EVERY_MS = 15_000;
 /** How much of a curve's changes are kept: the First 15m view's span, with room. */
 const KEEP_MS = 20 * 60_000;
 const MAX_TICKS = 6_000;
@@ -548,6 +554,11 @@ export class LiveCurves {
     return f.chartAskedAt !== null && now - f.chartAskedAt <= IDLE_MS;
   }
 
+  /** How often `f` is read by RPC off the stream: a chart's tail every READ_EVERY_MS, a card's slower. */
+  private readEveryMs(f: Followed, now: number): number {
+    return this.pinned(f, now) ? READ_EVERY_MS : CARD_READ_EVERY_MS;
+  }
+
   /**
    * Frees a slot for a new follow, if one is needed: a card's follow takes the least recently asked
    * card's slot past MAX_CARD_FOLLOWED; past MAX_FOLLOWED, the least recently asked card goes first,
@@ -813,7 +824,7 @@ export class LiveCurves {
       if (
         since !== null
           ? f.readAt === null || f.readAt < since
-          : f.readAt === null || now - f.readAt >= READ_EVERY_MS
+          : f.readAt === null || now - f.readAt >= this.readEveryMs(f, now)
       )
         due.push(mint);
     }
@@ -982,7 +993,7 @@ export class LiveCurves {
       if (
         since !== null
           ? pool.readAt === null || pool.readAt < since
-          : pool.readAt === null || now - pool.readAt >= READ_EVERY_MS
+          : pool.readAt === null || now - pool.readAt >= this.readEveryMs(f, now)
       )
         due.push([mint, f, pool]);
     }

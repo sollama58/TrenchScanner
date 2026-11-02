@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { pumpCurveAddressOf, type CurveState } from "@trenchscanner/core";
 import bs58 from "bs58";
 import {
+  CARD_READ_EVERY_MS,
   curveMcapSol,
   LiveCurves,
   MAX_FOLLOWED,
@@ -164,6 +165,24 @@ describe("LiveCurves", () => {
     const next = await t.curves.read(MINT, first.ticks[0]![0]);
     expect(next.ticks).toHaveLength(1);
     expect(next.ticks[0]![1]).toBeCloseTo(curveMcapSol(state(6e10)) * 100);
+    t.curves.stop();
+  });
+
+  it("reads a curve only the feed cards ask about every CARD_READ_EVERY_MS, not READ_EVERY_MS (DA-11)", async () => {
+    const t = setup({ states: [state(5e10), state(6e10), state(7e10)] });
+    await t.curves.quotes([MINT], 1_000);
+    expect(t.reads).toHaveLength(1);
+    t.tick(READ_EVERY_MS);
+    await t.curves.round();
+    expect(t.reads).toHaveLength(1);
+    t.tick(CARD_READ_EVERY_MS - READ_EVERY_MS);
+    await t.curves.round();
+    expect(t.reads).toHaveLength(2);
+    // A chart opens on it: back to the chart's cadence.
+    await t.curves.read(MINT, 0);
+    t.tick(READ_EVERY_MS);
+    await t.curves.round();
+    expect(t.reads).toHaveLength(3);
     t.curves.stop();
   });
 

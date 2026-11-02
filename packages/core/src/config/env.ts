@@ -404,8 +404,10 @@ const envSchema = z.object({
   // 1 second are read off the chain (Helius getTransactionsForAddress, 10 credits a page of 100
   // trades), up to the day's credits (0 turns it off), pages a one-minute run, pages a coin a day,
   // and pages the newest ask's coin may take in one run while its holes stay open (the chart just
-  // opened fills in minutes, not a page a minute; charts audit 2026-10-23).
-  CANDLE_CHAIN_FILL_CREDITS_PER_DAY: z.coerce.number().int().nonnegative().default(20_000),
+  // opened fills in minutes, not a page a minute; charts audit 2026-10-23). 20,000 a day until
+  // 2026-11-02, spent to the cap every day on coins nobody may open; 10,000 since (audit DA-12,
+  // owner decision): a chart someone opens still fills first (the newest ask's coin).
+  CANDLE_CHAIN_FILL_CREDITS_PER_DAY: z.coerce.number().int().nonnegative().default(10_000),
   CANDLE_CHAIN_FILL_PAGES_PER_RUN: z.coerce.number().int().positive().default(5),
   CANDLE_CHAIN_FILL_MAX_PAGES_PER_COIN: z.coerce.number().int().positive().default(60),
   CANDLE_CHAIN_FILL_BURST_PAGES: z.coerce.number().int().positive().default(3),
