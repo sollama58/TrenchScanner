@@ -763,16 +763,17 @@ describe("curve tape", () => {
       const s = checked({ pollMaxMints: 0 });
       stop = s.stop;
       followYoungCurves([young], NOW);
-      for (let t = 0; t <= 5 * 60_000; t += 5_000) await round(NOW + t);
-      // The seed, then a check at 2 and at 4 minutes.
+      const span = 2.5 * VERIFY_EVERY_MS;
+      for (let t = 0; t <= span; t += 5_000) await round(NOW + t);
+      // The seed, then a check at one and at two VERIFY_EVERY_MS (10 minutes since 2026-11-02).
       expect(s.reads).toEqual([[CURVE], [CURVE], [CURVE]]);
-      expect(VERIFY_EVERY_MS).toBe(2 * 60_000);
+      expect(VERIFY_EVERY_MS).toBe(10 * 60_000);
       // Past the noon pace: the stream is let go, and nothing is read to check it.
-      seedCurveStreamSpend(70_000, new Date(NOW + 5 * 60_000), NOW + 5 * 60_000);
-      takeCurveTapeStats(NOW + 5 * 60_000);
-      await round(NOW + 7 * 60_000);
+      seedCurveStreamSpend(70_000, new Date(NOW + span), NOW + span);
+      takeCurveTapeStats(NOW + span);
+      await round(NOW + span + VERIFY_EVERY_MS);
       expect(s.reads).toHaveLength(3);
-      expect(takeCurveTapeStats(NOW + 7 * 60_000)).toMatchObject({ paused: 1, checked: 0 });
+      expect(takeCurveTapeStats(NOW + span + VERIFY_EVERY_MS)).toMatchObject({ paused: 1, checked: 0 });
     });
 
     it("checks every streamed curve in one batched read, counted at 1 credit per 100", async () => {
@@ -815,8 +816,12 @@ describe("curve tape", () => {
       return data.toString("base64");
     };
 
-    function graduated(coveredSince: number | null, poolCreated = true) {
-      const s = setup(coveredSince);
+    function graduated(
+      coveredSince: number | null,
+      poolCreated = true,
+      ages: Parameters<typeof setup>[1] = {},
+    ) {
+      const s = setup(coveredSince, ages);
       let complete = false;
       s.reader.getCurveStatesBatch.mockImplementation(async (curves: string[]) => {
         s.reads.push(curves);
@@ -898,7 +903,8 @@ describe("curve tape", () => {
     });
 
     it("checks a streamed pool by RPC and resubscribes the vault the stream went silent on", async () => {
-      const s = graduated(NOW + 1_000);
+      // Followed past two sweeps: the pool is let go POOL_FOLLOW_MS after bonding or at the coin's age.
+      const s = graduated(NOW + 1_000, true, { maxAgeMinutes: 30 });
       stop = s.stop;
       // As the real stream's, a resubscription undoes the cover until Helius confirms it again.
       const resubscribe = vi.fn(() => s.stream.coveredSince.mockImplementation(() => null));

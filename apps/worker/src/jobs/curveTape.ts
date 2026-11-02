@@ -77,10 +77,12 @@ const PAIR_WAIT_MS = 400;
  * it every few seconds, and the chart's candle writer (curveCandles.ts) saved the silence as a quiet
  * stretch that outranks GeckoTerminal's candles for good. The API checks its own stream every 10 s
  * (liveCurve.ts VERIFY_EVERY_MS); here, for up to CURVE_TAPE_MAX_MINTS accounts, the owner approved
- * the spend at 2 minutes (2026-10-29): one sweep, batched 100 accounts to a 1-credit call, so a
- * silence is saved as quiet for about this long at most. A constant, not an env key.
+ * the spend at 2 minutes (2026-10-29), then 10 (2026-11-02, audit DS-7: 734-749 checks a cycle
+ * found 0 mismatches, 3 since boot, for ~1.5M credits a month). One sweep, batched 100 accounts to
+ * a 1-credit call, so a silence is saved as quiet for about this long at most. A constant, not an
+ * env key.
  */
-export const VERIFY_EVERY_MS = 2 * 60_000;
+export const VERIFY_EVERY_MS = 10 * 60_000;
 /**
  * How long a check that differed waits for a stream update to explain it before the stream is taken
  * to have missed the change. The read and the stream both answer at `confirmed`, and a notification
