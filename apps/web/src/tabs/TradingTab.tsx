@@ -1153,6 +1153,7 @@ const REASON: Record<string, string> = {
   trail_max_hold: "trail time limit",
   manual: "sold by you",
   empty: "empty",
+  unsellable: "unsellable (closed as a loss)",
 };
 
 function PositionsPanel({ state, reload }: { state: TradingState; reload: () => Promise<void> }) {

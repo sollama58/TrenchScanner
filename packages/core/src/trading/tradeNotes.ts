@@ -57,6 +57,7 @@ export const EXIT_REASON_TEXT: Record<string, string> = {
   max_hold: "time limit",
   trail_max_hold: "trail time limit",
   manual: "sold on request",
+  unsellable: "unsellable, closed as a loss",
 };
 
 /** Sends a pass's notes; how many messages went out. */
