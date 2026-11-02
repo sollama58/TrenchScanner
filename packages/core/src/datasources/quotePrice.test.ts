@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { dexScreenerQuote, QUOTE_PRICE_MAX_AGE_MS, QuotePrice } from "./quotePrice.js";
+import { HttpError } from "./httpClient.js";
+import { dexScreenerQuote, QUOTE_PRICE_MAX_AGE_MS, QuotePrice, RATE_LIMITED_REST_MS } from "./quotePrice.js";
 
 describe("QuotePrice", () => {
   it("falls through to the next reader when the first fails, and tells of a coin none could price", async () => {
@@ -25,6 +26,44 @@ describe("QuotePrice", () => {
     expect(misses.map((m) => m.mint)).toEqual(["WOJAK"]);
     expect(misses[0]!.error).toContain("jupiter down");
     expect(q.takeMisses()).toEqual([]);
+  });
+
+  it("passes over a reader that answered 429, for every coin, until its rest is up", async () => {
+    let now = 0;
+    const asked: string[] = [];
+    const q = new QuotePrice(
+      [
+        async (mint) => {
+          asked.push(mint);
+          throw new HttpError(429, "https://lite-api.jup.ag/price/v3", "HTTP 429");
+        },
+        async () => ({ usd: 2, decimals: 6 }),
+      ],
+      30_000,
+      10_000,
+      () => now,
+    );
+    expect(await q.get("A")).toEqual({ usd: 2, decimals: 6 });
+    expect(await q.get("B")).toEqual({ usd: 2, decimals: 6 });
+    // B went straight to the second reader: the first is resting after A's 429.
+    expect(asked).toEqual(["A"]);
+    now = RATE_LIMITED_REST_MS;
+    expect(await q.get("C")).toEqual({ usd: 2, decimals: 6 });
+    expect(asked).toEqual(["A", "C"]);
+  });
+
+  it("does not rest a reader for an error other than a 429", async () => {
+    const asked: string[] = [];
+    const q = new QuotePrice([
+      async (mint) => {
+        asked.push(mint);
+        throw new HttpError(500, "https://lite-api.jup.ag/price/v3", "HTTP 500");
+      },
+      async () => ({ usd: 2, decimals: 6 }),
+    ]);
+    await q.get("A");
+    await q.get("B");
+    expect(asked).toEqual(["A", "B"]);
   });
 
   it("stops serving a kept price past the age cap", async () => {
