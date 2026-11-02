@@ -1,7 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { loadEnv } from "../config/env.js";
-import { appendPoolParams, namePassLock, prisma, TRAINER_APPLICATION_NAME } from "../db.js";
+import {
+  API_APPLICATION_NAME,
+  appendPoolParams,
+  namePassLock,
+  prisma,
+  TRAINER_APPLICATION_NAME,
+} from "../db.js";
 import type { ContestantSpec } from "../curation/contestants.js";
 import {
   buildPending,
@@ -671,7 +677,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(capped!.sentThrough.getTime()).toBe(later - MAX_COMMIT_WAIT_MS);
   });
 
-  it("waits on other connections' open transactions, but not the trainer's, a pass lock's or its own", async () => {
+  it("waits on other connections' open transactions, but not the trainer's, the API's, a pass lock's or its own", async () => {
     const connect = (applicationName?: string) =>
       new PrismaClient({ datasourceUrl: appendPoolParams(process.env.DATABASE_URL!, { applicationName }) });
     const holdOpen = async (client: PrismaClient, asPassLock = false) => {
@@ -695,6 +701,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
         return { self: self!.at.getTime(), oldest: (await oldestOpenTransaction(tx))?.getTime() ?? null };
       });
     const trainer = connect(TRAINER_APPLICATION_NAME);
+    const api = connect(API_APPLICATION_NAME);
     const scanner = connect();
     try {
       const training = await holdOpen(trainer);
@@ -702,6 +709,11 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       // Other test files may have their own short transactions open; never this one, nor the pass's.
       expect(seen.oldest).not.toBe(training.start.getTime());
       expect(seen.oldest).not.toBe(seen.self);
+      // Nor the API's: it writes no alert, and its report fills hold a transaction open for long.
+      const filling = await holdOpen(api);
+      const served = await oldest();
+      expect(served.oldest).not.toBe(filling.start.getTime());
+      await filling.release();
       // Nor the trading engine's pass lock: named inside its transaction, and it writes nothing.
       const locking = await holdOpen(scanner, true);
       const passing = await oldest();
@@ -715,6 +727,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       await training.release();
     } finally {
       await trainer.$disconnect();
+      await api.$disconnect();
       await scanner.$disconnect();
     }
   });
