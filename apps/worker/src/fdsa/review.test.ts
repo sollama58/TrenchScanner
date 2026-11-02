@@ -235,7 +235,8 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
     expect(screenReq!.fallbacks).toBeUndefined();
     expect(screenReq!.thinking).toEqual({ type: "adaptive" });
     expect(decideReq!.model).toBe(env.FDSA_DECIDE_MODEL);
-    expect(decideReq!.output_config.effort).toBe("medium");
+    expect(decideReq!.output_config.effort).toBe(env.FDSA_DECIDE_EFFORT);
+    expect(env.FDSA_DECIDE_EFFORT).toBe("high"); // the default (owner decision 2026-11-02)
     expect(decideReq!.fallbacks).toBe("default");
     expect(decideReq!.system[0]!.cache_control).toEqual({ type: "ephemeral" });
 
