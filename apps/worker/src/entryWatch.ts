@@ -9,11 +9,17 @@ const logger = createLogger("entry-watch");
 
 /**
  * Of the curated band's floor, how close a young launch must be to be watched between cycles:
- * at 60% of $7k, a launch from $4.2k up.
+ * at 40% of $7k, a launch from $2.8k up. Was 60% ($4.2k up) until 2026-11-02: the fast path
+ * handed off few launches because most crossed the floor from further down between two cycle
+ * reads, so the watch was widened (audit 2026-11-02, user decision).
  */
-export const ENTRY_APPROACH_RATIO = 0.6;
-/** One Jupiter call's worth (it takes 100 mints a call), the closest to the floor first. */
-export const ENTRY_MAX_WATCHED = 100;
+export const ENTRY_APPROACH_RATIO = 0.4;
+/**
+ * The most launches watched between cycles, the closest to the floor first: two Jupiter calls'
+ * worth (it takes 100 mints a call) for the ones the curve tape can't price. Was 100 until
+ * 2026-11-02, widened with ENTRY_APPROACH_RATIO.
+ */
+export const ENTRY_MAX_WATCHED = 200;
 /**
  * Of that call, the most places the launches created since the last cycle take first (about 50
  * arrive in a one-minute cycle); the rest go to the launches approaching the floor.
