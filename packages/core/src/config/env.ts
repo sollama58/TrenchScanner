@@ -1278,12 +1278,15 @@ const envSchema = z.object({
   FDSA_SCREEN_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.7),
   FDSA_SCREEN_SHORTLIST_PCT: z.coerce.number().min(0).max(100).default(10),
   FDSA_SCREEN_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
-  // Stage 2, the decide: the shortlist, on Opus at medium effort with the reviewer's full brief,
-  // says trade or pass and sets the entry exit plan. A buy must still reach the paper pass inside
-  // the desk's maxSignalAgeSeconds (120 s by default), so the screen and the decide together have
-  // to fit well inside it; a call past its timeout counts as a pass.
+  // Stage 2, the decide: the shortlist, on Opus with the reviewer's full brief, says trade or
+  // pass and sets the entry exit plan. A buy must still reach the paper pass inside the desk's
+  // maxSignalAgeSeconds (120 s by default), so the screen and the decide together have to fit
+  // well inside it; a call past its timeout counts as a pass. High effort (owner decision
+  // 2026-11-02, FDSA AI audit): at medium every decide answered in 4-6 s for about $0.035, some
+  // 500 output tokens, the JSON and little else; high is the smallest step that buys deliberation
+  // and still fits the window (about 1.5-2x the cost per decide).
   FDSA_DECIDE_MODEL: z.string().default("claude-opus-5-5"),
-  FDSA_DECIDE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
+  FDSA_DECIDE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("high"),
   FDSA_DECIDE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   // The trade bar (AI evaluation 2026-11-01): the 2x odds the decide stage's own probability2x
   // must reach for a "trade" to count as one; under it the answer is stored as a pass with the bar
