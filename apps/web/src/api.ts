@@ -558,10 +558,12 @@ export interface CuratedMeta {
   model?: string | null;
   modelName?: string | null;
   confidence: number;
-  /** "high" for a high-conviction call (the model's top half-percent of moments), "standard" otherwise; null on rules calls and older rows. */
+  /** "high" when the model's recent alerts ranked like this one 2x'd at least 35% of the time, "standard" otherwise; null on rules calls and older rows. */
   tier?: string | null;
-  /** The 2x rate of recent out-of-sample calls ranked like this one, in percent, at emission. */
+  /** The 2x rate of recent out-of-sample calls ranked like this one, in percent, at emission (the FDSA desk's input). */
   calibratedPct?: number | null;
+  /** The rate the card quotes: calibratedPct from 35% up, else the model's pooled rate over its recent alerts; null when unmeasured (absent from older API builds). */
+  shownPct?: number | null;
   reasons: string[];
   alertedAt: string;
   /** Null when the call has no grading row (pruned, or not written yet). */
@@ -585,6 +587,7 @@ export interface ModelCall {
   confidence: number;
   tier?: string | null;
   calibratedPct?: number | null;
+  shownPct?: number | null;
   alertedAt: string;
   /** The call's stored anchor cap. Absent from older API builds. */
   mcapUsd?: number | null;

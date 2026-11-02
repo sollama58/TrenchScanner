@@ -847,12 +847,18 @@ model CuratedAlert {
   modelName     String?
   /// The curator's conviction at emission, 0-100.
   confidence    Float
-  /// "high" when the call cleared the model's high-conviction line (CURATED_HIGH_CONVICTION_RANK),
-  /// "standard" otherwise; null on rules calls and rows from before tiers existed.
+  /// "high" when the seat's live moments ranked like this one doubled at or above CARD_BAND_MIN_PCT
+  /// (liveRankRates.ts servedRate; until 2026-11-02, when the call cleared the seat's
+  /// high-conviction line), "standard" otherwise; null on rules calls and rows from before tiers existed.
   tier          String?
   /// The 2x rate of recent out-of-sample calls ranked like this one, in percent, from the model's
-  /// calibration table at emission; null when it had none.
+  /// calibration table at emission, replaced by the seat's live band where enough are graded; null
+  /// when it had none. The FDSA desk screens on it, so always the call's own rate.
   calibratedPct Float?
+  /// The rate the card quotes, in percent: calibratedPct when the call's own measured band is at or
+  /// above CARD_BAND_MIN_PCT, else the seat's pooled rate over its called bands. Null when neither
+  /// is measured, and on rows from before 2026-11-02.
+  shownPct      Float?
   /// Why, as short human-readable strings - the top contributing signals at emission time.
   reasons       String[] @default([])
 

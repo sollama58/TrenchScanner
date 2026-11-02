@@ -931,7 +931,7 @@ export const ScopeRow = memo(function ScopeRow({
               {high && showSource && (
                 <span
                   className="scope-src model"
-                  title="High conviction: the model's top half-percent of moments"
+                  title="High conviction: the model's recent alerts ranked like this one 2x'd at least 35% of the time"
                 >
                   HC
                 </span>

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   calibratedRateLabel,
+  calibratedRateTitle,
   cardCalibratedRate,
   intervalText,
   isEarly,
@@ -60,23 +61,28 @@ describe("median", () => {
 
 describe("cardCalibratedRate", () => {
   it("quotes the median of the calling models, not the highest", () => {
-    const calls = [{ calibratedPct: 18 }, { calibratedPct: 40 }, { calibratedPct: 22 }];
-    expect(cardCalibratedRate({ calibratedPct: 18 }, calls)).toBe(22);
-    expect(cardCalibratedRate({ calibratedPct: 18 }, [{ calibratedPct: 18 }, { calibratedPct: 30 }])).toBe(
-      24,
-    );
+    const calls = [{ shownPct: 18 }, { shownPct: 40 }, { shownPct: 22 }];
+    expect(cardCalibratedRate({ shownPct: 18 }, calls)).toBe(22);
+    expect(cardCalibratedRate({ shownPct: 18 }, [{ shownPct: 18 }, { shownPct: 30 }])).toBe(24);
   });
 
   it("uses the lead call alone, skips calls without a rate, and has none without any", () => {
-    expect(cardCalibratedRate({ calibratedPct: 25 }, [])).toBe(25);
-    expect(cardCalibratedRate({}, [{ calibratedPct: null }, { calibratedPct: 20 }])).toBe(20);
-    expect(cardCalibratedRate({ calibratedPct: null }, [])).toBeNull();
+    expect(cardCalibratedRate({ shownPct: 25 }, [])).toBe(25);
+    expect(cardCalibratedRate({}, [{ shownPct: null }, { shownPct: 20 }])).toBe(20);
+    expect(cardCalibratedRate({ shownPct: null }, [])).toBeNull();
     // A model's raw confidence is not this rate, and a missing rate stays off the card.
-    expect(cardCalibratedRate({ calibratedPct: null }, [{ calibratedPct: null }])).toBeNull();
-    expect(cardCalibratedRate({ calibratedPct: 41 }, [])).toBe(41);
+    expect(cardCalibratedRate({ shownPct: null }, [{ shownPct: null }])).toBeNull();
+    expect(cardCalibratedRate({ shownPct: 41 }, [])).toBe(41);
     expect(calibratedRateLabel(null)).toBeNull();
     expect(calibratedRateLabel(41.4)).toBe("41% of alerts like it 2x'd");
     expect(calibratedRateLabel(41)).not.toMatch(/90/);
+  });
+
+  it("says when the quoted rate is the model's pooled one", () => {
+    expect(calibratedRateLabel(35)).toBe("35% of alerts like it 2x'd");
+    expect(calibratedRateLabel(22.6)).toBe("23% of its recent alerts 2x'd");
+    expect(calibratedRateTitle(22, false)).toContain("over all its recent alerts");
+    expect(calibratedRateTitle(40, true)).toMatch(/alerts like it.*middle of the alerting models/);
   });
 });
 

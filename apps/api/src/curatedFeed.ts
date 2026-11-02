@@ -1068,6 +1068,8 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
     tier: alert.tier,
     /** The 2x rate of recent out-of-sample calls ranked like this one at emission, in percent. */
     calibratedPct: alert.calibratedPct,
+    /** The rate the card quotes: the call's own band from 35% up, else the model's pooled rate; null when unmeasured. */
+    shownPct: alert.shownPct,
     /**
      * Pump.fun's market cap as the call went out, else the Jupiter quote the call was priced from;
      * null when neither answered. Display only: Peak and the verdict are measured from the alert
@@ -1423,6 +1425,7 @@ export interface ModelCall {
   confidence: number;
   tier: string | null;
   calibratedPct: number | null;
+  shownPct: number | null;
   alertedAt: Date;
   /** The call's stored anchor cap. Null when that row did not carry one. */
   mcapUsd: number | null;
@@ -1466,6 +1469,7 @@ export function groupSameTokenCalls<
     confidence: number;
     tier?: string | null;
     calibratedPct?: number | null;
+    shownPct?: number | null;
     anchorMcapUsd?: number | null;
   },
 >(rowsNewestFirst: T[], windowMs: number): CallGroup<T>[] {
@@ -1496,6 +1500,7 @@ export function groupSameTokenCalls<
         confidence: r.confidence,
         tier: r.tier ?? null,
         calibratedPct: r.calibratedPct ?? null,
+        shownPct: r.shownPct ?? null,
         alertedAt: r.createdAt,
         mcapUsd: typeof r.anchorMcapUsd === "number" && r.anchorMcapUsd > 0 ? r.anchorMcapUsd : null,
       })),

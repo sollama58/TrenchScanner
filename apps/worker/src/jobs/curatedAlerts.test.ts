@@ -691,15 +691,15 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     }
   });
 
-  it("banks every seat's score on a new decision moment, and tiers on the seat's live line", async () => {
-    // Shipped line above anything the model scores (sigmoid(5) = 0.993): on it alone, never high.
+  it("banks every seat's score on a new decision moment, and tiers and quotes on the seat's live bands", async () => {
+    // The shipped line no longer decides the tier (servedRate): set far above anything scored.
     await activeModel("linear", CURATOR_MODEL_KIND, {
       ...alwaysYesParams(),
       highConvictionThreshold: 0.9999,
     });
     const history = await prisma.token.create({ data: { mintAddress: `${TAG}-line-history` } });
-    // A day of live scores far below it: the seat's top half-percent sits near 0.25. Graded, with
-    // its top 2% all doubling against one in five below, so the seat has earned the tier live.
+    // A day of live scores far below the call's (sigmoid(5) = 0.993), graded: the top 2% all
+    // doubled against one in five below, so the call's own band is at 100%, over the 35% line.
     const n = 2_500;
     const graded = (i: number) => ({
       tokenId: history.id,
@@ -735,8 +735,12 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
       where: { tokenId: token.id, model: "linear" },
     });
     expect(alert.tier).toBe("high");
+    // Its own band, quoted as it is, and kept as the desk's input.
+    expect(alert.calibratedPct).toBe(100);
+    expect(alert.shownPct).toBe(100);
 
-    // The same call from a seat whose top band hasn't out-won its standard calls goes out standard.
+    // The same call from a seat whose top band is under the line goes out standard, quoting the
+    // seat's pooled rate over the bands its calls come from (none doubled: 0%).
     await prisma.candidateOutcome.updateMany({ where: { tokenId: history.id }, data: { hit2xIn1h: false } });
     resetLiveScaleCache();
     const flat = await prisma.token.create({ data: { mintAddress: `${TAG}-line-flat` } });
@@ -749,6 +753,8 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
       where: { tokenId: flat.id, model: "linear" },
     });
     expect(standard.tier).toBe("standard");
+    expect(standard.calibratedPct).toBe(0);
+    expect(standard.shownPct).toBe(0);
   });
 
   it("scores TokenSage's X-reuse count as missing while it is lost, and banks what the read said", async () => {

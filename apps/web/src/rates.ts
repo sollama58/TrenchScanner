@@ -77,29 +77,50 @@ export function median(values: readonly number[]): number | null {
 }
 
 /**
- * The calibrated 2x rate a card quotes: the median across the models that called it (the lead
- * call's alone when it is the only one). The highest of them read about 4 points above what the
- * cards then did (audit 2026-10-14, verify-d W7); per call the rate is well calibrated.
- * `calls` is the card's calledBy list, which includes the lead call when present.
+ * The card quotes a call's own band only from this rate up; under it the card quotes the model's
+ * pooled rate over its recent alerts (core curation/liveRankRates.ts CARD_BAND_MIN_PCT, user
+ * decision 2026-11-02). The API picks the number (shownPct); this line only picks the words.
+ */
+export const CARD_BAND_MIN_PCT = 35;
+
+/**
+ * The 2x rate a card quotes: the median across the models that called it (the lead call's alone
+ * when it is the only one). The highest of them read about 4 points above what the cards then did
+ * (audit 2026-10-14, verify-d W7); per call the rate is well calibrated. `calls` is the card's
+ * calledBy list, which includes the lead call when present. Read from shownPct: a call's own
+ * band from CARD_BAND_MIN_PCT up, else its model's pooled rate; rows from before 2026-11-02 carry
+ * none and quote nothing.
  */
 export function cardCalibratedRate(
-  lead: { calibratedPct?: number | null },
-  calls: readonly { calibratedPct?: number | null }[],
+  lead: { shownPct?: number | null },
+  calls: readonly { shownPct?: number | null }[],
 ): number | null {
   const from = calls.length > 0 ? calls : [lead];
   return median(
-    from.map((c) => c.calibratedPct).filter((r): r is number => typeof r === "number" && Number.isFinite(r)),
+    from.map((c) => c.shownPct).filter((r): r is number => typeof r === "number" && Number.isFinite(r)),
   );
 }
 
 /**
- * The card's words for that rate: the share of similarly ranked recent calls that doubled.
- * Null when there is no calibrated rate, so a missing rate stays off the card. Never the model's
- * raw confidence.
+ * The card's words for that rate. From CARD_BAND_MIN_PCT up it is the share of similarly ranked
+ * recent calls that doubled; under it, the model's pooled rate over its recent alerts, and the
+ * words say so. Null when there is no rate, so a missing rate stays off the card. Never the
+ * model's raw confidence.
  */
 export function calibratedRateLabel(rate: number | null): string | null {
   if (rate === null || !Number.isFinite(rate)) return null;
-  return `${Math.round(rate)}% of alerts like it 2x'd`;
+  return rate >= CARD_BAND_MIN_PCT
+    ? `${Math.round(rate)}% of alerts like it 2x'd`
+    : `${Math.round(rate)}% of its recent alerts 2x'd`;
+}
+
+/** The pill's hover text for that rate, with the median note when several models called. */
+export function calibratedRateTitle(rate: number, several: boolean): string {
+  const own =
+    "The share of similarly ranked recent calls that doubled: of alerts like it, this percent hit 2x within 15 min of the alert, before a 50% stop";
+  const pooled =
+    "This model's recent alerts ranked like this one 2x'd under 35% of the time, so the card quotes the model's rate over all its recent alerts: this percent hit 2x within 15 min, before a 50% stop";
+  return `${rate >= CARD_BAND_MIN_PCT ? own : pooled}${several ? " (the middle of the alerting models' rates)" : ""}`;
 }
 
 /**

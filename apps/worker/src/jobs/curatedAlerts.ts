@@ -38,9 +38,7 @@ import {
   TOP_SLICE_MODEL_KIND,
   calibratedWinRate,
   calibratedWinRateAtRank,
-  recalibratedRate,
-  liveTierEarned,
-  convictionTier,
+  servedRate,
   EMPTY_LIVE_SCALES,
   loadLiveScales,
   onLiveMembers,
@@ -747,9 +745,10 @@ function holdUnprovenFastCalls(
 }
 
 /**
- * The tier and the calibrated 2x rate for a model's probability - see ServedCuratorExtras. The
- * tier's line is the seat's live one when it has enough live scores, else the run's shipped one
- * (curation/convictionLine.ts).
+ * The tier, the calibrated 2x rate and the rate the card quotes for a model's probability - see
+ * ServedCuratorExtras and curation/liveRankRates.ts servedRate. The run's calibration table gives
+ * the rate at the call's rank; the seat's live bands replace it where enough moments are graded,
+ * decide the tier and give the pooled rate the card quotes under CARD_BAND_MIN_PCT.
  */
 function servedFields(
   params: ServedCuratorExtras,
@@ -758,22 +757,20 @@ function servedFields(
   live: LiveScales,
   /** The seat's own live scores, when its rank is read on them (learners - see liveScale.ts). */
   liveScores?: readonly number[],
-): Pick<CurationDecision, "tier" | "calibratedPct"> {
-  const out: Pick<CurationDecision, "tier" | "calibratedPct"> = {};
-  const tier = convictionTier(probability, params.highConvictionThreshold, live.lines.get(seat));
-  // "high" only for a seat whose top band has clearly out-won its standard calls live.
-  if (tier !== undefined)
-    out.tier = tier === "high" && !liveTierEarned(live.rankRates?.get(seat)) ? "standard" : tier;
-  let rate =
+): Pick<CurationDecision, "tier" | "calibratedPct" | "shownPct"> {
+  const rate =
     liveScores === undefined
       ? calibratedWinRate(params.calibration, probability)
       : calibratedWinRateAtRank(params.calibration, rankAmong(liveScores, probability));
-  // What the seat's live moments at this rank did, where enough are graded (curation/liveRankRates.ts).
   const ranked = liveScores ?? usableLiveScores(live.scores, seat);
-  if (ranked !== undefined) {
-    rate = recalibratedRate(rate, live.rankRates?.get(seat), rankAmong(ranked, probability));
-  }
-  if (rate !== null) out.calibratedPct = Math.round(rate * 1000) / 10;
+  const served =
+    ranked === undefined
+      ? servedRate(rate, undefined, 0)
+      : servedRate(rate, live.rankRates?.get(seat), rankAmong(ranked, probability));
+  const out: Pick<CurationDecision, "tier" | "calibratedPct" | "shownPct"> = {};
+  if (served.tier !== undefined) out.tier = served.tier;
+  if (served.calibratedPct !== null) out.calibratedPct = served.calibratedPct;
+  if (served.shownPct !== null) out.shownPct = served.shownPct;
   return out;
 }
 
@@ -1498,6 +1495,7 @@ async function emitCuratedAlert(
           confidence: decision.confidence,
           tier: decision.tier ?? null,
           calibratedPct: decision.calibratedPct ?? null,
+          shownPct: decision.shownPct ?? null,
           reasons: decision.reasons,
           narrativeRationale: rationaleColumn(
             model === NARRATIVE_CONTESTANT ? narrativeRationaleJson(decision) : null,
@@ -1542,6 +1540,7 @@ async function emitCuratedAlert(
     confidence: decision.confidence,
     tier: decision.tier ?? null,
     calibratedPct: decision.calibratedPct ?? null,
+    shownPct: decision.shownPct ?? null,
     mcap: scored.marketCapUsd,
     reasons: decision.reasons,
   });

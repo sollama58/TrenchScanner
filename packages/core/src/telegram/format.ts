@@ -3,6 +3,8 @@
  * escaped: a coin named "<b>" must not format the message, let alone break it.
  */
 
+import { CARD_BAND_MIN_PCT } from "../curation/liveRankRates.js";
+
 export function escapeHtml(text: string): string {
   // Quotes too: the same helper fills href="..." attributes.
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -34,7 +36,10 @@ export interface AlertCall {
   /** 0-100. */
   confidence: number;
   tier: string | null;
-  /** The 2x rate of recent calls ranked like this one, in percent; null when unknown. */
+  /**
+   * The rate the card quotes, in percent (CuratedAlert.shownPct): the call's own band from
+   * CARD_BAND_MIN_PCT up, else the model's pooled rate over its recent calls; null when unknown.
+   */
   calibratedPct: number | null;
   reasons: string[];
   /** The Narrative seat's note on the card: "agrees" | "warns" | null. */
@@ -423,14 +428,28 @@ function factsLines(
  * conviction" it read as a chance of winning beside the calibrated rate on the next line (full
  * audit 2026-10-27 WB-13; the web says "Score" for the same reason).
  */
+/**
+ * The quoted rate's words. From CARD_BAND_MIN_PCT up it is the call's own band ("alerts like it");
+ * under it the card quotes the model's pooled rate over its recent calls, and says so.
+ */
+function rateLine(pct: number): string {
+  return pct >= CARD_BAND_MIN_PCT
+    ? `${Math.round(pct)}% of alerts like it 2x'd`
+    : `${Math.round(pct)}% of its recent alerts 2x'd`;
+}
+
+/** The compact form of rateLine. */
+function rateBit(pct: number): string {
+  return pct >= CARD_BAND_MIN_PCT ? `${Math.round(pct)}% like it 2x'd` : `${Math.round(pct)}% of recent 2x'd`;
+}
+
 function callLines(call: AlertCall, withReasons: boolean, parts: AlertParts, compact: boolean): string[] {
   const score = Math.round(call.confidence);
   if (compact) {
     const bits = [
       `🤖 <b>${escapeHtml(call.modelName)}</b> score <b>${score}</b>${call.tier === "high" ? " 🔥" : ""}`,
     ];
-    if (parts.calibrated && call.calibratedPct !== null)
-      bits.push(`${Math.round(call.calibratedPct)}% like it 2x'd`);
+    if (parts.calibrated && call.calibratedPct !== null) bits.push(rateBit(call.calibratedPct));
     if (call.narrativeVerdict === "agrees") bits.push("📝 agrees");
     if (call.narrativeVerdict === "warns") bits.push("⚠️ warns");
     return [bits.join("  ·  ")];
@@ -438,8 +457,7 @@ function callLines(call: AlertCall, withReasons: boolean, parts: AlertParts, com
   let head = `🤖 <b>${escapeHtml(call.modelName)}</b>  ${convictionBar(score)}  Score <b>${score}</b>`;
   if (call.tier === "high") head += "  🔥 high";
   const lines = [head];
-  if (parts.calibrated && call.calibratedPct !== null)
-    lines.push(`     ${Math.round(call.calibratedPct)}% of alerts like it 2x'd`);
+  if (parts.calibrated && call.calibratedPct !== null) lines.push(`     ${rateLine(call.calibratedPct)}`);
   if (call.narrativeVerdict === "agrees") lines.push("     📝 Narrative agrees");
   if (call.narrativeVerdict === "warns") lines.push("     ⚠️ Narrative warns");
   const reasons = withReasons ? call.reasons.slice(0, MAX_REASONS).map((r) => `▸ ${escapeHtml(r)}`) : [];

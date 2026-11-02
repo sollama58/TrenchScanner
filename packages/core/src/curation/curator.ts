@@ -133,17 +133,25 @@ export interface CurationDecision {
   reasons: string[];
   source: string;
   /**
-   * "high" when the call clears the model's high-conviction line (the top CURATED_HIGH_CONVICTION_RANK
-   * share of decision moments), else "standard". Absent from the rules and from models trained
-   * before tiers existed.
+   * "high" when the seat's live decision moments ranked like this one doubled at or above
+   * CARD_BAND_MIN_PCT (liveRankRates.ts servedRate), else "standard". Absent from the rules and
+   * from any call without a rate. Until 2026-11-02 it marked the top CURATED_HIGH_CONVICTION_RANK
+   * share of the seat's moments.
    */
   tier?: "high" | "standard";
   /**
    * The 2x rate of recent out-of-sample calls ranked like this one, in percent - the number a
    * trader can act on, as opposed to `confidence`, which is in the curator's own units. Absent
-   * when the model carries no calibration table.
+   * when the model carries no calibration table. The FDSA desk screens on it, so it is always
+   * the call's own rate.
    */
   calibratedPct?: number;
+  /**
+   * The rate the card quotes, in percent: `calibratedPct` when the call's own measured band is at
+   * or above CARD_BAND_MIN_PCT, else the seat's pooled rate over the bands its calls come from.
+   * Absent when neither is measured (the card then quotes no rate).
+   */
+  shownPct?: number;
   /**
    * The inputs that moved the score most each way. Set by the Narrative seat only, on a call and a
    * pass alike: its verdict is shown with its reasons in the TokenSage view.

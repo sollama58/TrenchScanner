@@ -31,6 +31,7 @@ export interface ModelAlertMessage {
   };
   confidence: number;
   tier: string | null;
+  /** The rate the card quotes (CuratedAlert.shownPct), not the call's own calibrated rate. */
   calibratedPct: number | null;
   reasons: string[];
   model: string | null;
@@ -95,7 +96,7 @@ const alertSelect = {
   modelName: true,
   confidence: true,
   tier: true,
-  calibratedPct: true,
+  shownPct: true,
   reasons: true,
   anchorPriceUsd: true,
   anchorMcapUsd: true,
@@ -198,7 +199,7 @@ export function toModelAlertMessage(alert: AlertRow, fee: CardCreatorFee | null)
     modelName: name,
     confidence: alert.confidence,
     tier: alert.tier,
-    calibratedPct: alert.calibratedPct,
+    calibratedPct: alert.shownPct,
   };
   return {
     kind: "curated",
@@ -217,7 +218,7 @@ export function toModelAlertMessage(alert: AlertRow, fee: CardCreatorFee | null)
     },
     confidence: alert.confidence,
     tier: alert.tier,
-    calibratedPct: alert.calibratedPct,
+    calibratedPct: alert.shownPct,
     reasons: alert.reasons.filter((reason) => !reason.startsWith("AI: ")),
     model: alert.model,
     modelName: name,

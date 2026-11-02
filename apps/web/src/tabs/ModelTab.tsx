@@ -1285,7 +1285,7 @@ function LeaderboardPanel({
                   <th className="r">Backtest 2x / 4x / 10x</th>
                   <th
                     className="r"
-                    title="Live 2x rate of its high-conviction alerts alone (its top half-percent of moments)"
+                    title="Live 2x rate of its high-conviction alerts alone (calls whose rank band 2x'd at least 35% of the time)"
                   >
                     High-conv 2x
                   </th>

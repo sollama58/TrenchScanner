@@ -58,6 +58,7 @@ export function scopeSampleCard(now: number): Card {
       confidence: 84,
       tier: "high",
       calibratedPct: 38,
+      shownPct: 38,
       reasons: [],
       alertedAt: at,
       calledBy: [],

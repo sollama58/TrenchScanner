@@ -1,4 +1,3 @@
-import { wilsonBounds } from "../wilson.js";
 import { rankAmong } from "./liveScale.js";
 
 /**
@@ -16,7 +15,7 @@ import { rankAmong } from "./liveScale.js";
  * scorecard 2026-10-25). So the band's measured rate now replaces the run's rate both ways, and
  * the run's rate stands only where the band has too few graded moments (user decision 2026-10-25).
  *
- * The same bands decide whether a seat may tier a call "high" at all (liveTierEarned).
+ * The same bands decide the card's quoted rate and the high tier (servedRate, CARD_BAND_MIN_PCT).
  */
 
 /**
@@ -100,37 +99,79 @@ export function recalibratedRate(
   return measuredRateAtRank(bands, rank) ?? rate;
 }
 
-/** One-sided z for the high tier's margin: the top band's 90% Wilson interval. */
-const TIER_Z = 1.645;
+/**
+ * The card's "N% of alerts like it 2x'd" quotes the call's own band only from this rate up; under
+ * it the card quotes the seat's pooled rate over the bands its calls come from (pooledCalledRate).
+ * The same line is the high tier: a call is "high" when its own measured band doubles at least
+ * this often, in place of the top-2% line that had to out-win the standard bands (liveTierEarned,
+ * 2026-10-25..2026-11-02), which no seat held for long. A band's rate under this line read as a
+ * reason to buy anyway, and the badge marked a rank rather than a rate (audit 2026-11-02, GF-3 and
+ * GF-4; user decisions "band above 35%, else pool rate" and "redefine it").
+ */
+export const CARD_BAND_MIN_PCT = 35;
 
-/** The lower end of the Wilson interval on wins / graded. */
-function wilsonLower(wins: number, graded: number, z = TIER_Z): number {
-  return graded <= 0 ? 0 : wilsonBounds(wins, graded, z).lower;
+/** The bands a seat's calls come from: the top 20% of its moments (RANK_RATE_BAND_EDGES down to 0.8). */
+const CALLED_BAND_MIN_EDGE = 0.8;
+
+/**
+ * The seat's measured 2x rate (a fraction) over the bands its calls come from, pooled, or null
+ * with too few graded moments across them.
+ */
+export function pooledCalledRate(
+  bands: readonly RankRateBand[] | undefined,
+  minGraded: number = RANK_RATE_MIN_GRADED,
+): number | null {
+  if (!bands) return null;
+  let graded = 0;
+  let wins = 0;
+  for (const band of bands) {
+    if (band.from < CALLED_BAND_MIN_EDGE) continue;
+    graded += band.graded;
+    wins += band.wins;
+  }
+  return graded < Math.max(1, minGraded) ? null : wins / graded;
+}
+
+/** A rate as the percent the alert stores, to one decimal. */
+function toPct(rate: number): number {
+  return Math.round(rate * 1000) / 10;
+}
+
+/** What a call is served with: its rate, what the card quotes, and its tier. */
+export interface ServedRate {
+  /**
+   * The band's measured rate where it has enough graded moments, else the run's rate, in percent.
+   * The FDSA desk screens on it (fdsa/review.ts), so it is always the call's own rate. Null when
+   * neither is known.
+   */
+  calibratedPct: number | null;
+  /**
+   * What the card quotes: calibratedPct when the call's own measured band is at or above
+   * CARD_BAND_MIN_PCT, else the seat's pooled called rate; null when neither is known.
+   */
+  shownPct: number | null;
+  /** "high" when the own measured band is at or above CARD_BAND_MIN_PCT, "standard" with any other rate, none without one. */
+  tier: "high" | "standard" | undefined;
 }
 
 /**
- * Whether the seat's live record lets it tier a call "high": its top band (the top 2% of its
- * scores, where the high-conviction line sits) doubled clearly more often than its 2-20% bands,
- * the calls it sends as standard. "Clearly" is the top band's 90% Wilson lower bound above the
- * standard bands' rate, both bands with at least `minGraded` graded moments. Live, the high tier
- * won no more than standard (72h: 22.1% against 23.2%; 48h: 14.9% against 21.9%), and a top band
- * that merely beat the next one in one week did so again the next week for 5 of 10 seats, so a
- * bare "higher" is noise (model scorecard 2026-10-25, user decision: show the badge only where it
- * has beaten standard on data the run never saw). No bands, no tier.
+ * The served rate for a call at `rank` among the seat's live scores: `runRate` is the training
+ * run's calibrated rate (a fraction) for it, `bands` the seat's live bands (buildRankRates).
  */
-export function liveTierEarned(
+export function servedRate(
+  runRate: number | null,
   bands: readonly RankRateBand[] | undefined,
-  minGraded: number = RANK_RATE_MIN_GRADED,
-): boolean {
-  if (!bands || bands.length < 4) return false;
-  const top = bands[0]!;
-  const standard = bands
-    .slice(1, 4)
-    .reduce((a, b) => ({ graded: a.graded + b.graded, wins: a.wins + b.wins }), {
-      graded: 0,
-      wins: 0,
-    });
-  const floor = Math.max(1, minGraded);
-  if (top.graded < floor || standard.graded < floor) return false;
-  return wilsonLower(top.wins, top.graded) > standard.wins / standard.graded;
+  rank: number,
+): ServedRate {
+  const measured = measuredRateAtRank(bands, rank);
+  const rate = measured ?? runRate;
+  if (rate === null) return { calibratedPct: null, shownPct: null, tier: undefined };
+  const calibratedPct = toPct(rate);
+  const ownBand = measured !== null && toPct(measured) >= CARD_BAND_MIN_PCT;
+  const pooled = pooledCalledRate(bands);
+  return {
+    calibratedPct,
+    shownPct: ownBand ? calibratedPct : pooled === null ? null : toPct(pooled),
+    tier: ownBand ? "high" : "standard",
+  };
 }
