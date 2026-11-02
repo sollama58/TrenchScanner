@@ -337,4 +337,75 @@ describe("live tape", () => {
     expect(liveLaunchBagsOf(MINT, RISKY, readAt + 60_001)).toBeNull();
     expect(liveLaunchBagsOf("other", RISKY, readAt)).toBeNull();
   });
+
+  describe("with the logs feed", () => {
+    const logsTrade = (wallet: string, atMs: number, tx = `log-${atMs}`): TapeTrade => ({
+      wallet,
+      side: "buy",
+      sol: 4,
+      tokens: 1_000,
+      atMs,
+      tx,
+    });
+    function fakeLogs(coveredSince: number | null, trades: TapeTrade[]) {
+      const feed = {
+        covered: coveredSince,
+        trades,
+        follow: vi.fn(),
+        coveredSince: vi.fn(() => feed.covered),
+        tradesSince: vi.fn((_mint: string, since: number) => feed.trades.filter((t) => t.atMs >= since)),
+      };
+      return feed;
+    }
+
+    it("keeps a page current from the logs instead of reading it again", async () => {
+      const helius = fakeHelius();
+      const logs = fakeLogs(null, []);
+      const opts = { maxPages: 2, refreshMs: 60_000, logs };
+      await readLiveTape([MINT], helius, { ...opts, nowMs: 1000 });
+      expect(logs.follow).toHaveBeenCalledWith([MINT], 1000);
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
+
+      // Covered since before the page was read: due by age, but brought up to now from the logs,
+      // the trade already on the page (its signature) not taken twice.
+      logs.covered = 500;
+      logs.trades = [logsTrade(RISKY, 1_700_000_100_000, "sig-1700000100"), logsTrade(OTHER, 65_000)];
+      await readLiveTape([MINT], helius, { ...opts, nowMs: 70_000 });
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
+      const page = livePageOf(MINT, 70_000);
+      expect(page?.atMs).toBe(70_000);
+      expect(page?.trades.map((t) => t.wallet)).toEqual([OTHER, RISKY]);
+      expect(takeLiveTapeStats()).toMatchObject({ pages: 1, fromLogs: 1 });
+    });
+
+    it("reads the page again when the logs' cover started after it", async () => {
+      const helius = fakeHelius();
+      const logs = fakeLogs(null, []);
+      const opts = { maxPages: 2, refreshMs: 60_000, logs };
+      await readLiveTape([MINT], helius, { ...opts, nowMs: 1000 });
+      // A reconnect: covered again only since after the page, so trades may have fallen between.
+      logs.covered = 5_000;
+      await readLiveTape([MINT], helius, { ...opts, nowMs: 70_000 });
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(2);
+    });
+
+    it("builds a page from the logs alone once they cover what a page would", async () => {
+      const helius = fakeHelius();
+      const logs = fakeLogs(0, [logsTrade(RISKY, 2_000)]);
+      const opts = { maxPages: 2, refreshMs: 60_000, logs };
+      // A minute of cover and one trade: not yet a page's worth, so Helius is read.
+      await readLiveTape([MINT], helius, { ...opts, nowMs: 60_000 });
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
+
+      resetLiveTape();
+      await readLiveTape(["fresh"], helius, { ...opts, nowMs: STREAM_COVERAGE_MS });
+      expect(helius.getMintTransactionsPage).toHaveBeenCalledTimes(1);
+      expect(livePageOf("fresh", STREAM_COVERAGE_MS)).toEqual({
+        atMs: STREAM_COVERAGE_MS,
+        trades: [logsTrade(RISKY, 2_000)],
+        complete: false,
+      });
+      expect(takeLiveTapeStats()).toMatchObject({ pages: 0, fromLogs: 1 });
+    });
+  });
 });

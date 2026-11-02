@@ -455,6 +455,16 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // The live tape's trades off the chain's own logs (worker's tapeLogsFeed.ts, user decision
+  // 2026-11-02: Helius logs instead of a paid PumpPortal key): the coins queued for a page have
+  // their Pump.fun curve and PumpSwap pool followed by logsSubscribe on the scanner's Helius
+  // socket, so a page once read stays current from the trades as they land instead of being read
+  // again every LIVE_TAPE_REFRESH_SECONDS, and the page budget goes to coins with no page yet.
+  // PumpPortal streams trades only to a paid key, so without this the tape's 15 pages a minute
+  // were every coin's order flow, and busy hours left a third of decisions without it. Billed by
+  // the bytes (~6 KB a trade, 2 credits per 0.1 MB). At most this many coins at once; 0 turns it
+  // off.
+  LIVE_TAPE_LOGS_MAX_COINS: z.coerce.number().int().nonnegative().default(150),
 
   // The empty-top-10-wallet signal (apps/worker/src/jobs/walletHoldings.ts): how much a top-10
   // holder must hold in tokens that are neither cash (USDC/USDT) nor gas (SOL) before it counts

@@ -50,6 +50,12 @@ const logger = createLogger("live-tape");
  * history (its launch was seen, no stream gap since), a full page's worth of trades, or at least
  * STREAM_COVERAGE_MS of following. Once the coin graduates, or the stream can't vouch for it,
  * Helius is read as before.
+ *
+ * PumpPortal streams trades only to a paid key, which the scanner doesn't have, so on 2026-11-02
+ * no page came off it. The chain's own logs (tapeLogsFeed.ts, user decision 2026-11-02) now carry
+ * each followed coin's trades on the Helius socket: a page they have covered since it was read is
+ * brought up to now from them instead of read again, and a coin they have covered as long as a
+ * stream page must is given a page from them alone. Helius pages remain for the rest.
  */
 
 /** A stream page short of a full page or the coin's whole history must cover at least this long. */
@@ -91,6 +97,59 @@ function returnPage(perMinute: number): void {
 let pagesFailed = 0;
 /** Coins whose page came off the trade stream since the last call: no Helius page for them. */
 let streamed = 0;
+/** Pages kept current from the logs feed since the last call, instead of read again. */
+let fromLogs = 0;
+
+/**
+ * The chain's own trades for the coins the tape follows (tapeLogsFeed.ts, LIVE_TAPE_LOGS_MAX_COINS),
+ * set once by the worker; null runs the tape on Helius pages alone, as before.
+ */
+export interface LogsTrades {
+  follow(mints: readonly string[], now: number): void;
+  coveredSince(mint: string, now: number): number | null;
+  tradesSince(mint: string, sinceMs: number): TapeTrade[];
+  /** The feed's own counts for the heartbeat (coins followed and covered, trades read). */
+  takeStats?(now?: number): {
+    logsCoins: number;
+    logsCovered: number;
+    logsTrades: number;
+    logsCapped: number;
+  };
+}
+let logsFeed: LogsTrades | null = null;
+
+/** Hands the live tape the logs feed (worker index.ts), or null to stop using one. */
+export function setLiveTapeLogs(feed: LogsTrades | null): void {
+  logsFeed = feed;
+}
+
+/**
+ * A logs trade's second-rounded clock against a page's millisecond one: trades this close before a
+ * page's read are taken again from the feed (and de-duplicated by signature) so none falls between.
+ */
+const LOGS_OVERLAP_MS = 2_000;
+/** Most trades a page extended from the logs keeps; past it the page is no longer the whole history. */
+const MAX_EXTENDED_TRADES = 500;
+
+/** `page` with the feed's trades since it was read, de-duplicated by signature, as of `now`. */
+function extendPage(
+  page: { atMs: number; trades: TapeTrade[]; complete: boolean },
+  newer: readonly TapeTrade[],
+  now: number,
+): { atMs: number; trades: TapeTrade[]; complete: boolean } {
+  const have = new Set(page.trades.map((t) => `${t.tx}:${t.wallet}:${t.side}`));
+  const trades = [...page.trades];
+  for (const t of newer) {
+    const id = `${t.tx}:${t.wallet}:${t.side}`;
+    if (have.has(id)) continue;
+    have.add(id);
+    trades.push(t);
+  }
+  trades.sort((a, b) => a.atMs - b.atMs);
+  const over = trades.length - MAX_EXTENDED_TRADES;
+  if (over > 0) trades.splice(0, over);
+  return { atMs: now, trades, complete: page.complete && over <= 0 };
+}
 
 /**
  * Pages read and failed since the last call, for the scan's heartbeat: 10 credits a page read.
@@ -102,6 +161,11 @@ export function takeLiveTapeStats(): {
   credits: number;
   coins: number;
   streamed: number;
+  fromLogs: number;
+  logsCoins?: number;
+  logsCovered?: number;
+  logsTrades?: number;
+  logsCapped?: number;
 } {
   const out = {
     pages: pagesRead,
@@ -109,10 +173,13 @@ export function takeLiveTapeStats(): {
     credits: 10 * pagesRead,
     coins: pages.size,
     streamed,
+    fromLogs,
+    ...logsFeed?.takeStats?.(),
   };
   pagesRead = 0;
   pagesFailed = 0;
   streamed = 0;
+  fromLogs = 0;
   return out;
 }
 
@@ -132,6 +199,7 @@ export function streamPageUsable(page: StreamTapePage, nowMs: number): boolean {
 export function resetLiveTape(): void {
   pages.clear();
   pageBudget.tokens = Number.NaN;
+  logsFeed = null;
   takeLiveTapeStats();
 }
 
@@ -155,10 +223,14 @@ export async function readLiveTape(
     quietSince?: (mint: string, sinceMs: number) => boolean;
     /** A mint's newest trades off the trade stream (PumpPortalStream.recentTrades), when it can vouch for them. */
     streamed?: (mint: string) => StreamTapePage | null | undefined;
+    /** The chain's logs for these coins (tapeLogsFeed.ts); defaults to the one setLiveTapeLogs gave. */
+    logs?: LogsTrades | null;
   },
 ): Promise<void> {
   if (opts.maxPages <= 0) return;
   const now = opts.nowMs ?? Date.now();
+  const logs = opts.logs !== undefined ? opts.logs : logsFeed;
+  logs?.follow(mints, now);
   const missing: string[] = [];
   const stale: string[] = [];
   for (const m of mints) {
@@ -172,8 +244,28 @@ export async function readLiveTape(
       streamed += 1;
       continue;
     }
-    if (!helius.gtfaUsable) continue;
     const page = pages.get(m);
+    // The logs have carried every trade since before this page was read: the page is brought up
+    // to now from them instead of being read again. Without a page, the logs alone stand in once
+    // they say as much as a page would (a full page's worth, or STREAM_COVERAGE_MS of cover).
+    const coveredSince = logs?.coveredSince(m, now) ?? null;
+    if (logs && coveredSince !== null) {
+      if (page && coveredSince <= page.atMs) {
+        pages.delete(m);
+        pages.set(m, extendPage(page, logs.tradesSince(m, page.atMs - LOGS_OVERLAP_MS), now));
+        fromLogs += 1;
+        continue;
+      }
+      if (!page) {
+        const trades = logs.tradesSince(m, coveredSince);
+        if (trades.length >= STREAM_PAGE_TRADES || now - coveredSince >= STREAM_COVERAGE_MS) {
+          pages.set(m, { atMs: now, trades: [...trades].sort((a, b) => a.atMs - b.atMs), complete: false });
+          fromLogs += 1;
+          continue;
+        }
+      }
+    }
+    if (!helius.gtfaUsable) continue;
     if (!page) missing.push(m);
     else if (now - page.atMs < opts.refreshMs) continue;
     else if (!opts.quietSince?.(m, page.atMs)) stale.push(m);

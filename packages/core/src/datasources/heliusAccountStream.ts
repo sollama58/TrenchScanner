@@ -244,6 +244,15 @@ export class HeliusAccountStream {
   }
 
   /**
+   * Follows up to `n` "logs" keys at once instead of MAX_LOGS_KEYS: the worker's live tape follows
+   * its contenders' curves and pools here (two keys a coin), past the token page's 50 coins.
+   */
+  maxLogsKeys(n: number): this {
+    this.maxKeysOf.logs = n;
+    return this;
+  }
+
+  /**
    * Treats `ms` without a word from Helius (the slot feed speaks every ~0.4 s) as a stall for cover:
    * coveredSince answers null until the socket speaks again, so the caller reads by RPC at once,
    * though the reconnect itself still waits for IDLE_TIMEOUT_MS. For the chart's live tail (audit
