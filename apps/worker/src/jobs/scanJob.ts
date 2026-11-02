@@ -447,31 +447,38 @@ export const OLD_COIN_MINUTES = 120;
  * wallet figure), called by a model (`called`) or watched: the ones whose wallet-holdings backfill
  * and top-holder re-reads back off. A coin of unknown age is treated as young.
  */
-export function oldCoinMints(
-  groups: readonly {
-    mintAddress: string;
-    contender: boolean;
-    alerted: boolean;
-    /** In the alert feeds (recentlyAlerted): its readings are kept fresh, never backed off. */
-    recent?: boolean;
-    watched: boolean;
-    ageMinutes: number | undefined;
-  }[],
-  called: ReadonlySet<string>,
-): Set<string> {
+export function oldCoinMints(groups: readonly QuietCoinGroup[], called: ReadonlySet<string>): Set<string> {
   return new Set(
     groups
-      .filter(
-        (g) =>
-          !g.contender &&
-          !g.alerted &&
-          !g.recent &&
-          !g.watched &&
-          !called.has(g.mintAddress) &&
-          (g.ageMinutes ?? 0) >= OLD_COIN_MINUTES,
-      )
+      .filter((g) => isQuietCoin(g, called) && (g.ageMinutes ?? 0) >= OLD_COIN_MINUTES)
       .map((g) => g.mintAddress),
   );
+}
+
+interface QuietCoinGroup {
+  mintAddress: string;
+  contender: boolean;
+  alerted: boolean;
+  /** In the alert feeds (recentlyAlerted): its readings are kept fresh, never backed off. */
+  recent?: boolean;
+  watched: boolean;
+  ageMinutes: number | undefined;
+}
+
+function isQuietCoin(g: QuietCoinGroup, called: ReadonlySet<string>): boolean {
+  return !g.contender && !g.alerted && !g.recent && !g.watched && !called.has(g.mintAddress);
+}
+
+/**
+ * The screen-passed coins no decision or viewer is near, whatever their age: not contenders,
+ * alerted, in the alert feeds, watched or called. Their top 10's empty-wallet check is read once
+ * and then on the hour, not on the 10-minute TTL (walletHoldings.ts quietMints; Helius cut E,
+ * owner decision 2026-11-02). oldCoinMints is the subset past OLD_COIN_MINUTES, whose holder
+ * reads are backed off too. A coin that turns contender, is alerted on or opened leaves the set
+ * and is re-read on that cycle.
+ */
+export function quietCoinMints(groups: readonly QuietCoinGroup[], called: ReadonlySet<string>): Set<string> {
+  return new Set(groups.filter((g) => isQuietCoin(g, called)).map((g) => g.mintAddress));
 }
 
 /** The wallet lookups for non-contenders running behind a cycle, if any - see startWalletBackfill. */
@@ -496,6 +503,7 @@ function startWalletBackfill(
   env: Env,
   budget: { freshness: number; holdings: number },
   valuation?: WalletHoldingsOptions["valuation"],
+  quietMints?: WalletHoldingsOptions["quietMints"],
 ): void {
   if (walletBackfillInFlight || (groups.length === 0 && freshnessGroups.length === 0)) return;
   const work: Promise<unknown>[] = [];
@@ -503,7 +511,9 @@ function startWalletBackfill(
     work.push(resolveEarliestActivity(freshnessGroups, helius, { maxNewLookups: budget.freshness }));
   }
   if (budget.holdings > 0 && groups.length > 0) {
-    work.push(resolveWalletHoldings(groups, helius, env, { maxNewLookups: budget.holdings, valuation }));
+    work.push(
+      resolveWalletHoldings(groups, helius, env, { maxNewLookups: budget.holdings, valuation, quietMints }),
+    );
   }
   if (work.length === 0) return;
   const backfill = Promise.all(work).then(
@@ -2387,6 +2397,8 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   const wideMints = env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0 ? await wideMapMints() : new Set<string>();
   // Old coins no decision is near: their top holders and wallet holdings are read less often.
   const oldMints = oldCoinMints(walletGroups, wideMints);
+  // Coins no decision is near, of any age: their empty-wallet check is re-read hourly (cut E).
+  const quietMints = quietCoinMints(walletGroups, wideMints);
   const linkedWork = withApiFeature("linkedWallets", () =>
     startLinkedWalletStage(
       linkedGroups,
@@ -2469,7 +2481,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   const fromCacheOnly = () =>
     Promise.all([
       resolveEarliestActivity(freshness.groups, deps.helius, { lookupGroups: 0 }),
-      resolveWalletHoldings(walletGroups, deps.helius, env, { lookupGroups: 0 }),
+      resolveWalletHoldings(walletGroups, deps.helius, env, { lookupGroups: 0, quietMints }),
     ]);
   // Read once for the cycle: whether a curated decision should wait for the launch read (Block 0).
   const sniperChainAvailable = sniperReadsOn(env) && deps.helius.gtfaUsable;
@@ -2805,7 +2817,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     );
     const [earliest, holdings] = await Promise.all([
       resolveEarliestActivity(fresh.groups, deps.helius, { lookupGroups: 0 }),
-      resolveWalletHoldings(groups, deps.helius, env, { lookupGroups: 0 }),
+      resolveWalletHoldings(groups, deps.helius, env, { lookupGroups: 0, quietMints }),
     ]);
     const snipers = launchSnipersFromCache([...mints]);
     const launchBuyers = launchBuyerFreshnessFromCache([...mints]);
@@ -2921,6 +2933,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
           lookupGroups: waitedGroups,
           onLookups: (n) => (holdingsUsed = n),
           valuation,
+          quietMints,
         }),
       ]),
     );
@@ -2959,6 +2972,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
             holdings: holdingsLookupBudget(env) - holdingsUsed,
           },
           valuation,
+          quietMints,
         ),
       );
     }

@@ -72,6 +72,57 @@ describe.skipIf(!dbAvailable)("resolveWalletHoldings cache coverage", () => {
     expect(rewritten?.breakdownComplete).toBe(true);
   });
 
+  it("holds a quiet coin's wallets for an hour past the TTL, and a shared wallet only for the TTL (cut E)", async () => {
+    const [quietOnly, shared] = [wallet("quiet-only"), wallet("shared")];
+    const checkedAt = new Date(Date.now() - 30 * 60_000); // past the 10-minute TTL, inside the hour
+    await prisma.walletHoldingsCache.createMany({
+      data: [quietOnly, shared].map((address) => ({
+        address,
+        otherHoldingsUsd: 0,
+        perMintUsd: { [OLD_LAUNCH]: 0, [NEW_LAUNCH]: 0 },
+        breakdownComplete: true,
+        checkedAt,
+      })),
+    });
+    const { helius, calls } = fakeHelius();
+
+    const result = await resolveWalletHoldings(
+      [
+        { mintAddress: OLD_LAUNCH, addresses: [quietOnly, shared] },
+        { mintAddress: NEW_LAUNCH, addresses: [shared] },
+      ],
+      helius,
+      env,
+      { quietMints: new Set([OLD_LAUNCH]) },
+    );
+
+    // The wallet held only on the quiet coin answers from its half-hour-old row; the one also on a
+    // coin a decision may be near is past the TTL and read again.
+    expect(result.get(quietOnly)).toEqual({
+      otherHoldingsUsd: 0,
+      perMintUsd: { [OLD_LAUNCH]: 0, [NEW_LAUNCH]: 0 },
+    });
+    expect(calls).toEqual([[shared]]);
+  });
+
+  it("re-reads a quiet coin's wallet once its row is older than the hour (cut E)", async () => {
+    const stale = wallet("quiet-stale");
+    await prisma.walletHoldingsCache.create({
+      data: {
+        address: stale,
+        otherHoldingsUsd: 0,
+        perMintUsd: { [OLD_LAUNCH]: 0 },
+        breakdownComplete: true,
+        checkedAt: new Date(Date.now() - 61 * 60_000),
+      },
+    });
+    const { helius, calls } = fakeHelius();
+    await resolveWalletHoldings([{ mintAddress: OLD_LAUNCH, addresses: [stale] }], helius, env, {
+      quietMints: new Set([OLD_LAUNCH]),
+    });
+    expect(calls).toEqual([[stale]]);
+  });
+
   it("prices through balances and DexScreener when given them, caching found wallets and retrying deferred ones", async () => {
     resetValuationCaches();
     const [shell, busy] = [wallet("shell"), wallet("busy")];

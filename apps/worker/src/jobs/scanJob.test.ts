@@ -9,6 +9,7 @@ import {
   liveLaunchSource,
   newestLaunches,
   oldCoinMints,
+  quietCoinMints,
   selectWatchlist,
 } from "./scanJob.js";
 
@@ -378,5 +379,19 @@ describe("oldCoinMints (user decision 2026-10-20)", () => {
       coin("called"),
     ];
     expect([...oldCoinMints(groups, new Set(["called"]))]).toEqual(["old"]);
+  });
+
+  it("quietCoinMints (Helius cut E, 2026-11-02) takes the same coins whatever their age", () => {
+    const groups = [
+      coin("old"),
+      coin("young", { ageMinutes: OLD_COIN_MINUTES - 1 }),
+      coin("unknown-age", { ageMinutes: undefined }),
+      coin("contender", { contender: true }),
+      coin("alerted", { alerted: true }),
+      coin("recent", { recent: true }),
+      coin("watched", { watched: true }),
+      coin("called"),
+    ];
+    expect([...quietCoinMints(groups, new Set(["called"]))]).toEqual(["old", "young", "unknown-age"]);
   });
 });
