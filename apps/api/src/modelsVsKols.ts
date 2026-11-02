@@ -21,11 +21,11 @@ import { SharedCache } from "./sharedCache.js";
  * doubled. The KOL got in at or below the price the grade starts from, so the rate is, if anything,
  * generous to them.
  *
- * The typical KOL (user ask 2026-11-02, replacing a top-3 KOL ranking the same day): in each window,
- * every KOL with at least KOL_MIN_PICKS graded picks in it counts, and the side's figure is the
- * MEDIAN of their own rates, one KOL one vote. The median, not the mean: KOL rates skew (a few hot
- * hands, many near nothing), and with a floor of a handful of picks one lucky streak would move a
- * mean several points; the median is the KOL in the middle. The mean is served beside it. Read-only
+ * The typical KOL (user asks 2026-11-02, replacing a top-3 KOL ranking the same day): in each window,
+ * every KOL with at least KOL_MIN_PICKS graded picks in it counts, one KOL one vote, and both the
+ * median and the mean of their own rates are served. The dashboard shows the mean (owner's call the
+ * same day): with a floor of a handful of picks most KOLs land no 4x or 10x, so the median KOL read
+ * 0% there while the mean still shows the spread. Read-only
  * aggregates over tables the worker keeps; a fill makes no outside calls.
  */
 

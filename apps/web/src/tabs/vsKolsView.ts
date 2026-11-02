@@ -56,13 +56,14 @@ export const KOL_ID = "kol";
 export const MIN_KOLS_TO_LEAD = 3;
 
 /**
- * Which figure stands for the typical KOL in a tier: the median, except at 10x, where it is the
- * mean (user decision 2026-11-02). Most KOLs land no 10x in a window, so the median KOL reads 0%
- * almost always; the mean is the real rate spread over them, never a made-up floor.
+ * Which figure stands for the typical KOL in a tier: the mean of the counted KOLs' rates, in every
+ * tier (user decisions 2026-11-02: first at 10x, then for 2x and 4x too). With a floor of a handful
+ * of picks most KOLs land no 4x or 10x in a window, so the median KOL read 0% there; the mean is the
+ * real rate spread over them. The median is still served and shown beside it.
  */
 export const KOL_BASIS: Record<Tier, "median" | "average"> = {
-  "2x": "median",
-  "4x": "median",
+  "2x": "average",
+  "4x": "average",
   "10x": "average",
 };
 
