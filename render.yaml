@@ -379,10 +379,14 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       # FDSA, the AI desk that reviews every alert and paper-trades its picks (packages/core/src/
-      # fdsa, owner decision 2026-10-31). Off until the owner sets "true" here; even then it waits
-      # for Resume in the hidden #fdsa tab. Paper only. Its own cap, apart from AI_DAILY_BUDGET_USD.
+      # fdsa, owner decision 2026-10-31). Off ("false", the schema default) until the owner sets it
+      # to "true" in the dashboard; even then it waits for Resume in the hidden #fdsa tab. Paper
+      # only. Its own cap, apart from AI_DAILY_BUDGET_USD. Not synced from here (full audit
+      # 2026-11-02, FD-1): with a literal "false" the Blueprint sync re-applied it over the
+      # dashboard's "true" each time this file changed, and #1209 (2026-11-02 16:40 UTC) switched
+      # the desk off unnoticed for the rest of the day.
       - key: FDSA_ENABLED
-        value: "false"
+        sync: false
       - key: FDSA_DAILY_BUDGET_USD
         value: "20"
       - key: TOKENSAGE_API_URL
