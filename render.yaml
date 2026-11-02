@@ -156,6 +156,7 @@ services:
         - tsconfig.base.json
         - .node-version
         - scripts/migrate-deploy.sh
+        - scripts/migrate-invalid-indexes.cjs
         - render.yaml
       ignoredPaths:
         - "**/*.test.ts"
@@ -337,6 +338,7 @@ services:
         - tsconfig.base.json
         - .node-version
         - scripts/migrate-deploy.sh
+        - scripts/migrate-invalid-indexes.cjs
         - render.yaml
       ignoredPaths:
         - "**/*.test.ts"
@@ -639,6 +641,7 @@ services:
         - tsconfig.base.json
         - .node-version
         - scripts/migrate-deploy.sh
+        - scripts/migrate-invalid-indexes.cjs
         - render.yaml
       ignoredPaths:
         - "**/*.test.ts"

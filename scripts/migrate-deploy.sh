@@ -19,6 +19,17 @@
 #  3. A deadlock (40P01) with another session, retried the same way.
 #  4. A migration that failed on an earlier deploy (P3009): marked rolled back and run again, once
 #     per run (every migration since check-migrations.sh's RERUN_SAFE_FROM re-applies safely).
+#  5. An INVALID index (a `CREATE INDEX CONCURRENTLY` cut off by a superseded deploy, a statement
+#     timeout or a restart) is dropped before the migrations run and, if it is one a migration
+#     builds with `CREATE INDEX CONCURRENTLY IF NOT EXISTS`, built again after them. Left alone it
+#     is written on every insert, used by no query, and skipped by its own migration's re-run
+#     (`IF NOT EXISTS` sees the name): #1206's index sat INVALID in production that way on
+#     2026-11-02 while its statement stayed the database's costliest (full audit, DB-1). The
+#     rebuild runs under STATEMENT_TIMEOUT_MS like any migration statement and holds this deploy
+#     for its length (5-15 minutes on a 6M-row table); a rebuild that fails is reported and the
+#     next deploy tries again. Three services run this at once: the drop is IF EXISTS and the
+#     build IF NOT EXISTS, so whichever gets there first does the work and the others pass.
+#     MIGRATE_SKIP_INVALID_INDEXES=1 turns the step off for one deploy.
 #
 # Any other failure is passed through unchanged. Every statement runs under a statement_timeout
 # (MIGRATE_STATEMENT_TIMEOUT_MS, 15 minutes by default) so a runaway index build or backfill cannot
@@ -62,6 +73,25 @@ dump_running() {
   ' 2>/dev/null
 }
 
+# 5. Invalid indexes: dropped now, rebuilt after the migrations (see below). A failure to list them
+# (the database unreachable - the deploy itself will say so) leaves the step out.
+invalid_indexes=()
+if [[ -z "${MIGRATE_SKIP_INVALID_INDEXES:-}" ]]; then
+  mapfile -t invalid_indexes < <(node scripts/migrate-invalid-indexes.cjs list 2>/dev/null)
+  if ((${#invalid_indexes[@]} > 0)); then
+    echo "migrate-deploy: invalid index(es) found: ${invalid_indexes[*]}" >&2
+    node scripts/migrate-invalid-indexes.cjs drop "${invalid_indexes[@]}" || true
+  fi
+fi
+
+# After the migrations: build again what was dropped and a migration defines. A migration that
+# failed on an earlier deploy and was re-run above has built its own index already; IF NOT EXISTS
+# makes this a no-op for it.
+rebuild_invalid_indexes() {
+  ((${#invalid_indexes[@]} == 0)) && return 0
+  node scripts/migrate-invalid-indexes.cjs recreate "${invalid_indexes[@]}" || true
+}
+
 lock_failures=0
 dump_waited=0
 failed_resolved=0
@@ -70,7 +100,10 @@ while true; do
   out=$(prisma migrate deploy --schema "$SCHEMA" 2>&1)
   rc=$?
   printf '%s\n' "$out"
-  [[ $rc -eq 0 ]] && exit 0
+  if [[ $rc -eq 0 ]]; then
+    rebuild_invalid_indexes
+    exit 0
+  fi
 
   if grep -q 'P1002' <<<"$out" && grep -q 'advisory lock' <<<"$out"; then
     if ((SECONDS - start >= PEER_WAIT)); then
