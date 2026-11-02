@@ -147,18 +147,22 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
     expect(res.body).not.toContain("secret reasoning");
   });
 
-  it("serves the top models beside the top KOLs, a window per column", async () => {
+  it("serves the top models beside the typical KOL, a window per column", async () => {
     const res = await app.inject({ method: "GET", url: "/guest/models/vs-kols" });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
       windows: number[];
-      models: { kind: string; windows: { days: number }[] }[];
-      allKols: { kind: string; windows: { days: number }[] };
+      models: { windows: { days: number }[] }[];
+      kol: { days: number; minPicks: number }[];
     };
     expect(body.windows).toEqual([1, 3, 7]);
     expect(body.models.length).toBeLessThanOrEqual(3);
-    expect(body.models.every((m) => m.kind === "model" && m.windows.length === 3)).toBe(true);
-    expect(body.allKols.windows.map((w) => w.days)).toEqual([1, 3, 7]);
+    expect(body.models.every((m) => m.windows.length === 3)).toBe(true);
+    expect(body.kol.map((k) => [k.days, k.minPicks])).toEqual([
+      [1, 3],
+      [3, 6],
+      [7, 10],
+    ]);
   });
 
   it("serves one model's training runs, and 404s a model off the roster", async () => {

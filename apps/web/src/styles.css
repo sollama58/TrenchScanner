@@ -2761,15 +2761,6 @@ g:hover > .hit,
 .vk-mark.kols {
   background: var(--vk-kols);
 }
-.vk-mark.pooled {
-  background: var(--surface-3);
-  color: var(--ink-2);
-}
-.vk-pic {
-  object-fit: cover;
-  background: var(--surface-3);
-  box-shadow: 0 0 0 2px var(--vk-kols);
-}
 .vk-cell {
   display: flex;
   flex-direction: column;
@@ -2797,16 +2788,12 @@ g:hover > .hit,
   color: var(--good-ink);
   background: var(--good-wash);
 }
-.vk-row.pooled {
-  background: var(--surface-2);
+.vk-avg {
+  font-size: 11px;
+  margin-top: -2px;
 }
-.vk-row.pooled .vk-title {
-  font-weight: 600;
-  color: var(--ink-2);
-}
-.vk-row.pooled .vk-rate {
-  font-size: 15px;
-  color: var(--ink-2);
+.vk-row.kols {
+  background: color-mix(in srgb, var(--vk-kols) 5%, transparent);
 }
 .vk-note {
   margin-top: 12px;

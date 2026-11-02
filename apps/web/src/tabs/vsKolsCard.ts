@@ -1,4 +1,4 @@
-import type { ModelsVsKols, VsRow } from "../api";
+import type { ModelsVsKols } from "../api";
 import {
   BODY_BOTTOM,
   BODY_TOP,
@@ -17,22 +17,45 @@ import {
   roundRect,
 } from "../shareCard";
 import { MIN_GRADED_FOR_RATE } from "../rates";
-import { TIERS, edge, leaderOf, rateOf, rateText, sideTotal, tiersAt, windowName } from "./vsKolsView";
+import {
+  KOL_ID,
+  MIN_KOLS_TO_LEAD,
+  TIERS,
+  edge,
+  kolAt,
+  kolRate,
+  leaderOf,
+  rateOf,
+  rateText,
+  sideTotal,
+  tiersAt,
+  windowName,
+  type Tier,
+} from "./vsKolsView";
 
 /**
- * The share image of the Models tab's "Models vs KOLs": the top three models and the top KOLs, a
- * row each, with their 2x, 4x and 10x rates over one window, and each side's calls together on the
- * right, in the shared branded frame (shareCard.ts). KOL pictures are left out: they come from the
- * API's origin, and drawing them would taint the canvas so it could not be exported.
+ * The share image of the Models tab's "Models vs KOLs": the top three models and the typical KOL
+ * (the median of the KOLs with enough picks), a row each, with their 2x, 4x and 10x rates over one
+ * window, and the models together against the typical KOL on the right, in the shared branded
+ * frame (shareCard.ts).
  */
 
 const MODELS = SERIES[0]!;
 const KOLS = SERIES[1]!;
 const LEAD = "#34d399";
 
-function mark(ctx: CanvasRenderingContext2D, row: VsRow, index: number, cx: number, cy: number) {
-  const color = row.kind === "model" ? MODELS : KOLS;
-  ctx.fillStyle = color;
+/** A row of the table: a model, or the typical KOL. */
+interface CardRow {
+  id: string;
+  color: string;
+  glyph: string;
+  name: string;
+  sub: string;
+  rate: (tier: Tier) => { pct: number | null; thin: boolean };
+}
+
+function mark(ctx: CanvasRenderingContext2D, row: CardRow, cx: number, cy: number) {
+  ctx.fillStyle = row.color;
   ctx.beginPath();
   ctx.arc(cx, cy, 15, 0, Math.PI * 2);
   ctx.fill();
@@ -40,19 +63,50 @@ function mark(ctx: CanvasRenderingContext2D, row: VsRow, index: number, cx: numb
   ctx.font = `800 15px ${FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  const glyph = row.kind === "model" ? String(index + 1) : (row.name.trim()[0] ?? "?").toUpperCase();
-  ctx.fillText(glyph, cx, cy + 1);
+  ctx.fillText(row.glyph, cx, cy + 1);
   ctx.textAlign = "left";
 }
 
+function rowsOf(d: ModelsVsKols, days: number): { models: CardRow[]; kol: CardRow } {
+  const k = kolAt(d.kol, days);
+  return {
+    models: d.models.map((m, i) => {
+      const t = tiersAt(m, days);
+      return {
+        id: m.id,
+        color: MODELS,
+        glyph: String(i + 1),
+        name: m.name,
+        sub: `${(t?.graded ?? 0).toLocaleString("en-US")} graded calls`,
+        rate: (tier) => {
+          const r = rateOf(t, tier);
+          return { pct: r.pct, thin: r.n < MIN_GRADED_FOR_RATE };
+        },
+      };
+    }),
+    kol: {
+      id: KOL_ID,
+      color: KOLS,
+      glyph: "K",
+      name: "The typical KOL",
+      sub:
+        k && k.kols > 0
+          ? `median of ${k.kols} KOL${k.kols === 1 ? "" : "s"} with ${k.minPicks}+ picks`
+          : "no KOL has enough picks yet",
+      rate: (tier) => ({ pct: kolRate(k, tier).shown, thin: (k?.kols ?? 0) < MIN_KOLS_TO_LEAD }),
+    },
+  };
+}
+
 function table(ctx: CanvasRenderingContext2D, d: ModelsVsKols, days: number, x0: number, x1: number) {
-  const rows = [...d.models, ...d.kols];
+  const { models, kol } = rowsOf(d, days);
+  const rows = [...models, kol];
   const nameW = 300;
   const colW = (x1 - x0 - nameW) / TIERS.length;
   const top = BODY_TOP + 14;
   const headH = 30;
-  const gap = d.models.length && d.kols.length ? 14 : 0;
-  const rowH = Math.min(46, (BODY_BOTTOM - top - headH - gap) / Math.max(1, rows.length));
+  const gap = models.length ? 18 : 0;
+  const rowH = Math.min(58, (BODY_BOTTOM - top - headH - gap) / Math.max(1, rows.length));
 
   ctx.textBaseline = "middle";
   ctx.font = `700 15px ${FONT}`;
@@ -64,42 +118,36 @@ function table(ctx: CanvasRenderingContext2D, d: ModelsVsKols, days: number, x0:
   });
   ctx.textAlign = "left";
 
-  const leaders = new Map(TIERS.map((t) => [t, leaderOf(rows, days, t, MIN_GRADED_FOR_RATE)]));
+  const kt = kolAt(d.kol, days);
+  const leaders = new Map(TIERS.map((t) => [t, leaderOf(d.models, kt, days, t, MIN_GRADED_FOR_RATE)]));
   let y = top + headH;
   rows.forEach((row, i) => {
-    if (i === d.models.length && i > 0) {
+    if (i === models.length && i > 0) {
       ctx.fillStyle = "rgba(255, 255, 255, 0.1)";
       ctx.fillRect(x0, y + gap / 2, x1 - x0, 1);
       y += gap;
     }
     const cy = y + rowH / 2;
-    const index = row.kind === "model" ? i : i - d.models.length;
-    mark(ctx, row, index, x0 + 15, cy);
-    const t = tiersAt(row, days);
+    mark(ctx, row, x0 + 15, cy);
     ctx.fillStyle = INK;
-    ctx.font = `650 18px ${FONT}`;
-    ctx.fillText(clip(ctx, row.name, nameW - 60), x0 + 42, cy - 9);
+    ctx.font = `650 19px ${FONT}`;
+    ctx.fillText(clip(ctx, row.name, nameW - 60), x0 + 42, cy - 10);
     ctx.fillStyle = MUTED;
-    ctx.font = `500 13px ${FONT}`;
-    ctx.fillText(
-      `${(t?.graded ?? 0).toLocaleString("en-US")} graded ${row.kind === "model" ? "calls" : "picks"}`,
-      x0 + 42,
-      cy + 11,
-    );
+    ctx.font = `500 14px ${FONT}`;
+    ctx.fillText(clip(ctx, row.sub, nameW - 50), x0 + 42, cy + 12);
     TIERS.forEach((tier, c) => {
-      const r = rateOf(t, tier);
+      const r = row.rate(tier);
       const right = x0 + nameW + colW * (c + 1) - 8;
       const lead = leaders.get(tier) === row.id;
-      const thin = r.n < MIN_GRADED_FOR_RATE;
       const text = rateText(r.pct);
-      ctx.font = `800 24px ${FONT}`;
+      ctx.font = `800 26px ${FONT}`;
       const tw = ctx.measureText(text).width;
       if (lead) {
         ctx.fillStyle = "rgba(52, 211, 153, 0.16)";
-        roundRect(ctx, right - tw - 14, cy - 17, tw + 22, 34, 10);
+        roundRect(ctx, right - tw - 14, cy - 18, tw + 22, 36, 10);
         ctx.fill();
       }
-      ctx.fillStyle = lead ? LEAD : thin ? MUTED : INK;
+      ctx.fillStyle = lead ? LEAD : r.thin ? MUTED : INK;
       ctx.textAlign = "right";
       ctx.fillText(text, right - 3, cy + 1);
       ctx.textAlign = "left";
@@ -108,7 +156,7 @@ function table(ctx: CanvasRenderingContext2D, d: ModelsVsKols, days: number, x0:
   });
 }
 
-/** Each side's calls together: one bar pair per tier. */
+/** The models together against the typical KOL: one bar pair per tier. */
 function duel(ctx: CanvasRenderingContext2D, d: ModelsVsKols, days: number, x0: number) {
   const w = CARD_W - PAD - x0;
   const top = BODY_TOP + 6;
@@ -119,18 +167,19 @@ function duel(ctx: CanvasRenderingContext2D, d: ModelsVsKols, days: number, x0: 
   const ix = x0 + 22;
   const iw = w - 44;
   const m = sideTotal(d.models, days);
-  const k = sideTotal(d.kols, days);
+  const k = kolAt(d.kol, days);
+  const kolThin = (k?.kols ?? 0) < MIN_KOLS_TO_LEAD;
   ctx.textBaseline = "middle";
   ctx.fillStyle = MUTED;
   ctx.font = `600 15px ${FONT}`;
-  ctx.fillText("EACH SIDE TOGETHER", ix, top + 26);
+  ctx.fillText("MODELS VS TYPICAL KOL", ix, top + 26);
   const blockH = (bottom - top - 50) / TIERS.length;
   TIERS.forEach((tier, i) => {
     const by = top + 48 + blockH * i;
     const mr = rateOf(m, tier);
-    const kr = rateOf(k, tier);
-    const max = Math.max(mr.pct ?? 0, kr.pct ?? 0, 1);
-    const e = edge(mr, kr);
+    const kr = kolRate(k, tier).shown;
+    const max = Math.max(mr.pct ?? 0, kr ?? 0, 1);
+    const e = edge(mr.pct, kolThin ? null : kr);
     ctx.fillStyle = INK;
     ctx.font = `800 17px ${FONT}`;
     ctx.fillText(tier, ix, by + 10);
@@ -164,7 +213,7 @@ function duel(ctx: CanvasRenderingContext2D, d: ModelsVsKols, days: number, x0: 
       ctx.textAlign = "left";
     };
     bar(mr.pct, MODELS, "Models", by + 34);
-    bar(kr.pct, KOLS, "KOLs", by + 56);
+    bar(kr, KOLS, "KOL", by + 56);
   });
 }
 
@@ -174,11 +223,11 @@ export async function renderVsKolsCard(d: ModelsVsKols, days: number): Promise<H
   frame(
     ctx,
     icon,
-    "Top models vs top KOLs",
+    "Top models vs the typical KOL",
     "How often their picks hit 2x in 15 min, 4x in 30, 10x in the hour, before a 50% stop.",
     {
       badge: (c, right, cy) => pill(c, right, cy, `Last ${windowName(days)}`),
-      footer: "One grade both sides · KOL pick: bought before our clock started",
+      footer: "Same grade both sides · KOL = median KOL (10x: average)",
       link: "trenchscanner.app",
       time: true,
     },

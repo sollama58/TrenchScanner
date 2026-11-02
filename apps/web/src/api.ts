@@ -1748,28 +1748,43 @@ export interface VsTiers {
   tenXGraded: number;
 }
 
-/** A top model, a top KOL or every KOL pooled, with one VsTiers per window. */
+/** A top model, with one VsTiers per window. */
 export interface VsRow {
   id: string;
-  kind: "model" | "kol" | "kols";
   name: string;
-  twitter: string | null;
-  /** The API path of a KOL's X picture ("/kol-avatars/..."); null without one. */
-  avatar: string | null;
   windows: VsTiers[];
+}
+
+/** A rate per tier, in percent; null with no KOL to read it from. */
+export interface TierRates {
+  r2x: number | null;
+  r4x: number | null;
+  r10x: number | null;
+}
+
+/** The typical KOL over one window: the median (and mean) of the rates of KOLs with minPicks graded picks. */
+export interface KolTypical {
+  days: number;
+  minPicks: number;
+  /** KOLs that counted, and every KOL with a graded pick in the window. */
+  kols: number;
+  active: number;
+  /** Graded picks of the KOLs that counted. */
+  picks: number;
+  median: TierRates;
+  mean: TierRates;
 }
 
 /**
  * The Models tab's "Models vs KOLs" (/curated/models/vs-kols, /guest/models/vs-kols): the top-3
- * models' live calls beside the top KOLs' buys, graded by the same label (apps/api modelsVsKols.ts).
+ * models' live calls beside the typical KOL's picks, graded by the same label (apps/api modelsVsKols.ts).
  */
 export interface ModelsVsKols {
   windows: number[];
   models: VsRow[];
-  kols: VsRow[];
-  allKols: VsRow;
-  kolsActive: number;
-  rule: { rankDays: number; minGraded: number; topKols: number; topModels: number };
+  /** One per window, in the same order. */
+  kol: KolTypical[];
+  rule: { topModels: number };
   computedAt: string;
 }
 
