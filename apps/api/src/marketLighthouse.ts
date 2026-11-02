@@ -63,6 +63,15 @@ const cacheMsFor = (days: number) => (days >= 7 ? LONG_WINDOW_CACHE_MS : CACHE_M
  * reader waits rather than read something older.
  */
 const STALE_MS = 60 * 60_000;
+/**
+ * keepWarm() refills a window only while someone has read it this recently (and once at startup,
+ * so the first reader after a deploy still finds it filled). Refilling every window every 5-15
+ * minutes whatever the traffic cost production about 12,000 runs of each TokenSage aggregate at
+ * ~1.1 s apiece over ~25 days, for a page read twice in two hours (audit 2026-11-02, /stats/db).
+ * A window nobody read in that time is served stale for STALE_MS past its TTL while one refill
+ * runs, and only a reader after that waits on a fill.
+ */
+export const READ_KEEPS_WARM_MS = 60 * 60_000;
 
 export const LIGHTHOUSE_WINDOWS = [1, 7] as const;
 export const lighthouseQuerySchema = z.object({
@@ -723,9 +732,10 @@ export type MarketLighthouse = Omit<WindowLighthouse, "screened"> & {
  *
  * A window's fill is a dozen aggregates over a week of reads and calls, several seconds in
  * production, so no reader should be the one waiting on it. keepWarm() refills each window as it
- * falls due (the API runs it every minute, routes/curated.ts), and past its five minutes an
- * answer is still served at once while a refill runs behind it (STALE_MS), so a reader only waits
- * on the very first fill after a start, which the startup warm-up has usually done already.
+ * falls due (the API runs it every minute, routes/curated.ts) while the window is being read
+ * (READ_KEEPS_WARM_MS), and past its five minutes an answer is still served at once while a refill
+ * runs behind it (STALE_MS), so a reader waits only on the first fill after a start, which the
+ * startup warm-up has usually done already, or after a window has gone unread for hours.
  */
 export function createLighthouseCache() {
   const caches = new Map<number, SharedCache<WindowLighthouse>>();
@@ -759,17 +769,37 @@ export function createLighthouseCache() {
     }
     return cache;
   };
+  // When each window (and any window, for the hourly rows) was last read, and which keepWarm has
+  // filled at least once: see READ_KEEPS_WARM_MS.
+  const lastRead = new Map<string, number>();
+  const warmedOnce = new Set<string>();
+  const noteRead = (key: string) => {
+    const at = Date.now();
+    lastRead.set(key, at);
+    lastRead.set("any", at);
+  };
+  const wanted = (key: string): boolean => {
+    if (!warmedOnce.has(key)) {
+      warmedOnce.add(key);
+      return true;
+    }
+    const at = lastRead.get(key);
+    return at !== undefined && Date.now() - at < READ_KEEPS_WARM_MS;
+  };
   const isFullWindow = (days: number) => (LIGHTHOUSE_WINDOWS as readonly number[]).includes(days);
   /** "Signals at a glance" for a window: a day or a week from the full answer's cache, else its own. */
-  const signals = async (env: Env, days: number): Promise<LighthouseSignals> =>
-    isFullWindow(days)
+  const signals = async (env: Env, days: number): Promise<LighthouseSignals> => {
+    noteRead(isFullWindow(days) ? `window ${days}` : `signals ${days}`);
+    return isFullWindow(days)
       ? signalsOf(await windowCache(days).get(() => buildMarketLighthouse(env, days)))
       : signalCache(days).get(() => buildLighthouseSignals(days));
+  };
   const read = async (
     env: Env,
     days: number,
     timeZone = "UTC",
   ): Promise<MarketLighthouse & { computedAt: string }> => {
+    noteRead(`window ${days}`);
     let hourCache = hourCaches.get(timeZone);
     if (!hourCache) {
       hourCache = new SharedCache<ScreenedByHourOfDay>(CACHE_MS, { staleWhileRevalidateMs: STALE_MS });
@@ -784,17 +814,20 @@ export function createLighthouseCache() {
     return { ...m, screened: { ...m.screened, byHourOfDay } };
   };
   /**
-   * Starts a refill of every window, and of the hourly rows, whose answer is due or missing; a
-   * fresh one, or one already filling, is left alone. One window at a time, so the refills never
+   * Starts a refill of every window, and of the hourly rows, whose answer is due or missing and
+   * that was read in the last READ_KEEPS_WARM_MS (or never filled yet); a fresh one, or one
+   * already filling, is left alone. One window at a time, so the refills never
    * hold more than one window's queries on the pool. `aheadMs` also refills one expiring within
    * that long (SharedCache.warm). Never rejects.
    */
   const keepWarm = async (env: Env, aheadMs = 0): Promise<void> => {
     for (const days of LIGHTHOUSE_WINDOWS)
-      await windowCache(days).warm(() => buildMarketLighthouse(env, days), aheadMs);
-    await hoursCache.warm(screenedHours, aheadMs);
+      if (wanted(`window ${days}`))
+        await windowCache(days).warm(() => buildMarketLighthouse(env, days), aheadMs);
+    if (wanted("any")) await hoursCache.warm(screenedHours, aheadMs);
     for (const days of SIGNAL_WINDOWS)
-      if (!isFullWindow(days)) await signalCache(days).warm(() => buildLighthouseSignals(days), aheadMs);
+      if (!isFullWindow(days) && wanted(`signals ${days}`))
+        await signalCache(days).warm(() => buildLighthouseSignals(days), aheadMs);
   };
   return Object.assign(read, { keepWarm, signals });
 }
