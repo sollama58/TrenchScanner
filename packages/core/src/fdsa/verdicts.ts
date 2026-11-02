@@ -10,7 +10,8 @@ import {
 /**
  * What FDSA's Claude calls return, and how an answer becomes a stored verdict (owner decision
  * 2026-10-31, decision 1). Two stages review every curated alert:
- *   - "screen": Haiku at low effort, compact brief, a 0-1 shortlist score and a one-line reason;
+ *   - "screen": Haiku at low effort, the brief without comparables, its 0-1 odds of a win (the
+ *     score) and a one-line reason;
  *     at or above the screen's line the alert is shortlisted for the decide stage (the worker's
  *     fdsa/review.ts screenLine: the top FDSA_SCREEN_SHORTLIST_PCT of the last day's scores, or
  *     FDSA_SCREEN_MIN_SCORE);
@@ -48,10 +49,15 @@ export type FdsaStage = (typeof FDSA_STAGES)[number];
  *   screen v4, decide v5 (2026-11-01): both briefs carry the scanner models behind the alert (the
  *   alerting model and what it is, its tier, every model that called the coin, each one's live 2x
  *   rate over the last week; prompts.ts fdsaModelLines), and both prompts say how to read them.
+ *   screen v5, decide v6 (2026-11-02, FDSA AI audit): the screen's score is the odds of a win, the
+ *   quantity the decide gives, in place of a "deserves review" grade that rewarded momentum and
+ *   shortlisted mid-spike coins (12.5% doubled against 19% dropped); both stages are asked for odds
+ *   to the percent, since answers in 0.05 steps left the ranked lines whole blocks of ties; the
+ *   ranked decide's goal is framed as ranking, not a 75% win rate no alert in the pool clears.
  */
 export const FDSA_PROMPT_VERSIONS: Readonly<Record<FdsaStage, string>> = {
-  screen: "fdsa-screen-v4",
-  decide: "fdsa-decide-v5",
+  screen: "fdsa-screen-v5",
+  decide: "fdsa-decide-v6",
   revise: "fdsa-revise-v2",
 };
 /** The decide stage's version: the one the tab's settings and record name. */
@@ -92,7 +98,7 @@ const clipRisks = (risks: string[]) =>
 // ── Screen ────────────────────────────────────────────────────────────────
 
 export const FdsaScreenAnswerSchema = z.object({
-  /** 0-1: how strongly this alert deserves the full decide review. */
+  /** 0-1: the screen's odds the alert wins (since screen v5; a "deserves review" grade before). */
   score: z.number(),
   /** One line: the deciding reason. */
   reason: z.string(),
