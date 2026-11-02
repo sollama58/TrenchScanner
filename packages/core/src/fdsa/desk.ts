@@ -13,9 +13,12 @@ import type { FdsaExitPlan } from "./exitPlan.js";
  *
  * Limits: the trading bot's own config schema (trading/config.ts via the paper strategy's, with
  * its fill penalty), not a parallel set of settings, with FDSA's paper defaults (decision 4):
- * 0.5 SOL a trade (fixed: the model never sizes), at most 6 open, 100 SOL of entries per 24 h,
- * on a 10 SOL bankroll (owner's update 2026-11-01). The bot's own maxDailySpendSol default of 0.5
- * would allow one buy a day, so it is overridden here. The reserve, slippage, Jito and fill-penalty defaults are the bot's. What a
+ * 0.5 SOL a trade (fixed: the model never sizes), at most 12 open, 100 SOL of entries per 24 h,
+ * on a 25 SOL bankroll (6 open on 10 SOL from the owner's update of 2026-11-01 to 2026-11-02,
+ * when the owner raised both so the record fills faster: audit FD-4, six open at three hours each
+ * skipped a cluster of trade verdicts in every busy window; the migration of the same date lifts
+ * the stored desk). The bot's own maxDailySpendSol default of 0.5 would allow one buy a day, so it
+ * is overridden here. The reserve, slippage, Jito and fill-penalty defaults are the bot's. What a
  * bot follows (sources, the AI-buy filter) and its exit ladder mean nothing to FDSA - it reviews
  * every curated alert and exits on its own plan - so they are left out.
  */
@@ -33,12 +36,12 @@ export function readFdsaMode(raw: unknown): FdsaMode {
     : "paper";
 }
 
-export const DEFAULT_FDSA_BANKROLL_SOL = 10;
+export const DEFAULT_FDSA_BANKROLL_SOL = 25;
 
 export const fdsaDeskConfigSchema = paperStrategyConfigSchema.omit({ sources: true, exitPlan: true }).extend({
   /** SOL per entry - fixed, the model does not size (decision 4). */
   buySol: z.number().positive().default(0.5),
-  maxOpenPositions: z.number().int().min(1).default(6),
+  maxOpenPositions: z.number().int().min(1).default(12),
   /** SOL of entries per rolling 24 hours: 200 buys at 0.5 SOL, so in practice the bankroll binds. */
   maxDailySpendSol: z.number().positive().default(100),
 });

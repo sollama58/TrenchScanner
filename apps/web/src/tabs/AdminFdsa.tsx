@@ -694,7 +694,7 @@ function LimitsPanel({ s, reload }: { s: FdsaState; reload: () => void }) {
   return (
     <Panel
       title="Paper limits"
-      note="The bot's own settings, with the owner's paper defaults: 0.5 SOL a trade, 6 open, 100 SOL a day, on a 10 SOL bankroll."
+      note="The bot's own settings, with the owner's paper defaults: 0.5 SOL a trade, 12 open, 100 SOL a day, on a 25 SOL bankroll."
     >
       <form className="editor-form" onSubmit={(e) => void save(e)}>
         <div className="grid2">

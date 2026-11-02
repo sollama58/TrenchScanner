@@ -296,9 +296,9 @@ describe.skipIf(!dbAvailable)("FDSA routes", () => {
     expect(body.desk).toMatchObject({
       mode: "paper",
       running: false,
-      bankrollLamports: "10000000000",
-      cashLamports: "10000000000",
-      config: { buySol: 0.5, maxOpenPositions: 6, maxDailySpendSol: 100 },
+      bankrollLamports: "25000000000",
+      cashLamports: "25000000000",
+      config: { buySol: 0.5, maxOpenPositions: 12, maxDailySpendSol: 100 },
     });
     expect(body.desk.modes).toEqual([
       { id: "paper", available: true },
