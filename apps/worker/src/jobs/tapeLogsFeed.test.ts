@@ -8,7 +8,15 @@ vi.mock("@trenchscanner/core", async (importOriginal) => ({
 }));
 
 import { pumpCurveAddressOf, pumpSwapPoolOf } from "@trenchscanner/core";
-import { CURVE_KEY_PREFIX, IDLE_MS, MAX_TRADES, POOL_KEY_PREFIX, TapeLogsFeed } from "./tapeLogsFeed.js";
+import {
+  CEILING_WINDOW_MS,
+  CURVE_KEY_PREFIX,
+  IDLE_MS,
+  MAX_TRADES,
+  NOISY_HOLD_MS,
+  POOL_KEY_PREFIX,
+  TapeLogsFeed,
+} from "./tapeLogsFeed.js";
 
 // Real 32-byte mints: the feed derives each coin's curve and pool from them.
 const MINT = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
@@ -58,6 +66,7 @@ describe("tape logs feed", () => {
       logsTrades: 0,
       logsCapped: 1,
       logsCredits: 0,
+      logsDropped: 0,
     });
     expect(feed.takeStats(0).logsCapped).toBe(0);
   });
@@ -143,5 +152,66 @@ describe("tape logs feed", () => {
     const kept = feed.tradesSince(MINT, 0);
     expect(kept).toHaveLength(MAX_TRADES);
     expect(kept[0]?.atMs).toBe(5);
+  });
+
+  it("lets the costliest coin go once the last minute's logs are over the ceiling, and holds it off", () => {
+    const stream = fakeStream();
+    const feed = new TapeLogsFeed(stream, 10);
+    // 100 credits a minute = 5 MB. MINT costs 4 MB (a failed-swap storm: no logs, bytes all the
+    // same), MINT2 2 MB: together over the line, so the heavier one goes and the lighter stays.
+    feed.follow([MINT, MINT2], 0, 100);
+    feed.onLogs(CURVE_KEY_PREFIX + MINT, "f1", [], 4_000_000, 1_000);
+    feed.onLogs(POOL_KEY_PREFIX + MINT2, "f2", [], 2_000_000, 1_000);
+    stream.unwatch.mockClear();
+    feed.follow([MINT, MINT2], 2_000, 100);
+    expect(stream.unwatch).toHaveBeenCalledWith(CURVE_KEY_PREFIX + MINT);
+    expect(stream.unwatch).toHaveBeenCalledWith(POOL_KEY_PREFIX + MINT);
+    expect(stream.unwatch).toHaveBeenCalledTimes(2);
+    expect(feed.coveredSince(MINT, 2_000)).toBeNull();
+    const stats = feed.takeStats(2_000);
+    expect(stats).toMatchObject({ logsCoins: 1, logsDropped: 1, logsCredits: 120 });
+
+    // Asked again inside the hold: not taken back. After it: followed again.
+    stream.watch.mockClear();
+    feed.follow([MINT], 3_000, 100);
+    expect(stream.watch).not.toHaveBeenCalledWith(CURVE_KEY_PREFIX + MINT, expect.anything(), 3_000, "logs");
+    feed.follow([MINT], 2_000 + NOISY_HOLD_MS + CEILING_WINDOW_MS, 100);
+    expect(stream.watch).toHaveBeenCalledWith(
+      CURVE_KEY_PREFIX + MINT,
+      [pumpCurveAddressOf(MINT)],
+      2_000 + NOISY_HOLD_MS + CEILING_WINDOW_MS,
+      "logs",
+    );
+  });
+
+  it("takes no new coin on while the minute is spent, and forgets bytes older than the window", () => {
+    const stream = fakeStream();
+    const feed = new TapeLogsFeed(stream, 10);
+    feed.follow([MINT], 0, 100);
+    // Exactly at the ceiling: MINT stays (nothing to let go that would help), but MINT2 waits.
+    feed.onLogs(CURVE_KEY_PREFIX + MINT, "f1", [], 5_000_000, 1_000);
+    feed.follow([MINT, MINT2], 2_000, 100);
+    expect(stream.unwatch).not.toHaveBeenCalled();
+    expect(stream.watch).not.toHaveBeenCalledWith(CURVE_KEY_PREFIX + MINT2, expect.anything(), 2_000, "logs");
+    expect(feed.takeStats(2_000)).toMatchObject({ logsCoins: 1, logsDropped: 0, logsCapped: 0 });
+    // A minute on, those bytes no longer count and MINT2 is taken on.
+    feed.follow([MINT, MINT2], 1_000 + CEILING_WINDOW_MS + 1, 100);
+    expect(stream.watch).toHaveBeenCalledWith(
+      CURVE_KEY_PREFIX + MINT2,
+      [pumpCurveAddressOf(MINT2)],
+      1_000 + CEILING_WINDOW_MS + 1,
+      "logs",
+    );
+    expect(feed.takeStats(1_000 + CEILING_WINDOW_MS + 1).logsCoins).toBe(2);
+  });
+
+  it("never lets a coin go for its cost without a ceiling", () => {
+    const stream = fakeStream();
+    const feed = new TapeLogsFeed(stream, 10);
+    feed.follow([MINT], 0);
+    feed.onLogs(CURVE_KEY_PREFIX + MINT, "f1", [], 50_000_000, 1_000);
+    feed.follow([MINT], 2_000);
+    expect(stream.unwatch).not.toHaveBeenCalled();
+    expect(feed.takeStats(2_000).logsDropped).toBe(0);
   });
 });

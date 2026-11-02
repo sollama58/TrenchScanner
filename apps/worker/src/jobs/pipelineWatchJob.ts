@@ -621,6 +621,63 @@ export function findDisabledChatProblems(disabledChats: number): Problem[] {
 }
 
 /**
+ * FDSA, the AI desk (fdsa/review.ts), reviews every curated alert while its desk row says running
+ * and the scanner has it on (FDSA_ENABLED and an Anthropic key). On 2026-11-02 a render.yaml merge
+ * re-applied `FDSA_ENABLED: "false"` over the dashboard's value and the desk went dark at 16:40 UTC
+ * for the rest of the day with nothing saying so: FdsaReview is not a watched flow, and the desk's
+ * `running` stayed true while nothing ran (full audit 2026-11-02, DB-4). Two notices, side-job
+ * class (notify only; a restart would change nothing):
+ *  - the desk is set to run but the scanner's heartbeat says FDSA is off (the env or the key);
+ *  - the desk is set to run and the scanner does not say it is off, yet no review has been stored
+ *    for FDSA_QUIET_MS while at least FDSA_QUIET_MIN_ALERTS curated alerts arrived (the budget cap,
+ *    reviews held after errors, or a dead queue). With few alerts the quiet is the market's.
+ */
+export const FDSA_QUIET_MS = 30 * 60_000;
+export const FDSA_QUIET_MIN_ALERTS = 10;
+
+export interface FdsaCheck {
+  /** FdsaDesk.running; null with no desk row (the desk was never set up: nothing to watch). */
+  deskRunning: boolean | null;
+  /** The scanner heartbeat's fdsa.enabled; null when the heartbeat carries none. */
+  scannerEnabled: boolean | null;
+  /** The newest FdsaReview's createdAt, or null when there is none. */
+  lastReviewAt: Date | null;
+  /** Curated alerts created in the last FDSA_QUIET_MS. */
+  alertsInWindow: number;
+}
+
+/** Pure: see the note above. */
+export function findFdsaProblems(c: FdsaCheck | null, now: number): Problem[] {
+  if (!c || c.deskRunning !== true) return [];
+  if (c.scannerEnabled === false) {
+    return [
+      {
+        key: "fdsa-off",
+        text:
+          "FDSA: the desk is set to run but the scanner has it off (FDSA_ENABLED or the Anthropic key) - " +
+          "no alert is reviewed or traded",
+        side: true,
+      },
+    ];
+  }
+  const quietMs = c.lastReviewAt === null ? Number.POSITIVE_INFINITY : now - c.lastReviewAt.getTime();
+  if (quietMs < FDSA_QUIET_MS || c.alertsInWindow < FDSA_QUIET_MIN_ALERTS) return [];
+  const since =
+    c.lastReviewAt === null
+      ? "never"
+      : `${formatAge(quietMs)} (last ${c.lastReviewAt.toISOString().slice(11, 16)} UTC)`;
+  return [
+    {
+      key: "fdsa-quiet",
+      text:
+        `FDSA: no review stored for ${since} while ${c.alertsInWindow} curated alerts arrived in the last ` +
+        `${Math.round(FDSA_QUIET_MS / 60_000)} min - the daily budget cap, reviews held after errors, or a dead queue`,
+      side: true,
+    },
+  ];
+}
+
+/**
  * The scan cycle's time from its start to the contenders' decisions (audit 2026-10-27, DS-11): the
  * cycle went from about 6 s to a 28 s median between 2026-10-14 and 2026-10-27 with nothing saying
  * so, since every flow kept producing. The median of the last SCAN_LATENCY_SAMPLES completed cycles
@@ -977,6 +1034,24 @@ async function readAgedOutSinceBoot(): Promise<number | null> {
   const row = await prisma.systemHeartbeat.findUnique({ where: { job: "telegram-dispatch" } });
   const n = (row?.meta as Record<string, unknown> | null)?.agedOutSinceBoot;
   return typeof n === "number" && Number.isFinite(n) ? n : null;
+}
+
+/** The desk's running flag, the scanner's view of FDSA, the newest review and the alerts since (findFdsaProblems). */
+async function readFdsaCheck(now: number): Promise<FdsaCheck | null> {
+  const desk = await prisma.fdsaDesk.findUnique({ where: { id: "fdsa" }, select: { running: true } });
+  if (!desk) return null;
+  const [scan, last, alertsInWindow] = await Promise.all([
+    prisma.systemHeartbeat.findUnique({ where: { job: "scan" }, select: { meta: true } }),
+    prisma.fdsaReview.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+    prisma.curatedAlert.count({ where: { createdAt: { gte: new Date(now - FDSA_QUIET_MS) } } }),
+  ]);
+  const fdsa = objectField((scan?.meta ?? null) as Record<string, unknown> | null, "fdsa");
+  return {
+    deskRunning: desk.running,
+    scannerEnabled: typeof fdsa?.enabled === "boolean" ? fdsa.enabled : null,
+    lastReviewAt: last?.createdAt ?? null,
+    alertsInWindow,
+  };
 }
 
 /**
@@ -1367,6 +1442,7 @@ async function watchOnce(
     agedOutSinceBoot,
     disabledChats,
     held,
+    fdsa,
   ] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
@@ -1381,6 +1457,7 @@ async function watchOnce(
     readAgedOutSinceBoot(),
     countDisabledChats(),
     heldChats(now),
+    readFdsaCheck(now),
   ]);
   const agedOut = findAgedOutProblems(before.agedOut, agedOutSinceBoot, now);
   const scanLatency = findScanLatencyProblems(before.scanLatency, scanCycle, before.keys);
@@ -1419,6 +1496,7 @@ async function watchOnce(
     ...agedOut.problems,
     ...findDisabledChatProblems(disabledChats),
     ...findTelegramHoldProblems(held, now),
+    ...findFdsaProblems(fdsa, now),
     ...scanLatency.problems,
     ...training.problems,
   ];

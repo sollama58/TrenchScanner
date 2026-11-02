@@ -19,6 +19,13 @@
 # /trenches/ tab (https://github.com/sollama58/CultScreener) on holdex.live. That is why
 # CORS_ORIGINS and PUBLIC_APP_DOMAIN below list both, and the old onrender.com hosts too.
 #
+# A literal `value:` here is re-applied by every Blueprint sync, so a dashboard edit to it is undone
+# by the next merge that touches this file, without notice (full audit 2026-11-02, FD-1 / DB-6:
+# FDSA_ENABLED flipped back to "false" by #1209 and the desk went dark for a day). So: numbers and
+# URLs change by PR and carry a `value:`; on/off toggles ("true"/"false") are set in the dashboard
+# and declared `sync: false`, with their default in packages/core/src/config/env.ts.
+# scripts/check-env-keys.sh refuses a literal "true"/"false" value.
+#
 # After the first deploy, fill in the envVars marked `sync: false` below
 # from the Render dashboard (Environment tab on each service):
 #   - HELIUS_API_KEY (both api + worker)          https://dev.helius.xyz
@@ -119,9 +126,10 @@ envVarGroups:
         value: production
       # Pro trades from the token modal for every Pro Mode wallet: grants and the top 250 holders
       # (api), with the Pro holder scan running (worker). User ask 2026-10-18 04:09 UTC, after
-      # shipping admins-only at 02:17. "false" takes it back to the admin wallets alone.
+      # shipping admins-only at 02:17. "false" takes it back to the admin wallets alone. Set in the
+      # dashboard (the schema default is "true"), not synced from here: see the header.
       - key: PRO_TRADING_PUBLIC
-        value: "true"
+        sync: false
       # Keys the wallet tags in logs (packages/core/src/walletTag.ts), in every service alike so
       # one wallet's tag matches across them. Changing it changes every tag from then on.
       - key: WALLET_TAG_SECRET
@@ -290,10 +298,11 @@ services:
       # with. Empty leaves the feature off. The worker below needs it too, with the private key.
       - key: WEB_PUSH_PUBLIC_KEY
         sync: false
-      # The trading bot (admin-only, packages/core/src/trading). Off until the KMS key and this
-      # service's IAM user (kms:GenerateDataKey only) are in place; flip on here and on the trader.
+      # The trading bot (admin-only, packages/core/src/trading). Off (the schema default) until the
+      # KMS key and this service's IAM user (kms:GenerateDataKey only) are in place; flip it on in
+      # the dashboard here and on the trader. Not synced from here: see the header.
       - key: TRADING_BOT_ENABLED
-        value: "false"
+        sync: false
       - key: TRADING_KMS_KEY_ID
         sync: false
       - key: TRADING_KMS_REGION
@@ -443,9 +452,10 @@ services:
       # The entry fast path (worker's entryFastPath.ts, user decision 2026-10-22): a young launch
       # that holds the band's floor for 2.5 s between cycles gets its first scan at once, alone, on
       # the cycle's own stages, instead of starting the whole cycle early as the band wake did. At
-      # most ENTRY_FAST_PATH_MAX_PER_MINUTE a minute; the rest wait for the cycle. "false" turns it off.
+      # most ENTRY_FAST_PATH_MAX_PER_MINUTE a minute; the rest wait for the cycle. "false" turns it
+      # off. Set in the dashboard (the schema default is "true"), not synced from here: see the header.
       - key: ENTRY_FAST_PATH_ENABLED
-        value: "true"
+        sync: false
       - key: ENTRY_FAST_PATH_MAX_PER_MINUTE
         value: "30"
       # A fast scan waits up to this long for TokenSage's quick read (asked for at the crossing)
