@@ -754,6 +754,11 @@ model Token {
   // newest WATCHLIST_MAX_TRACKED mints span well under an hour - so a token that took two hours
   // to climb into the band silently fell off the radar. Null = never seen live by DexScreener.
   lastLiveAt  DateTime?
+  /// When the nightly outcome tracking (apps/worker outcomeTrackingJob.ts) first found DexScreener
+  /// with no market for the mint, null once it has one again. A mint missing for
+  /// OUTCOME_SKIP_MISSING_AFTER_DAYS is read only on its weekly recheck night (audit 2026-11-02:
+  /// 78% of the nightly pass's lookups came back empty).
+  dexMissingSince DateTime?
   /// The market cap DexScreener reported the last time this mint was refreshed (stamped with
   /// lastLiveAt). What the watchlist ranks on: a mint near or inside the mcap band keeps its
   /// refresh slot however old it is, while launch-level mints compete newest-first for what's
