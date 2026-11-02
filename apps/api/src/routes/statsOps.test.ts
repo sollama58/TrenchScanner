@@ -98,6 +98,13 @@ describe.skipIf(!dbAvailable)("/stats/ops", () => {
     expect(res.headers["cache-control"]).toBe("no-store");
   });
 
+  it("leaves the fits' metrics out of /trainer on metrics=false", async () => {
+    const res = await get("/stats/ops/trainer?metrics=false&limit=5");
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.body).not.toContain("evalMetrics");
+    expect((await get("/stats/ops/trainer?metrics=maybe")).statusCode).toBe(400);
+  });
+
   it("lists every read on its index", async () => {
     const res = await get("/stats/ops/");
     const body = res.json() as { reads: string[] };

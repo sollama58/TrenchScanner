@@ -47,7 +47,7 @@ It is for scripts and cloud sessions that can reach the API but not the database
 curl -H "Authorization: Bearer $STATS_API_TOKEN" "$TRENCHSCANNER_API_URL/stats/hit-rates?days=7"
 ```
 
-The same token reads the dashboard Admin tab's operational reports under `/stats/ops` (`GET /stats/ops/` lists them): the worker's jobs with their full errors, the AI reviewer, FDSA's desk, positions and reviews, the models, outside API usage, which env vars each service has set, the safety screen, TokenSage, plus `/stats/ops/errors` (every recorded failure in a window) and `/stats/ops/trainer` (recent model fits and queued requests). It is read-only by construction: only GET reads on its allowlist are served, the admin writes those plugins also register answer 404, reads carrying users' wallets are left out, and every answer is scrubbed of credentials (`apps/api/src/routes/statsOps.ts`).
+The same token reads the dashboard Admin tab's operational reports under `/stats/ops` (`GET /stats/ops/` lists them): the worker's jobs with their full errors, the AI reviewer, FDSA's desk, positions and reviews, the models, outside API usage, which env vars each service has set, the safety screen, TokenSage, plus `/stats/ops/errors` (every recorded failure in a window) and `/stats/ops/trainer` (recent model fits and queued requests; `metrics=false` leaves out each fit's evalMetrics). It is read-only by construction: only GET reads on its allowlist are served, the admin writes those plugins also register answer 404, reads carrying users' wallets are left out, and every answer is scrubbed of credentials (`apps/api/src/routes/statsOps.ts`).
 
 ### Telegram alerts
 
