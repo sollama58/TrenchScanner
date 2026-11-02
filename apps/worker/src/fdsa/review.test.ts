@@ -12,6 +12,8 @@ import {
   FDSA_HARD_FLOOR_MULTIPLE,
   FDSA_PROMPT_VERSION,
   FDSA_PROMPT_VERSIONS,
+  FDSA_MODEL_SCREEN_MODEL,
+  FDSA_MODEL_SCREEN_VERSION,
   DEFAULT_FDSA_DESK_CONFIG,
   HIGH_CONVICTION_TIER,
   LAUNCHER_TEXT_GUARD_MODEL,
@@ -115,6 +117,8 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
         ...base,
         ANTHROPIC_API_KEY: "test-key",
         FDSA_ENABLED: true,
+        // The Haiku screen: what these tests mock. The model-score screen has its own test below.
+        FDSA_SCREEN_SOURCE: "haiku",
         FDSA_SCREEN_MIN_SCORE: 0.7,
         // The fixed bar and the model's own "trade"; the ranked desk has its own test below.
         FDSA_TRADE_TOP_PCT: 0,
@@ -498,6 +502,70 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
       });
     } finally {
       await prisma.fdsaReview.deleteMany({ where: { tokenId: seedToken.id } });
+    }
+  });
+  it("screens on the scanner model's own odds against the last day's alerts, with no call (owner decision 2026-11-02)", async () => {
+    vi.setSystemTime(new Date("2001-03-22T12:00:00Z"));
+    const modelEnv: Env = { ...env, FDSA_SCREEN_SOURCE: "model" };
+    const seedToken = await prisma.token.create({ data: { mintAddress: `${TAG}-model-seed`, symbol: "S" } });
+    // A day of curated alerts with the models' calibrated odds: 10% of 60 is 6, the top 6 sit at 30%+.
+    const pcts = [...Array<number>(44).fill(12), ...Array<number>(10).fill(18), 30, 30, 30, 34, 34, 41];
+    await prisma.curatedAlert.createMany({
+      data: pcts.map((calibratedPct, i) => ({
+        tokenId: seedToken.id,
+        source: "catcher",
+        model: "catcher",
+        confidence: 50 + i,
+        calibratedPct,
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 10_000,
+        createdAt: new Date(),
+      })),
+    });
+    const modelDecision = (calibratedPct?: number) =>
+      ({
+        ...decision,
+        source: "catcher",
+        ...(calibratedPct === undefined ? {} : { calibratedPct }),
+      }) as CurationDecision;
+    try {
+      // 30%: on the line, shortlisted, and only the decide call is made.
+      const top = { ...(await alertFor()), decision: modelDecision(30) };
+      replies.push(decideReply({ ...tradeAnswer, decision: "pass", exitPlan: null }));
+      const shortlisted = await reviewFdsaAlert(top, modelEnv);
+      expect(shortlisted.screen).toMatchObject({ decision: "shortlist", score: 0.3 });
+      expect(shortlisted.decide?.decision).toBe("pass");
+      expect(replies).toHaveLength(0);
+      const row = await prisma.fdsaReview.findFirstOrThrow({
+        where: { tokenId: top.tokenId, stage: "screen" },
+      });
+      expect(row).toMatchObject({
+        model: FDSA_MODEL_SCREEN_MODEL,
+        promptVersion: FDSA_MODEL_SCREEN_VERSION,
+        effort: "none",
+        decision: "shortlist",
+        score: 0.3,
+        costUsd: null,
+      });
+      expect(await fdsaHeartbeat(modelEnv)).toMatchObject({
+        screenSource: "model",
+        screenLine: 0.3,
+        screenLineRanked: true,
+      });
+
+      // 18%: dropped without a call; a rules call has no odds and is dropped too.
+      const under = { ...(await alertFor()), decision: modelDecision(18) };
+      expect((await reviewFdsaAlert(under, modelEnv)).screen).toMatchObject({
+        decision: "drop",
+        score: 0.18,
+      });
+      const rules = { ...(await alertFor()), decision };
+      const dropped = await reviewFdsaAlert(rules, modelEnv);
+      expect(dropped.screen?.decision).toBe("drop");
+      expect(dropped.screen?.reason).toContain("no calibrated model odds");
+      expect(replies).toHaveLength(0);
+    } finally {
+      await prisma.curatedAlert.deleteMany({ where: { tokenId: seedToken.id } });
     }
   });
   it("trades the top of the last day's decide odds, whatever the answer says (owner decision 2026-11-01)", async () => {

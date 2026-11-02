@@ -60,6 +60,40 @@ export const FDSA_PROMPT_VERSIONS: Readonly<Record<FdsaStage, string>> = {
   decide: "fdsa-decide-v6",
   revise: "fdsa-revise-v2",
 };
+/**
+ * The model-score screen (owner decision 2026-11-02, FDSA_SCREEN_SOURCE "model"): no call, so the
+ * row's `model` is this sentinel (as the launcher-text guard's) and its promptVersion this one,
+ * so the record never mixes Haiku's odds with the scanner model's.
+ */
+export const FDSA_MODEL_SCREEN_MODEL = "scanner-model";
+export const FDSA_MODEL_SCREEN_VERSION = "fdsa-screen-model-v1";
+
+/**
+ * A model-score screen as stored: the scanner model's own calibrated 2x odds are the score,
+ * shortlisted at or above `minScore`; an alert with no odds (a rules call) is a drop.
+ */
+export function readFdsaModelScreen(probability2x: number | undefined, minScore: number): FdsaScreenVerdict {
+  if (probability2x === undefined || !Number.isFinite(probability2x))
+    return {
+      decision: "drop",
+      score: 0,
+      reason: "The alert carries no calibrated model odds (a rules call), so it is dropped.",
+    };
+  const score = clampProbability(probability2x);
+  const pct = Math.round(score * 100);
+  return score >= minScore
+    ? {
+        decision: "shortlist",
+        score,
+        reason: `The scanner model's own 2x odds, ${pct}%, are in the top share of the last day's alerts.`,
+      }
+    : {
+        decision: "drop",
+        score,
+        reason: `The scanner model's own 2x odds, ${pct}%, are under the top share of the last day's alerts.`,
+      };
+}
+
 /** The decide stage's version: the one the tab's settings and record name. */
 export const FDSA_PROMPT_VERSION = FDSA_PROMPT_VERSIONS.decide;
 

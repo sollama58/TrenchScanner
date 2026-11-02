@@ -1250,6 +1250,14 @@ const envSchema = z.object({
   // last day's screens (fdsa/review.ts screenLine), whatever scale the screen model grades on.
   // FDSA_SCREEN_MIN_SCORE is then only the line until a day holds enough screens to rank against;
   // FDSA_SCREEN_SHORTLIST_PCT=0 goes back to the fixed line.
+  // What the screen is (owner decision 2026-11-02, "shortlist by model score"): "model" ranks the
+  // alerts on the scanner model's own calibrated 2x odds (CurationDecision.calibratedPct, the
+  // figure the brief already shows) against the last day's curated alerts, with no Haiku call at
+  // all; a rules call carries no odds and is dropped. "haiku" is the first design: a Haiku call per
+  // alert, its odds ranked against the last day's Haiku screens. Over FDSA's first 30 days Haiku's
+  // shortlist doubled 8.6% against 19.8% for what it dropped (notes/audit-2026-11-02), while
+  // coins the models rate highest have been the better pool (27% for 9+ callers, 10-25 eval).
+  FDSA_SCREEN_SOURCE: z.enum(["model", "haiku"]).default("model"),
   FDSA_SCREEN_MODEL: z.string().default("claude-haiku-5-5"),
   FDSA_SCREEN_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
   FDSA_SCREEN_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.7),
