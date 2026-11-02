@@ -14,6 +14,7 @@ import {
   runPaperTrading,
   DEFAULT_PAPER_CONFIG,
   UNSELLABLE_REST_MS,
+  UNSELLABLE_GIVE_UP_MS,
   type PaperSkip,
   type PaperTradingDeps,
 } from "./paper.js";
@@ -86,6 +87,8 @@ class FakeMarket {
   lamportsPerRaw = new Map<string, number>();
   solUsd = 200;
   noRoute = new Set<string>();
+  /** Mints whose quote fails some other way than no route (a 400 outside the no-route codes). */
+  failQuote = new Set<string>();
   quotes = 0;
   mintInfo: (mint: string) => MintInfo | null = () => ({
     program: PROGRAM.token2022,
@@ -100,6 +103,7 @@ class FakeMarket {
       this.quotes++;
       const mint = inputMint === WSOL_MINT ? outputMint : inputMint;
       if (this.noRoute.has(mint)) throw new NoRouteError("Jupiter quote: no route");
+      if (this.failQuote.has(mint)) throw new Error("Jupiter quote: 400 INVALID_AMOUNT");
       const p = this.lamportsPerRaw.get(mint)!;
       const out = inputMint === WSOL_MINT ? Number(amount) / p : Number(amount) * p;
       return {
@@ -367,6 +371,69 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     clock = new Date(clock.getTime() + 10_000);
     await runPaperTrading(deps());
     expect((await position()).closeReason).toBe("manual");
+  });
+
+  it("rests a sale whose quote fails any other way than no route", async () => {
+    await strategyWithSignal();
+    await runPaperTrading(deps());
+    market.failQuote.add(mint);
+    market.lamportsPerRaw.set(mint, 0.02);
+    clock = new Date(clock.getTime() + 60_000);
+    const summary = await runPaperTrading(deps());
+    const p = await position();
+    expect(p.status).toBe("open");
+    expect(p.error).toMatch(/sale not quoted \(stop_loss\): .*INVALID_AMOUNT/);
+    expect(summary.errors).toBe(0);
+
+    // Passed over until its rest is up, like a no-route one; sold once the quote answers.
+    const quotes = market.quotes;
+    clock = new Date(clock.getTime() + 10_000);
+    await runPaperTrading(deps());
+    expect(market.quotes).toBe(quotes);
+    market.failQuote.delete(mint);
+    clock = new Date(clock.getTime() + UNSELLABLE_REST_MS);
+    await runPaperTrading(deps());
+    expect((await position()).closeReason).toBe("stop_loss");
+  });
+
+  it("closes a position that stays unpriced and unsellable past its hold cap, as a loss", async () => {
+    await strategyWithSignal();
+    await runPaperTrading(deps());
+    const cashAfterBuy = (await strategy()).cashLamports;
+    // The coin dies: no price source has it and a sale has no route.
+    market.noRoute.add(mint);
+    market.lamportsPerRaw.delete(mint);
+    const openedAt = clock.getTime();
+    const capMs = 30 * 60_000;
+
+    // Under the hold cap: noted as unpriced, kept.
+    clock = new Date(openedAt + 10 * 60_000);
+    await runPaperTrading(deps());
+    expect((await position()).error).toMatch(/no price/);
+
+    // Past the cap but not yet given up on: a time-limit sale that finds no route, kept.
+    clock = new Date(openedAt + capMs + UNSELLABLE_GIVE_UP_MS - 60_000);
+    await runPaperTrading(deps());
+    let p = await position();
+    expect(p.status).toBe("open");
+    expect(p.error).toMatch(/no route to sell \(max_hold\)/);
+
+    // Given up on: closed with nothing back, the strategy's cash untouched, no quote spent on it.
+    const quotes = market.quotes;
+    clock = new Date(openedAt + capMs + UNSELLABLE_GIVE_UP_MS + UNSELLABLE_REST_MS);
+    await runPaperTrading(deps());
+    p = await position();
+    expect(p.status).toBe("closed");
+    expect(p.closeReason).toBe("unsellable");
+    expect(p.proceedsLamports).toBe(0n);
+    expect(p.closedAt?.getTime()).toBe(clock.getTime());
+    expect(market.quotes).toBe(quotes);
+    expect((await strategy()).cashLamports).toBe(cashAfterBuy);
+
+    // Nothing more is done with it.
+    clock = new Date(clock.getTime() + UNSELLABLE_REST_MS);
+    await runPaperTrading(deps());
+    expect(market.quotes).toBe(quotes);
   });
 
   it("follows the AI gate and records why it passed", async () => {

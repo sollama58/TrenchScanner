@@ -24,6 +24,7 @@ import {
 } from "./engine.js";
 import { decideExit, sellAmount, type ExitReason } from "./exitEngine.js";
 import { NoRouteError, RateLimitedError, WSOL_MINT, type SwapClient } from "./jupiterSwap.js";
+import { TransientError } from "./errors.js";
 import type { MintInfo } from "./rpc.js";
 import { escapeHtml } from "../telegram/format.js";
 import { EXIT_REASON_TEXT, signedSol, solAmount, tokenLink, type TradeNote } from "./tradeNotes.js";
@@ -64,6 +65,14 @@ const RECENT_SKIPS = 30;
  * close the admin asks for is tried at once whatever the rest.
  */
 export const UNSELLABLE_REST_MS = 2 * 60_000;
+/**
+ * A position past its hold cap that has had no price and no sell route for this long (after the
+ * cap, or after its last price) is closed as `unsellable`, its proceeds as they stand: a loss, as
+ * the chain made it. Until 2026-11-02 it was rested and quoted again every two minutes for ever,
+ * holding one of the strategy's open slots (maxOpenPositions) and valued at its last multiple, so
+ * paper results read better and thinner than a bot's would have (full audit 2026-11-02, TR-17).
+ */
+export const UNSELLABLE_GIVE_UP_MS = 6 * 60 * 60_000;
 const unsellableUntil = new Map<string, number>();
 /** Test hook. */
 export function resetPaperExitRests(): void {
@@ -259,6 +268,11 @@ async function managePaperExit(
     decision = { all: true, fraction: 1, reason: "manual" };
   } else {
     multiple = positionMultiple(position, tokenUsd, solUsd);
+    // Checked before the quote: a quote is what a dead coin costs every pass (TR-13).
+    if (multiple === null && unsellableSince(position, plan, now) >= UNSELLABLE_GIVE_UP_MS) {
+      await closeUnsellable(position, config, now, notes);
+      return false;
+    }
     if (multiple === null) multiple = await quotedMultiple(deps, position, held, bought);
     if (multiple === null) {
       const ageMinutes = (now.getTime() - position.openedAt.getTime()) / 60_000;
@@ -309,16 +323,23 @@ async function managePaperExit(
     });
     out = penalizedFill(BigInt(quote.outAmount), config.fillPenaltyBps);
   } catch (err) {
-    if (err instanceof NoRouteError) {
-      // As a real sale would: no route, nothing sold. Tried again after UNSELLABLE_REST_MS.
-      await prisma.paperPosition.update({
-        where: { id: position.id },
-        data: { error: `no route to sell (${decision.reason})` },
-      });
-      restUnsellable(position.id, now);
-      return false;
-    }
-    throw err;
+    // A limit or an outage says nothing about the coin: counted as an error, tried next pass.
+    if (err instanceof RateLimitedError || err instanceof TransientError) throw err;
+    // As a real sale would: no route, nothing sold. Tried again after UNSELLABLE_REST_MS. Any
+    // other quote failure (a 400 outside the no-route codes, an unreadable answer) rests the same
+    // way: rethrown, it was quoted again on the very next pass, ~680 failing quotes an hour after
+    // #1198 had rested the no-route ones (full audit 2026-11-02, TR-13).
+    await prisma.paperPosition.update({
+      where: { id: position.id },
+      data: {
+        error:
+          err instanceof NoRouteError
+            ? `no route to sell (${decision.reason})`
+            : `sale not quoted (${decision.reason}): ${errText(err)}`,
+      },
+    });
+    restUnsellable(position.id, now);
+    return false;
   }
   const fee = paperSwapFee(config);
   const net = out > fee ? out - fee : 0n;
@@ -372,6 +393,47 @@ async function managePaperExit(
     `sold ${tokenLink(position.symbol, position.mint)} (${EXIT_REASON_TEXT[decision.reason] ?? escapeHtml(decision.reason)}), ${solAmount(net)} back${result}`,
   );
   return true;
+}
+
+/**
+ * How long `position` has been past its hold cap with no price and no route: since the later of
+ * the cap and its last price (a price past the cap sells it, so a later one means the sale found
+ * no route).
+ */
+function unsellableSince(position: PaperPositionRow, plan: ExitPlan, now: Date): number {
+  const capAt = position.openedAt.getTime() + holdCapMinutes(position, plan) * 60_000;
+  return now.getTime() - Math.max(capAt, position.lastPricedAt?.getTime() ?? 0);
+}
+
+/** Closes a position that can't be sold, its proceeds as they stand (UNSELLABLE_GIVE_UP_MS). */
+async function closeUnsellable(
+  position: PaperPositionRow,
+  config: PaperStrategyConfig,
+  now: Date,
+  notes: TradeNote[],
+): Promise<void> {
+  const closed = await prisma.paperPosition.updateMany({
+    where: { id: position.id, status: "open", tokensHeld: position.tokensHeld },
+    data: {
+      status: "closed",
+      closedAt: now,
+      closeReason: "unsellable",
+      error: "no price and no route to sell; closed as a loss",
+    },
+  });
+  if (closed.count !== 1) return;
+  logger.info("paper position closed as unsellable", {
+    positionId: position.id,
+    mint: position.mint,
+    heldMinutes: Math.round((now.getTime() - position.openedAt.getTime()) / 60_000),
+  });
+  paperNote(
+    notes,
+    position.strategy,
+    config,
+    saleEvent("unsellable"),
+    `${tokenLink(position.symbol, position.mint)} could not be sold (no price, no route) and is closed as a loss, ${signedSol(position.proceedsLamports - position.swapInLamports - position.feesLamports)}`,
+  );
 }
 
 /** The multiple from a sell quote for what is held, when the price sources have no price. */
