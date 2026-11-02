@@ -297,6 +297,10 @@ model TelegramChat {
   /// When the chat was told its account's own Telegram model picks have all left the roster, so
   /// it gets the top models' calls instead (dispatch.ts). Cleared once a pick is back.
   picksFallbackNoticedAt DateTime?
+  /// When the chat was last told that no alert had reached it for IDLE_CHAT_MS (dispatch.ts): an
+  /// enabled chat whose filters and picks match nothing is told once, and again no sooner than a
+  /// week later while it stays idle (audit 2026-11-02 WB-45, user decision "one notice a week").
+  idleNoticedAt          DateTime?
 
   createdAt DateTime  @default(now())
   /// Unlinked from the dashboard, or the bot was blocked / removed from the group. Kept for the
