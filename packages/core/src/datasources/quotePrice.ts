@@ -21,12 +21,17 @@ export type QuoteReader = (mint: string) => Promise<QuoteUsd | null>;
 export const jupiterQuote: QuoteReader = keylessQuoteUsd;
 
 /**
- * How long a reader that answered 429 is passed over, for every coin. Jupiter's keyless host limits
- * per IP, and production's IPs are shared: 89% of the worker's and 72% of the api's keyless price
- * reads were 429s (audit 2026-11-02, /stats/ops/errors), each one a wasted round trip ahead of the
- * DexScreener read that then answered. Resting it a minute sends those reads straight on.
+ * How long a reader that answered 429 is passed over, for every coin, the first time. Jupiter's
+ * keyless host limits per IP, and production's IPs are shared: 89% of the worker's and 72% of the
+ * api's keyless price reads were 429s (audit 2026-11-02, /stats/ops/errors), each one a wasted
+ * round trip ahead of the DexScreener read that then answered. Resting it a minute sent those
+ * reads straight on, but only thinned the refusals: 95% of the probes after a rest were refused
+ * again (full audit 2026-11-02, DA-1: ~30k calls a day, 29k of them 429s). So each 429 in a row
+ * doubles the rest, up to RATE_LIMITED_REST_MAX_MS, and an answer resets it; and the callers now
+ * put the keyless reader last, after DexScreener (apps/worker index.ts, apps/api server.ts).
  */
 export const RATE_LIMITED_REST_MS = 60_000;
+export const RATE_LIMITED_REST_MAX_MS = 15 * 60_000;
 
 /** A quote price older than this is not served: the chart would be priced on a stale coin. */
 export const QUOTE_PRICE_MAX_AGE_MS = 10 * 60_000;
@@ -59,7 +64,7 @@ export function dexScreenerQuote(
 
 /**
  * A quote coin's price, like the API's SolPrice: reused for `ttlMs`, read single-flight per coin,
- * each reader tried in turn until one answers (Jupiter, then DexScreener), the last good price
+ * each reader tried in turn until one answers (DexScreener, then keyless Jupiter), the last good price
  * kept through failed reads for up to `maxAgeMs`. `onFailure` is told each time every reader
  * failed or answered none for a coin (the API counts it on its chart health).
  */
@@ -70,6 +75,8 @@ export class QuotePrice {
   private readonly readers: readonly QuoteReader[];
   /** Per reader, until when it is passed over after a 429 (RATE_LIMITED_REST_MS). */
   private readonly restingUntil: number[];
+  /** Per reader, 429s in a row: the rest doubles with each (RATE_LIMITED_REST_MAX_MS). */
+  private readonly rateLimitedRun: number[];
   /** Coins every reader failed or answered none for, with when, for the worker's heartbeat (takeMisses). */
   private misses: { mint: string; at: number; error: string | null }[] = [];
 
@@ -84,6 +91,12 @@ export class QuotePrice {
   ) {
     this.readers = typeof read === "function" ? [read] : read;
     this.restingUntil = this.readers.map(() => 0);
+    this.rateLimitedRun = this.readers.map(() => 0);
+  }
+
+  /** The rest after a reader's `run`th 429 in a row: a minute, doubling, capped at 15. */
+  static restMs(run: number): number {
+    return Math.min(RATE_LIMITED_REST_MAX_MS, RATE_LIMITED_REST_MS * 2 ** Math.max(0, run - 1));
   }
 
   /**
@@ -120,6 +133,7 @@ export class QuotePrice {
       }
       try {
         const value = await read(mint);
+        this.rateLimitedRun[i] = 0;
         if (value) {
           if (!this.values.has(mint) && this.values.size >= this.maxCoins) {
             const oldest = this.values.keys().next().value;
@@ -131,7 +145,8 @@ export class QuotePrice {
         lastError ??= `reader ${i}: no price`;
       } catch (err) {
         if (err instanceof HttpError && err.status === 429) {
-          this.restingUntil[i] = this.now() + RATE_LIMITED_REST_MS;
+          const run = (this.rateLimitedRun[i] = (this.rateLimitedRun[i] ?? 0) + 1);
+          this.restingUntil[i] = this.now() + QuotePrice.restMs(run);
         }
         lastError = `reader ${i}: ${String(err)}`;
         logger.debug("quote price read failed", { mint, reader: i, error: String(err) });

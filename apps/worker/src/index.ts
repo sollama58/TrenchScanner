@@ -591,17 +591,19 @@ async function main() {
       : undefined;
   // The chart's candle store (core's candles/): the curve tape's 1-second bars each minute, and the
   // one-time backfill to launch of each coin a chart opened or a call named (CANDLE_STORE).
+  // DexScreener first, Jupiter's keyless host last: that host refuses 95% of the reads from Render's
+  // shared egress even after a minute's rest (full audit 2026-11-02, DA-1).
   const quotePrice = new QuotePrice([
-    jupiterQuote,
     dexScreenerQuote(dexScreener, (mints) => deps.helius.getMintDecimals(mints)),
+    jupiterQuote,
   ]);
   const stopCurveCandles =
     curveTapeOn && env.CANDLE_STORE
       ? startCurveCandles({
           view: curveTapeView,
           solUsd: () => dexScreener.solUsd(),
-          // A coin-quoted curve's quote coin (USD1, a tokenized stock, another pump coin): Jupiter's
-          // keyless price, then DexScreener with the decimals off the mint, as the API's live chart
+          // A coin-quoted curve's quote coin (USD1, a tokenized stock, another pump coin): DexScreener
+          // with the decimals off the mint, then Jupiter's keyless price, as the API's live chart
           // reads it (core's QuotePrice). A few distinct coins a minute. Jupiter alone left curves
           // quoted in another pump coin unpriced on the server, and so unrecorded (chart audit
           // 2026-10-24); the coins it still can't price are counted on the heartbeat.
