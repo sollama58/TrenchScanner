@@ -1,8 +1,18 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "./bootstrap-env.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { readKolCalls, typicalKol, windowTiers, type KolCall, type VsTiers } from "./modelsVsKols.js";
+import { loadEnv } from "@trenchscanner/core";
+import {
+  createModelsVsKolsCache,
+  readKolCalls,
+  typicalKol,
+  windowTiers,
+  type KolCall,
+  type VsTiers,
+} from "./modelsVsKols.js";
+import { cacheReport } from "./sharedCache.js";
+import { READ_KEEPS_WARM_MS } from "./marketLighthouse.js";
 
 const NOW = Date.parse("2026-11-02T12:00:00Z");
 const HOUR = 3_600_000;
@@ -114,6 +124,8 @@ describe.skipIf(!dbAvailable)("readKolCalls", () => {
       { won: true, anchor: now - 3 * HOUR, buy: 5, dq: false },
       // A 2x after the stop: graded a loss.
       { won: true, anchor: now - 4 * HOUR, buy: -1, dq: true },
+      // Graded under an older rule: not a call either way (the models' side reads the same bound).
+      { won: true, anchor: now - 5 * HOUR, buy: -1, dq: false, labelRule: 2 },
     ];
     for (const [i, c] of coins.entries()) {
       const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${i}`, symbol: `VK${i}` } });
@@ -133,6 +145,7 @@ describe.skipIf(!dbAvailable)("readKolCalls", () => {
           hit4xIn1h: c.won,
           hit10xIn1h: c.won ? false : null,
           disqualified: c.dq,
+          ...("labelRule" in c ? { labelRule: c.labelRule } : {}),
         },
       });
       await prisma.tokenTradeTape.create({
@@ -168,4 +181,35 @@ describe.skipIf(!dbAvailable)("readKolCalls", () => {
     const [week] = windowTiers(calls, now, [7]);
     expect(week).toMatchObject({ calls: 3, graded: 3, won2x: 1, won4x: 1, won10x: 0, tenXGraded: 3 });
   });
+});
+
+describe.skipIf(!dbAvailable)("createModelsVsKolsCache keepWarm", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("fills once at startup, then only while read lately", async () => {
+    const report = createModelsVsKolsCache(loadEnv());
+    const fills = () =>
+      cacheReport()
+        .filter((r) => r.name === "models vs kols")
+        .reduce((n, r) => n + r.fills, 0);
+    // Far ahead: the cache counts as due on each pass, so only the read rule decides.
+    const AHEAD = 365 * 86_400_000;
+    const before = fills();
+    await report.keepWarm(AHEAD);
+    const first = fills();
+    expect(first).toBe(before + 1);
+    // Nobody read it: left alone.
+    await report.keepWarm(AHEAD);
+    expect(fills()).toBe(first);
+    // Read: kept warm.
+    await report();
+    const read = fills();
+    await report.keepWarm(AHEAD);
+    expect(fills()).toBe(read + 1);
+    // An hour on with no further read, let go again.
+    vi.useFakeTimers({ now: Date.now() + READ_KEEPS_WARM_MS + 1, toFake: ["Date"] });
+    const later = fills();
+    await report.keepWarm(AHEAD);
+    expect(fills()).toBe(later);
+  }, 60_000);
 });
