@@ -640,8 +640,10 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // Pump.fun's coin list (pages asked and failed, with the last failure) and the one-coin
   // fallback's counts: a list failing every page means launches arrive from the stream alone.
   const listError = (m.pumpfunList as { lastError?: unknown } | undefined)?.lastError;
+  // Through publicErrorText like every heartbeat's lastError (audit 2026-11-02, AP-14): the route
+  // is public, and the probe's text can name the host it called.
   if (out.pumpfunList && typeof listError === "string") {
-    out.pumpfunList = { ...(out.pumpfunList as object), lastError: listError.slice(0, 200) };
+    out.pumpfunList = { ...(out.pumpfunList as object), lastError: publicErrorText(listError) };
   }
   // The scan's TokenSage counters (requested, stored, turned away, waiting, pending...): counts
   // only, so whether reads are going out and coming back is visible without the admin wallet.

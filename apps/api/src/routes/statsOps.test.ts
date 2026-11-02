@@ -30,6 +30,43 @@ describe("scrubSecrets", () => {
     }
   });
 
+  it("redacts bot tokens, Basic values, AWS ids and env-style names, in text and in JSON", () => {
+    // Made-up values only.
+    const cases = {
+      telegramUrl:
+        "fetch failed https://api.telegram.org/bot1234567890:AAFakeFakeFakeFakeFakeFake_FAKE/sendPhoto",
+      telegramBare: "bot token 1234567890:AAFakeFakeFakeFakeFakeFake_FAKE rejected",
+      jupiterHeader: "x-api-key: 0f0f0f0f-aaaa-bbbb-cccc-0123456789ab",
+      basic: "authorization: Basic Y21mYWtlOnNlY3JldGZha2VmYWtlZmFrZQ==",
+      awsSecret: "TRADING_AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYFAKEFAKE",
+      awsId: "id AKIAFAKEFAKEFAKEFAKE used",
+      vapid: "WEB_PUSH_PRIVATE_KEY=UUxI4O8-FbRouAevSmBQ6o18hgE4nSG3qwvJTfKc-FAKE",
+      quicknode: "https://cool-name.solana-mainnet.quiknode.pro/0123456789abcdef0123456789abcdef01234567/",
+    };
+    const secrets = [
+      "AAFakeFakeFakeFakeFakeFake_FAKE",
+      "0f0f0f0f-aaaa-bbbb-cccc-0123456789ab",
+      "Y21mYWtlOnNlY3JldGZha2VmYWtlZmFrZQ==",
+      "wJalrXUtnFEMI",
+      "AKIAFAKEFAKEFAKEFAKE",
+      "UUxI4O8-FbRouAevSmBQ6o18hgE4nSG3qwvJTfKc-FAKE",
+      "0123456789abcdef0123456789abcdef01234567",
+      "FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE",
+    ];
+    for (const text of [
+      ...Object.values(cases),
+      JSON.stringify({ ...cases, STATS_API_TOKEN: "FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE" }),
+      JSON.stringify({ headers: { "x-api-key": "0f0f0f0f-aaaa-bbbb-cccc-0123456789ab" } }),
+    ]) {
+      const out = scrubSecrets(text);
+      for (const secret of secrets) expect(out, text).not.toContain(secret);
+    }
+    // The bot id alone, a chat id or a timestamp is not a token.
+    expect(scrubSecrets("chat 1234567890: sent 12 at 1730000000000")).toBe(
+      "chat 1234567890: sent 12 at 1730000000000",
+    );
+  });
+
   it("leaves plain URLs and mints alone", () => {
     const text = JSON.stringify({
       imageUrl: "https://ipfs.io/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
