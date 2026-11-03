@@ -125,9 +125,10 @@ export const SAME_TIME_FUNDING_FEATURES = ["sameTimeFundedPct", "sameTimeCluster
  * before. Later the same day Linked took in the same-minute holders, so linkedWalletCount equals
  * bundledWalletCount from then on.
  *
- * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
- * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
- * including inside age buckets. bundledSupplyPct was already read.
+ * Read by the learners from 2026-10-21 (user ask). sameTimeFundedCount was flat on its own over
+ * 10-19..11-02 (AUC 0.508) and left the fit on 2026-11-03 (FLAT_INPUTS_RETIRED_2026_11_03); the
+ * onset guard (featureOnset.ts) keeps bundledWalletCount out of a run until it covers enough of
+ * the exam's span. bundledSupplyPct was already read.
  */
 export const BUNDLED_FEATURES = ["sameTimeFundedCount", "bundledWalletCount"] as const;
 
@@ -164,9 +165,10 @@ export const WALLET_WIN_FEATURES = [
  * buying or selling in the newest trades read before the decision. Null without the roster (no
  * SOLANA_TRACKER_API_KEY), without the list in question, and on every row banked before.
  *
- * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
- * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
- * including inside age buckets. No new paid call: the roster is the one the scan already loads.
+ * Read by the learners from 2026-10-21 (user ask). All but kolRecentBuyers were flat on their own
+ * over 10-19..11-02 (AUC 0.494-0.511) and left the fit on 2026-11-03 (FLAT_INPUTS_RETIRED_2026_11_03);
+ * they stay recorded. The onset guard (featureOnset.ts) keeps the one read out of a run until it
+ * covers enough of the exam's span. No new paid call: the roster is the one the scan already loads.
  */
 export const KOL_FEATURES = [
   "kolTopHolders",
@@ -184,9 +186,10 @@ export const KOL_FEATURES = [
  * holders (pools aside) were among the launch's first 25 buyers and how many holders that read,
  * and how many top-10 wallets the fresh and empty checks read. Null on every row banked before.
  *
- * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
- * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
- * including inside age buckets.
+ * Read by the learners from 2026-10-21 (user ask); largestHolderPct and cexFundedHolders were
+ * flat on their own over 10-19..11-02 and left the fit on 2026-11-03 (FLAT_INPUTS_RETIRED_2026_11_03).
+ * The onset guard (featureOnset.ts) keeps the rest out of a run until they cover enough of the
+ * exam's span, including inside age buckets.
  */
 export const HOLDER_SET_FEATURES = [
   "largestHolderPct",
@@ -202,10 +205,10 @@ export const HOLDER_SET_FEATURES = [
  * the creator aside) as a count, and how many holders it read. Null until the top-25 list and all
  * its wallets are read, and on every row banked before.
  *
- * READ BY THE LEARNERS (user ask 2026-10-21), beside freshTop10WalletPct, the top-10 share the
- * models already read. The screen, the pick rule and the filters use the top-25 count
- * (freshWalletShare). The onset guard (featureOnset.ts) keeps these out of a run until they cover
- * enough of the exam's span, including inside age buckets.
+ * Read by the learners from 2026-10-21 (user ask) to 2026-11-03, beside freshTop10WalletPct, the
+ * top-10 share the models still read: flat on its own over 10-19..11-02 (AUC 0.493), the count
+ * and its coverage left the fit (FLAT_INPUTS_RETIRED_2026_11_03) and stay recorded. The screen,
+ * the pick rule and the filters use the top-25 count (freshWalletShare).
  */
 export const FRESH_TOP_HOLDER_FEATURES = ["freshTopHolderCount", "freshTopHoldersChecked"] as const;
 
@@ -240,8 +243,8 @@ export const BUNDLED_SUPPLY_FEATURES = ["bundledSupplyPct"] as const;
  * Added 2026-10-16 (user ask): 1 for a Stonks coin (Raydium LaunchLab, launchpads.ts), 0 for a
  * Pump.fun coin, null when the launchpad is unknown or another one. Stonks coins entered
  * discovery the same day, so every row banked before is null (a Pump.fun coin then, as they all
- * were; not backfilled). Read by the learners; the onset guard (featureOnset.ts) keeps it out of
- * a run until it covers enough of the exam's span.
+ * were; not backfilled). Read by the learners until 2026-11-03: flat on its own over 10-19..11-02
+ * (AUC 0.499 on 98.7% fill), it left the fit (FLAT_INPUTS_RETIRED_2026_11_03) and stays recorded.
  */
 export const LAUNCHPAD_FEATURES = ["launchpadStonks"] as const;
 
@@ -294,7 +297,8 @@ export const MARKET_SOURCE_FEATURES = ["mktSource"] as const;
  * cap any of them reached (relaunchSiblings, relaunchSiblingPeakMcapUsd; curation/relaunchFarm.ts). Null on every row banked before; never backfilled. Recorded only
  * firstBuyersHoldingCut has been read since 2026-10-19. The rest joined on 2026-10-21 (user ask).
  *
- * READ BY THE LEARNERS, so none of LAUNCH_FACT_FEATURES are in RETIRED_LEARNER_INPUTS.
+ * Read by the learners, but for the two relaunch readings, flat on their own over 10-19..11-02
+ * (AUC 0.502 and 0.505) and out of the fit from 2026-11-03 (FLAT_INPUTS_RETIRED_2026_11_03).
  * firstBuyersHolding stays retired. The onset guard (featureOnset.ts) keeps a column out of a run
  * until it covers enough of the exam's span, including inside age buckets.
  */
@@ -313,9 +317,9 @@ export const LAUNCH_FACT_FEATURES = [
  * live page or before the scores load. Backfilled point-in-time on the rows decided around a
  * called coin's tape (worker's walletScoreBackfill.ts).
  *
- * READ BY THE LEARNERS (user ask 2026-10-21), so they are not in RETIRED_LEARNER_INPUTS. The onset
- * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
- * including inside age buckets.
+ * Read by the learners from 2026-10-21 (user ask). The mean was flat on its own over 10-19..11-02
+ * (AUC 0.517 on 93% fill) and left the fit on 2026-11-03 (FLAT_INPUTS_RETIRED_2026_11_03); the
+ * scored count, a coverage marker, stays with the clean winners' readings built on the same tape.
  */
 export const WALLET_SCORE_FEATURES = [
   "walletScoreRecentBuyersMean",
@@ -742,6 +746,46 @@ export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
  * here. The heuristic curator's safety gates (fresh-wallet cap, risk caps) read the scored
  * token, not this list, so retiring an input never loosens a gate.
  */
+/**
+ * Flat inputs retired at the next retrain (full audit 2026-11-02, MT-23; user decision "all three
+ * at the next retrain": inputs with AUC under 0.52 leave the fit). On 17,116 graded cycle moments
+ * from 10-19 to 11-02 (base 16.2%) 128 of the 226 learner inputs sat within 0.02 of AUC 0.5 with
+ * at least 20% fill. These are the ones of them the market seats read that no earlier decision
+ * pins: no coverage marker (a *Checked count or nsRead tells "0" from "unread" for a reading that
+ * stays), no cyclic clock (ctxHour* is non-monotonic by design, so a single-input AUC cannot see
+ * it), no safety reading, nothing an owner decision put in the fit on its own evidence
+ * (walletWinTop10Max, linkedCreatorPct, the dev launch and curve path blocks, the clock-honest
+ * readings) and no TokenSage input: the market seats read only MARKET_TOKENSAGE_INPUTS, and on
+ * the Narrative seat's own set dropping its 64 flat ns* inputs cost 0.6 points of top-20% 2x rate
+ * (19.3% to 18.7%, three walk-forward folds x three seeds), so those stay for it.
+ * A paired walk-forward ablation on the market seats' inputs (168 columns, three folds over
+ * 10-24..11-02, five seeds, 21,017 graded decision rows): without these 19 the AUC read 0.601
+ * against 0.603, the top-20% 2x rate 23.0% against 22.7% (+0.3 +- 0.7 points), the top-5% 24.3%
+ * against 24.9%: nothing measurable either way. freshTopHoldersChecked goes with the count it
+ * covers. Each stays recorded, so any can come back by taking it out of this list.
+ */
+export const FLAT_INPUTS_RETIRED_2026_11_03 = [
+  "hasTwitter",
+  "hasWebsite",
+  "launchpadStonks",
+  "largestHolderPct",
+  "cexFundedHolders",
+  "freshTopHolderCount",
+  "freshTopHoldersChecked",
+  "sameTimeFundedCount",
+  "kolTopHolders",
+  "kolTopHolderPct",
+  "kolFirstBuyers",
+  "kolRecentSellers",
+  "relaunchSiblings",
+  "relaunchSiblingPeakMcapUsd",
+  "walletScoreRecentBuyersMean",
+  "avgBuySol5m",
+  "buysPerBuyer5m",
+  "pathDrawdown15mPct",
+  "pathGreenShare10m",
+] as const satisfies readonly CandidateFeatureName[];
+
 export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set<CandidateFeatureName>([
   // No signal on their own. (pathRet1mPct and pathHolderSlope10m were retired here too, on a
   // day-old tape and while pathRet1mPct was still a 30-second return; by 2026-10-09 they read AUC
@@ -790,8 +834,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // PumpPortal only streams trades to a funded API key and none is set. Its seven 5-minute
   // inputs came back to the learners on 2026-10-28 (full audit MT-17, card 16): #1118 fills them
   // from Helius pages (uniqueBuyers5m on about 21% of decision moments), and the onset guard holds
-  // them out of a run until that fill covers the exam's span. The early-buyer and dev-sale
-  // inputs below still have no source.
+  // them out of a run until that fill covers the exam's span. Two of the seven, buysPerBuyer5m and
+  // avgBuySol5m, were flat on their own and left again on 2026-11-03 (FLAT_INPUTS_RETIRED_2026_11_03).
+  // The early-buyer and dev-sale inputs below still have no source.
   "earlyBuyerCount",
   "earlyBuyerHoldPct",
   "earlyBuyerSoldShare",
@@ -959,6 +1004,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // "banked before 10-22". Still recorded and shown; can come back once it fills at decision time.
   "transferredSupplyPct",
   "transferWalletCount",
+  // Flat on their own over 10-19..11-02 and pinned by nothing (see FLAT_INPUTS_RETIRED_2026_11_03).
+  ...FLAT_INPUTS_RETIRED_2026_11_03,
   // minutesSinceFirstInBand stays a learner input. A synthetic refit barely used it, but a label
   // that actually depends on time in the band put 42% of the logistic weight and 51% of the tree
   // splits on it (bandClockReliance.test.ts). bandDwellShare did not replace that. It is not

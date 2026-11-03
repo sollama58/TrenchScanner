@@ -81,17 +81,15 @@ describe("contestant roster", () => {
     expect(CONTESTANTS.find((c) => c.id === "narrative")?.role).toBe("narrative");
   });
 
-  it("points the Narrative model at every TokenSage input, the socials and the safety readings", () => {
+  it("points the Narrative model at every TokenSage input and the safety readings", () => {
     const recipe = CONTESTANTS.find((c) => c.id === "narrative")?.recipe;
     expect(recipe?.featureNames).toBe(NARRATIVE_SEAT_FEATURES);
     const tokenSage = LEARNER_FEATURE_NAMES.filter((f) => f.startsWith("ns"));
     expect(tokenSage.length).toBeGreaterThan(30);
     expect(NARRATIVE_SEAT_FEATURES.filter((f) => f.startsWith("ns"))).toEqual(tokenSage);
-    expect(NARRATIVE_SEAT_FEATURES.filter((f) => !f.startsWith("ns"))).toEqual([
-      ...SAFETY_FEATURES,
-      "hasTwitter",
-      "hasWebsite",
-    ]);
+    // The socials (hasTwitter, hasWebsite) left the fit on 2026-11-03 as flat inputs.
+    expect(NARRATIVE_SEAT_FEATURES.filter((f) => !f.startsWith("ns"))).toEqual([...SAFETY_FEATURES]);
+    expect(RETIRED_LEARNER_INPUTS.has("hasTwitter")).toBe(true);
     // The story carries a fixed 30% of the decision, the safety readings the rest.
     expect(recipe?.narrativeLed).toBe(0.3);
     // No price, volume or age.
