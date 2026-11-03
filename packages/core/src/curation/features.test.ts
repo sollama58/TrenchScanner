@@ -5,6 +5,7 @@ import {
   CANDIDATE_FEATURE_NAMES,
   LEARNER_FEATURE_NAMES,
   RETIRED_LEARNER_INPUTS,
+  FLAT_INPUTS_RETIRED_2026_11_03,
   learnerSubset,
   maskKnownBadInputs,
   maskTokenSageXReuseLoss,
@@ -115,6 +116,42 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     const back = scoredFromFeatures(f, 1, 100_000);
     expect(back.buys5m).toBe(30);
     expect(back.sells5m).toBe(10);
+  });
+
+  it("retires the flat inputs of 2026-11-03, recorded still, and keeps their twins and markers", () => {
+    expect(FLAT_INPUTS_RETIRED_2026_11_03).toHaveLength(19);
+    for (const name of FLAT_INPUTS_RETIRED_2026_11_03) {
+      expect(CANDIDATE_FEATURE_NAMES).toContain(name);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+      expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain(name);
+      expect(name.startsWith("ns")).toBe(false);
+    }
+    // What stays: the KOL buyers, the counts' pct twins, the coverage markers, the cyclic clock,
+    // the safety readings, and every TokenSage input the Narrative seat reads.
+    for (const name of [
+      "kolRecentBuyers",
+      "cexFundedPct",
+      "cexFundedCount",
+      "bundledWalletCount",
+      "sameTimeFundedPct",
+      "freshTop10WalletPct",
+      "top10WalletsChecked",
+      "linkedWalletsChecked",
+      "nsRead",
+      "ctxHourSin",
+      "ctxHourCos",
+      "ctxWeekend",
+      "top10HolderPct",
+      "uniqueBuyers5m",
+      "walletWinTop10Max",
+      "linkedCreatorPct",
+      "nsLogoScore",
+      "nsCatPolitical",
+    ] as const) {
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+    }
   });
 
   it("keeps the retired inputs recorded but out of the learners' default list", () => {
@@ -585,11 +622,14 @@ describe("scoredFromFeatures - replay round trip", () => {
       relaunchSiblingPeakMcapUsd: 80_000,
     });
     const none = buildCandidateFeatures(scored());
+    const flat = new Set<string>(FLAT_INPUTS_RETIRED_2026_11_03);
     for (const name of LAUNCH_FACT_FEATURES) {
       expect(none[name]).toBeNull();
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
-      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(flat.has(name));
+      expect(LEARNER_FEATURE_NAMES.includes(name)).toBe(!flat.has(name));
     }
+    expect(LEARNER_FEATURE_NAMES).toContain("firstBuyersSeen");
+    expect(LEARNER_FEATURE_NAMES).toContain("preBondSeconds");
     expect(RETIRED_LEARNER_INPUTS.has("firstBuyersHolding")).toBe(true);
   });
 
@@ -635,12 +675,11 @@ describe("scoredFromFeatures - replay round trip", () => {
     );
     expect(f).toMatchObject({ walletScoreRecentBuyersMean: -1.25, walletScoreRecentBuyersScored: 31 });
     const none = buildCandidateFeatures(scored());
-    for (const name of WALLET_SCORE_FEATURES) {
-      expect(none[name]).toBeNull();
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(false);
-      expect(LEARNER_FEATURE_NAMES).toContain(name);
-      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
-    }
+    for (const name of WALLET_SCORE_FEATURES) expect(none[name]).toBeNull();
+    // The mean was flat on its own and left the fit on 2026-11-03; the scored count stays.
+    expect(RETIRED_LEARNER_INPUTS.has("walletScoreRecentBuyersMean")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).toContain("walletScoreRecentBuyersScored");
+    expect(MARKET_LEARNER_FEATURE_NAMES).toContain("walletScoreRecentBuyersScored");
   });
 
   it("records the clean winners' reading of the newest buyers, read by the learners, unknown without it", () => {
@@ -1295,10 +1334,10 @@ describe("maskKnownBadInputs", () => {
   });
 
   it("lets the learners read the 5-minute trade flow again now that Helius fills it (MT-17)", () => {
+    // buysPerBuyer5m and avgBuySol5m came back with these and were flat on their own over
+    // 10-19..11-02 (AUC 0.489 and 0.507), so they left the fit again on 2026-11-03 (MT-23).
     const flow = [
       "uniqueBuyers5m",
-      "buysPerBuyer5m",
-      "avgBuySol5m",
       "topBuyerShare5m",
       "newBuyerShare5m",
       "netFlow5mToMcap",
@@ -1309,6 +1348,8 @@ describe("maskKnownBadInputs", () => {
       expect(LEARNER_FEATURE_NAMES).toContain(name);
       expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
+    for (const name of ["buysPerBuyer5m", "avgBuySol5m"] as const)
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
   });
 
   it("reads emptyTop10WalletPct as missing before unpriced holdings made it unknown (#678)", () => {

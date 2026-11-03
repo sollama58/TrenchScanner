@@ -267,8 +267,10 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubse
 ]);
 
 /**
- * The Narrative seat's inputs: every TokenSage input the learners read, whether the coin links an X
- * account and a website, plus the safety readings (SAFETY_FEATURES) and no other market data. The
+ * The Narrative seat's inputs: every TokenSage input the learners read, plus the safety readings
+ * (SAFETY_FEATURES) and no other market data. Whether the coin links an X account and a website
+ * was read too until 2026-11-03, when both left the fit as flat inputs (features.ts
+ * FLAT_INPUTS_RETIRED_2026_11_03); learnerSubset below keeps them out while they are retired. The
  * seat's model (narrativeLed.ts) splits them: the safety readings feed its safety check, the rest
  * its story stage, which carries NARRATIVE_STORY_WEIGHT of the decision (user ask 2026-10-13; 30% since
  * 2026-10-14, see the constant). User decision 2026-10-10: the seat decides on the
