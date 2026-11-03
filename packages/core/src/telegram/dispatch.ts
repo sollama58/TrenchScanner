@@ -104,6 +104,13 @@ const MAX_FAILURES = TELEGRAM_MAX_FAILURES;
  */
 export const FAILING_FOR_MS = 24 * 3_600_000;
 /**
+ * An enabled chat that has had no alert through for this long is told so, once, and again no
+ * sooner than this long after the last notice while it stays idle (audit 2026-11-02, WB-45: linked
+ * chats sat silent for weeks on filters and picks that matched nothing, with nothing to say so;
+ * user decision "one notice a week"). Counted from the last send, or from linking.
+ */
+export const IDLE_CHAT_MS = 7 * 24 * 3_600_000;
+/**
  * How far back an alert that aged out of MAX_ALERT_AGE_MS is still counted (agedOut). A cursor can
  * be days old after the worker was down; counting that far back would read days of alerts.
  */
@@ -326,6 +333,7 @@ function loadChats() {
       holdUntil: true,
       createdAt: true,
       picksFallbackNoticedAt: true,
+      idleNoticedAt: true,
       user: {
         select: {
           id: true,
@@ -675,6 +683,19 @@ async function dispatchPass(
           },
         }),
   ]);
+  /**
+   * Tells each chat due the idle notice (idleChat), when its account still has access: a lapsed
+   * one is not told to check its filters. Due chats are few (one notice a week each), so the
+   * access lookup is per chat here.
+   */
+  const noticeIdle = async (due: readonly ChatRow[]): Promise<void> => {
+    for (const chat of due) {
+      if ((await hasAccess(chat.user.walletAddress).catch(() => false)) !== true) continue;
+      const sent = await api.sendMessage(chat.chatId, IDLE_CHAT_TEXT).catch(() => null);
+      if (!sent?.ok) continue; // Told on a later pass.
+      await prisma.telegramChat.updateMany({ where: { id: chat.id }, data: { idleNoticedAt: new Date() } });
+    }
+  };
   if (matches.length === 0 && calls.length === 0) {
     // Nothing new for anyone: move every cursor up so the next pass reads a short window. Only
     // ever up: a chat linked a moment ago starts at now, past this horizon.
@@ -682,6 +703,8 @@ async function dispatchPass(
       where: { id: { in: chats.map((c) => c.id) }, revokedAt: null, sentThrough: { lt: horizon } },
       data: { sentThrough: horizon },
     });
+    // The usual pass for an idle chat is this empty one.
+    await noticeIdle(chats.filter((c) => idleChat(c, startedAt)));
     return summary;
   }
   // The roster and default only decide which calls go to whom, so they are read only when there
@@ -740,6 +763,8 @@ async function dispatchPass(
 
   /** Chats whose Telegram picks just fell back to the top models, or came back. */
   const picksNotices: { chat: ChatRow; fellBack: boolean }[] = [];
+  /** Chats with nothing through for IDLE_CHAT_MS, due a notice (idleChat). */
+  const idleNotices: ChatRow[] = [];
   // Chats with nothing to send this pass only need their cursor moved; one write for all of them.
   const caughtUp: string[] = [];
   // Each chat's queue, then the sends interleaved across chats under the spacing rules.
@@ -791,6 +816,7 @@ async function dispatchPass(
         : theirs.map((c) => ({ ...c, narrativeVerdict: null })),
       horizon,
     ).filter((p) => !alreadySent.has(`${chat.id}:${p.tokenIds[0]}`));
+    if (pending.length === 0 && idleChat(chat, startedAt)) idleNotices.push(chat);
     const agedSince = agedFrom.get(chat.id);
     if (agedSince) {
       const aged = buildPending(
@@ -1141,6 +1167,7 @@ async function dispatchPass(
       data: { picksFallbackNoticedAt: fellBack ? new Date() : null },
     });
   }
+  await noticeIdle(idleNotices);
   // Keep the newest file_ids for the next passes (a token often comes back with another call).
   for (const url of [...knownPhotoIds.keys()].slice(
     0,
@@ -1176,6 +1203,26 @@ async function dispatchPass(
   summary.agedOutSinceBoot = agedOutSinceBoot;
   return summary;
 }
+
+/**
+ * Whether the chat is due the idle notice at `now`: nothing through (a send, or the link) for
+ * IDLE_CHAT_MS, and no notice inside the last IDLE_CHAT_MS. A chat that then gets an alert is
+ * counted from that send again.
+ */
+export function idleChat(
+  chat: { lastSentAt: Date | null; createdAt: Date; idleNoticedAt: Date | null },
+  now: number,
+): boolean {
+  const lastThrough = (chat.lastSentAt ?? chat.createdAt).getTime();
+  if (now - lastThrough < IDLE_CHAT_MS) return false;
+  return chat.idleNoticedAt === null || now - chat.idleNoticedAt.getTime() >= IDLE_CHAT_MS;
+}
+
+/** Sent to an enabled chat that has had no alert through for a week (idleChat). */
+export const IDLE_CHAT_TEXT =
+  "ℹ️ No alert has reached this chat in the last week. Its filters and model picks may match nothing " +
+  "now: check them under <b>Filters → Telegram alerts</b>, or /settings here. This note comes at most " +
+  "once a week while the chat stays quiet.";
 
 /** Sent once when every model a chat's account picked for Telegram has left the roster. */
 export const PICKS_FALLBACK_TEXT =
