@@ -95,6 +95,7 @@ const CALL_SELECT = {
   confidence: true,
   tier: true,
   calibratedPct: true,
+  shownPct: true,
   anchorMcapUsd: true,
 } as const;
 

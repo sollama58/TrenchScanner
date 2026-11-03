@@ -168,7 +168,7 @@ import {
 import { WatchStar } from "./WatchStar";
 import { subtract, useBrowserFill, withFilled, type Span } from "../browserFill";
 import { XLinkPreview } from "./XLinkPreview";
-import { calibratedRateLabel } from "../rates";
+import { calibratedRateLabel, calibratedRateTitle } from "../rates";
 import {
   safetyChecks,
   safetyFlip,
@@ -3508,6 +3508,7 @@ function CallCard({ card }: { card: Card }) {
             confidence: curated.confidence,
             tier: curated.tier,
             calibratedPct: curated.calibratedPct,
+            shownPct: curated.shownPct,
             alertedAt: curated.alertedAt,
           },
         ];
@@ -3522,12 +3523,9 @@ function CallCard({ card }: { card: Card }) {
             <strong>{c.modelName ?? "Model"}</strong>
             <span className="num">{c.confidence.toFixed(0)}</span>
             {c.tier === "high" && <span className="sage-tag tone-good">High conviction</span>}
-            {calibratedRateLabel(c.calibratedPct ?? null) && (
-              <span
-                className="muted small"
-                title="The share of similarly ranked recent calls that doubled, within 15 minutes of the alert"
-              >
-                {calibratedRateLabel(c.calibratedPct ?? null)}
+            {typeof c.shownPct === "number" && (
+              <span className="muted small" title={calibratedRateTitle(c.shownPct, false)}>
+                {calibratedRateLabel(c.shownPct)}
               </span>
             )}
           </li>

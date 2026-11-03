@@ -19,7 +19,7 @@ import {
 } from "./components/AlertCard";
 import { change, minutes, pct, usd } from "./format";
 import { cardOutcome, outcomeBadge } from "./outcome";
-import { cardCalibratedRate } from "./rates";
+import { calibratedRateTitle, cardCalibratedRate } from "./rates";
 import {
   TILE_FIRST_BUYERS_OF,
   TILE_RED_FIRST_BUYERS,
@@ -579,8 +579,7 @@ export const SCOPE_CHIP_DEFS: {
         ? null
         : {
             value: `≈${rate.toFixed(0)}%`,
-            title:
-              "Of recent out-of-sample alerts ranked like this one, the share that hit 2x within 15 min of the alert, before a 50% stop",
+            title: calibratedRateTitle(rate, (c.curated.calledBy ?? []).length > 1),
             tone: null,
             risky: false,
           };

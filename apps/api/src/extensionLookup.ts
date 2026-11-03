@@ -103,6 +103,7 @@ export interface OverlayModelCall {
   name: string | null;
   tier: string | null;
   confidence: number;
+  /** The rate the card quotes (CuratedAlert.shownPct), not the call's own calibrated rate. */
   calibratedPct: number | null;
   at: string;
   mcapUsd: number;
@@ -319,7 +320,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
         modelName: true,
         tier: true,
         confidence: true,
-        calibratedPct: true,
+        shownPct: true,
         createdAt: true,
         anchorMcapUsd: true,
         liveMcapUsd: true,
@@ -342,7 +343,7 @@ async function loadShared(mints: string[], now: number): Promise<Map<string, Sha
       name: c.modelName,
       tier: c.tier,
       confidence: c.confidence,
-      calibratedPct: c.calibratedPct,
+      calibratedPct: c.shownPct,
       at: c.createdAt.toISOString(),
       // Pump.fun's cap as the call went out, when it answered, as the web's card shows it: the
       // anchor runs 45-60 s behind the market (audit 2026-10-27, EX-7). Grades still use the anchor.

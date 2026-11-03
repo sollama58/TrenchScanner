@@ -318,14 +318,15 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             High conviction
           </dt>
           <dd>
-            The exclamation mark beside the model&apos;s name: from the model&apos;s top half-percent most
-            confident moments. Tracked separately on Models.
+            The exclamation mark beside the model&apos;s name: the model&apos;s recent alerts ranked like this
+            one doubled at least 35% of the time. Tracked separately on Models.
           </dd>
           <dt>≈41% 2x</dt>
           <dd>
             Of the model&apos;s recent alerts ranked like this one, on data it wasn&apos;t trained on, the
-            share that doubled within 15 minutes. With several models, the middle of their rates. Off by
-            default: turn it on in Customize.
+            share that doubled within 15 minutes. Shown only from 35% up; under that the card quotes the
+            model&apos;s rate over all its recent alerts and says so. With several models, the middle of their
+            rates. Off by default: turn it on in Customize.
           </dd>
         </dl>
         <p className="fp-note">

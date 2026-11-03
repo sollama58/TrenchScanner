@@ -689,8 +689,8 @@ function BaselineChart({
                                 : selLift === null
                                   ? "."
                                   : selLift >= 1
-                                    ? `, ${selLift.toFixed(1)}x the filtered market's ${pct(selMarket, 1)} in the hours it was alerting.`
-                                    : `, below the filtered market's ${pct(selMarket, 1)} in the hours it was alerting: worse than picking at random.`
+                                    ? `, ${selLift.toFixed(1)}x the filtered cycle moments' ${pct(selMarket, 1)} in the hours it was alerting.`
+                                    : `, below the filtered cycle moments' ${pct(selMarket, 1)} in the hours it was alerting: worse than picking at random.`
                             }`}
                   {!profit && !score && selected.composite.live.avgSimReturnPct != null
                     ? ` Taking every alert averaged ${signedPct(selected.composite.live.avgSimReturnPct)} per alert.`
@@ -1285,7 +1285,7 @@ function LeaderboardPanel({
                   <th className="r">Backtest 2x / 4x / 10x</th>
                   <th
                     className="r"
-                    title="Live 2x rate of its high-conviction alerts alone (its top half-percent of moments)"
+                    title="Live 2x rate of its high-conviction alerts alone (calls whose rank band 2x'd at least 35% of the time)"
                   >
                     High-conv 2x
                   </th>
@@ -1372,7 +1372,7 @@ function LeaderboardPanel({
                     data-label="vs filtered market"
                     title={
                       e.vsMarket?.marketRatePct != null
-                        ? `The filtered market doubled ${pct(e.vsMarket.marketRatePct, 1)} in the hours it was alerting`
+                        ? `The filtered cycle moments (the fast path's entry moments are not in the baseline) doubled ${pct(e.vsMarket.marketRatePct, 1)} in the hours it was alerting`
                         : undefined
                     }
                   >

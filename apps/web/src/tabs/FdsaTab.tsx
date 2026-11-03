@@ -18,6 +18,7 @@ import {
   fdsaExitReasonText,
   fdsaHeld,
   fdsaLogPos,
+  fdsaMeasuredText,
   fdsaMultiple,
   fdsaSignedPct,
   type FdsaPlan,
@@ -249,7 +250,8 @@ function Headline({ d }: { d: FdsaPage }) {
         <span className="eyebrow">2x hit rate on its buys</span>
         <span className="kpi-value num">{t.rate === null ? "–" : `${Math.round(t.rate * 100)}%`}</span>
         <span className="muted small">
-          {t.wins} of {t.graded} graded · target {Math.round(d.record.target * 100)}% · last {d.days}d
+          {t.graded > 0 ? `${fdsaMeasuredText(t)} measured` : `${t.graded} graded`} · target{" "}
+          {Math.round(d.record.target * 100)}% · last {d.days}d
         </span>
       </div>
       <div className="panel kpi">
@@ -285,7 +287,8 @@ function HitRatePanel({ d }: { d: FdsaPage }) {
       <h3>Does it pick winners?</h3>
       <p className="muted small">
         The share of its buys that reached 2x within 15 minutes, next to every alert it read. The alerts are
-        the bar to beat; the {target}% target is the aim.
+        the bar to beat. {target}% is the target the desk aims at, not a rate it has measured: the measured
+        rate and its range are below.
       </p>
       <div className="fdsa-rings">
         <RingGauge
@@ -308,8 +311,8 @@ function HitRatePanel({ d }: { d: FdsaPage }) {
         {r.trades.graded === 0
           ? "None of its buys has been graded yet."
           : lift === null
-            ? `${r.trades.wins} of ${r.trades.graded} graded buys hit 2x.`
-            : `Its buys hit 2x ${lift.toFixed(1)}× as often as the alerts it read (${r.trades.wins} of ${r.trades.graded}, against ${r.pool.wins} of ${r.pool.graded}).`}{" "}
+            ? `Its buys hit 2x ${fdsaMeasuredText(r.trades)} of the time.`
+            : `Its buys hit 2x ${fdsaMeasuredText(r.trades)} of the time, ${lift.toFixed(1)}× the alerts it read (${fdsaMeasuredText(r.pool)}).`}{" "}
         {r.trades.graded > 0 && r.trades.graded < MIN_GRADED && (
           <span className="faint">Too few graded buys to read much from yet.</span>
         )}

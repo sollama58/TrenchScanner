@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convictionTier, liveConvictionLines } from "./convictionLine.js";
+import { liveConvictionLines } from "./convictionLine.js";
 
 describe("liveConvictionLines", () => {
   it("puts each seat's line at its own top share of live scores", () => {
@@ -31,21 +31,5 @@ describe("liveConvictionLines", () => {
       { trees: 0.7 },
     ];
     expect(liveConvictionLines(rows, 0.9999, 1).get("trees")).toBe(0.7);
-  });
-});
-
-describe("convictionTier", () => {
-  it("uses the live line over the shipped one", () => {
-    expect(convictionTier(0.4, 0.6, 0.35)).toBe("high");
-    expect(convictionTier(0.3, 0.6, 0.35)).toBe("standard");
-  });
-
-  it("falls back to the shipped line without a live one", () => {
-    expect(convictionTier(0.61, 0.6, undefined)).toBe("high");
-    expect(convictionTier(0.4, 0.6, undefined)).toBe("standard");
-  });
-
-  it("doesn't tier a run that didn't earn it", () => {
-    expect(convictionTier(0.99, undefined, 0.1)).toBeUndefined();
   });
 });

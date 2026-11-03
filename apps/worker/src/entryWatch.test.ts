@@ -44,7 +44,7 @@ describe("EntryWatch on Jupiter's quotes", () => {
       (mint, crossedAt) => entered.push([mint, crossedAt]),
     );
     watch.note(
-      [reading("dust", 3_000), reading("approach", 4_500), reading("near", 6_700), reading("in-band", 9_000)],
+      [reading("dust", 2_000), reading("approach", 4_500), reading("near", 6_700), reading("in-band", 9_000)],
       t0,
     );
     // Too soon after the cycle that read them.
@@ -92,7 +92,7 @@ describe("EntryWatch on Jupiter's quotes", () => {
     expect(calls).toBe(1);
   });
 
-  it("watches at most one call's worth, the closest to the floor first", async () => {
+  it("watches at most ENTRY_MAX_WATCHED, the closest to the floor first", async () => {
     let asked: string[] = [];
     const watch = new EntryWatch(
       {

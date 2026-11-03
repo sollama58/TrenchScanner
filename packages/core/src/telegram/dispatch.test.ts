@@ -20,6 +20,9 @@ import {
   FAILING_FOR_MS,
   oldestOpenTransaction,
   PICKS_FALLBACK_TEXT,
+  IDLE_CHAT_MS,
+  IDLE_CHAT_TEXT,
+  idleChat,
   resetArtworkMisses,
   runTelegramDispatch,
   sendKey,
@@ -101,6 +104,23 @@ describe("dispatchFailure", () => {
   });
 });
 
+describe("idleChat", () => {
+  const day = 24 * 3_600_000;
+  const now = Date.parse("2026-11-02T12:00:00Z");
+  const at = (daysAgo: number) => new Date(now - daysAgo * day);
+  it("is due after a week with nothing through, counted from the last send or the link", () => {
+    expect(IDLE_CHAT_MS).toBe(7 * day);
+    expect(idleChat({ lastSentAt: at(8), createdAt: at(30), idleNoticedAt: null }, now)).toBe(true);
+    expect(idleChat({ lastSentAt: at(6), createdAt: at(30), idleNoticedAt: null }, now)).toBe(false);
+    expect(idleChat({ lastSentAt: null, createdAt: at(8), idleNoticedAt: null }, now)).toBe(true);
+    expect(idleChat({ lastSentAt: null, createdAt: at(2), idleNoticedAt: null }, now)).toBe(false);
+  });
+  it("repeats no sooner than a week after the last notice", () => {
+    expect(idleChat({ lastSentAt: at(20), createdAt: at(30), idleNoticedAt: at(6) }, now)).toBe(false);
+    expect(idleChat({ lastSentAt: at(20), createdAt: at(30), idleNoticedAt: at(7) }, now)).toBe(true);
+  });
+});
+
 describe("buildPending", () => {
   const token = { mintAddress: "m", symbol: "S", name: "N", firstSeenAt: null, imageUrl: null };
   const snap = { marketCapUsd: 1, holderCount: null, volume1hUsd: null };
@@ -122,7 +142,7 @@ describe("buildPending", () => {
           modelName: "Rules",
           confidence: 50,
           tier: null,
-          calibratedPct: null,
+          shownPct: null,
           reasons: [],
           narrativeVerdict: null,
           token,
@@ -135,7 +155,7 @@ describe("buildPending", () => {
           modelName: "Rules",
           confidence: 50,
           tier: null,
-          calibratedPct: null,
+          shownPct: null,
           reasons: [],
           narrativeVerdict: null,
           token,
@@ -649,6 +669,39 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       await prisma.user.update({
         where: { id: userId },
         data: { telegramSameAsFeed: true, telegramModels: [] },
+      });
+    }
+  });
+
+  it("tells an idle chat once a week that nothing has reached it", async () => {
+    const day = 24 * 3_600_000;
+    // Cursor at now, so the alerts earlier tests left on the shared token are not pending for it.
+    await prisma.telegramChat.update({
+      where: { id: chatRowId },
+      data: { sentThrough: new Date(), lastSentAt: new Date(Date.now() - 8 * day), idleNoticedAt: null },
+    });
+    try {
+      const api = new FakeTelegramApi();
+      await run(api);
+      expect(api.sent().map((m) => m.text)).toContain(IDLE_CHAT_TEXT);
+      const noted = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+      expect(noted!.idleNoticedAt).not.toBeNull();
+      // Not again the next pass.
+      const again = new FakeTelegramApi();
+      await run(again);
+      expect(again.sent().map((m) => m.text)).not.toContain(IDLE_CHAT_TEXT);
+      // Again once the week is up, still idle.
+      await prisma.telegramChat.update({
+        where: { id: chatRowId },
+        data: { idleNoticedAt: new Date(Date.now() - 7 * day - 1) },
+      });
+      const later = new FakeTelegramApi();
+      await run(later);
+      expect(later.sent().map((m) => m.text)).toContain(IDLE_CHAT_TEXT);
+    } finally {
+      await prisma.telegramChat.update({
+        where: { id: chatRowId },
+        data: { lastSentAt: new Date(), idleNoticedAt: null },
       });
     }
   });

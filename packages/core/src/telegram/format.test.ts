@@ -98,6 +98,10 @@ describe("telegram alert text", () => {
         "     ⚠️ Narrative warns\n" +
         "<blockquote>▸ r1\n▸ r2\n▸ r3</blockquote>",
     );
+    // Under the 35% line the quoted rate is the model's pooled one, and the card says so.
+    const pooled = formatAlert(card({ calls: [{ ...call, tier: "standard", calibratedPct: 22 }] }), links);
+    expect(pooled).toContain("Score <b>72</b>\n     22% of its recent alerts 2x'd\n");
+    expect(pooled).not.toContain("🔥");
     expect(text).not.toContain("▸ r4");
     expect(text).toContain(
       "💰 MC <b>$45.2k</b>   ·   👥 <b>130</b> holders\n📊 Vol 1h <b>$22.0k</b>   ·   ⏱ 4m old",

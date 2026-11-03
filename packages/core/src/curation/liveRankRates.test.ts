@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRankRates,
-  liveTierEarned,
+  CARD_BAND_MIN_PCT,
   measuredRateAtRank,
+  pooledCalledRate,
   RANK_RATE_MIN_GRADED,
   recalibratedRate,
+  servedRate,
 } from "./liveRankRates.js";
 
 /** n moments for one seat scored 1..n, the top `topWins` of them doubled. */
@@ -53,24 +55,44 @@ describe("live rank rates", () => {
   });
 });
 
-describe("the live high-conviction gate", () => {
+describe("the served rate and the high tier", () => {
   /** A seat's bands from (graded, wins) per band, best first. */
   const bands = (...b: [number, number][]) =>
     b.map(([graded, wins], i) => ({ from: [0.98, 0.95, 0.9, 0.8, 0][i]!, graded, wins }));
+  // Top 2% at 40%, 2-5% at 30%, 5-10% at 20%, 10-20% at 15%; the rest unseen by the cards.
+  const seat = bands([200, 80], [300, 90], [500, 100], [1000, 150], [8000, 400]);
 
-  it("tiers high only when the top band clearly out-wins the 2-20% bands", () => {
-    // 2-20% at 21% (n 1,631); top 2% at 27.5% of 182 has a 90% lower bound of about 22.6%.
-    expect(liveTierEarned(bands([182, 50], [245, 51], [408, 86], [978, 205], [6000, 900]))).toBe(true);
-    // 23.6% against 22.2%: higher, but inside the noise.
-    expect(liveTierEarned(bands([182, 43], [245, 54], [408, 91], [978, 217], [6000, 900]))).toBe(false);
-    // Worse at the top, as most seats were over 10-18..10-25.
-    expect(liveTierEarned(bands([182, 34], [245, 55], [408, 91], [978, 219], [6000, 900]))).toBe(false);
+  it("pools the bands a seat's calls come from, not the rest", () => {
+    expect(pooledCalledRate(seat)).toBeCloseTo(420 / 2000, 6);
+    expect(pooledCalledRate(bands([10, 5], [10, 5], [10, 5], [9, 5], [8000, 400]))).toBeNull();
+    expect(pooledCalledRate(bands([10, 5], [10, 5], [10, 5], [9, 5], [8000, 400]), 30)).toBeCloseTo(
+      20 / 39,
+      6,
+    );
+    expect(pooledCalledRate(undefined)).toBeNull();
   });
 
-  it("needs enough graded moments in both, and no bands means no tier", () => {
-    expect(liveTierEarned(bands([20, 20], [100, 10], [200, 20], [400, 40], [3000, 300]))).toBe(false);
-    expect(liveTierEarned(bands([20, 20], [100, 10], [200, 20], [400, 40], [3000, 300]), 10)).toBe(true);
-    expect(liveTierEarned(undefined)).toBe(false);
-    expect(liveTierEarned([])).toBe(false);
+  it("quotes the call's own band from the line up, and tiers it high", () => {
+    expect(CARD_BAND_MIN_PCT).toBe(35);
+    expect(servedRate(0.3, seat, 0.99)).toEqual({ calibratedPct: 40, shownPct: 40, tier: "high" });
+  });
+
+  it("quotes the pooled rate under the line, keeps the call's own rate for the desk, and tiers it standard", () => {
+    expect(servedRate(0.3, seat, 0.96)).toEqual({ calibratedPct: 30, shownPct: 21, tier: "standard" });
+    expect(servedRate(0.5, seat, 0.85)).toEqual({ calibratedPct: 15, shownPct: 21, tier: "standard" });
+  });
+
+  it("never tiers high on the run's rate alone, and quotes nothing it can't measure", () => {
+    // Too few graded in the top band: the run's rate stands, the pooled rate is quoted.
+    const thin = bands([10, 9], [300, 90], [500, 100], [1000, 150], [8000, 400]);
+    expect(servedRate(0.6, thin, 0.99)).toEqual({ calibratedPct: 60, shownPct: 19.3, tier: "standard" });
+    // No live bands at all: the run's rate, nothing quoted, standard.
+    expect(servedRate(0.6, undefined, 0.99)).toEqual({ calibratedPct: 60, shownPct: null, tier: "standard" });
+    // No rate anywhere: no tier (rules calls).
+    expect(servedRate(null, undefined, 0.5)).toEqual({
+      calibratedPct: null,
+      shownPct: null,
+      tier: undefined,
+    });
   });
 });

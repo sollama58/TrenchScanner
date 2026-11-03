@@ -5,6 +5,7 @@ import { shortAddress } from "../format";
 import { Kpi, Load, Panel, Table, Tag, dollars, ms, when } from "./adminShared";
 import {
   describeFdsaPlan,
+  fdsaMeasuredText,
   fdsaRateText,
   fdsaSignedPct,
   fdsaSignedSol,
@@ -509,7 +510,7 @@ function RecordPanel() {
   return (
     <Panel
       title="Record against the goal"
-      note="A win is a clean 2x within 15 minutes of the alert, before the -50% stop - the same label every hit rate uses. The target is 75% on its buys; the pool's base rate is the bar to beat first."
+      note="A win is a clean 2x within 15 minutes of the alert, before the -50% stop - the same label every hit rate uses. 75% on its buys is the target, not a measured rate: the measured rate below comes with its 90% range, and the pool's base rate is the bar to beat first."
       actions={
         <div className="segmented small" role="radiogroup" aria-label="Window">
           {[7, 30, 90].map((d) => (
@@ -553,9 +554,7 @@ function RecordPanel() {
             <p className="muted small">
               {r.trades.graded < 30
                 ? `Only ${r.trades.graded} graded trade${r.trades.graded === 1 ? "" : "s"} so far: too few to read a rate from.`
-                : r.trades.rate !== null && r.trades.rate >= r.target
-                  ? "At or above the 75% target on its trades."
-                  : `Below the 75% target on its trades; the pool runs at ${fdsaRateText(r.pool)}.`}
+                : `Its trades measure ${fdsaMeasuredText(r.trades)} against the ${Math.round(r.target * 100)}% target; the pool runs at ${fdsaMeasuredText(r.pool)}.`}
             </p>
             <h3 className="small">Adaptive exits against the default ladder</h3>
             {r.ladder.paired === 0 ? (
@@ -694,7 +693,7 @@ function LimitsPanel({ s, reload }: { s: FdsaState; reload: () => void }) {
   return (
     <Panel
       title="Paper limits"
-      note="The bot's own settings, with the owner's paper defaults: 0.5 SOL a trade, 6 open, 100 SOL a day, on a 10 SOL bankroll."
+      note="The bot's own settings, with the owner's paper defaults: 0.5 SOL a trade, 12 open, 100 SOL a day, on a 25 SOL bankroll."
     >
       <form className="editor-form" onSubmit={(e) => void save(e)}>
         <div className="grid2">

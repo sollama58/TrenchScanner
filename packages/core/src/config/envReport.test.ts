@@ -56,6 +56,16 @@ describe("ENV_MANIFEST", () => {
     );
     expect(risky.map((s) => s.key)).toEqual([]);
   });
+
+  it("shows no account identifier's value: wallets, buckets and storage endpoints are set or not", () => {
+    const shown = ENV_MANIFEST.filter(
+      (s) =>
+        s.kind !== "identifier" &&
+        s.kind !== "secret" &&
+        /(WALLET_ADDRESS|WITHDRAW_TO|_BUCKET|S3_ENDPOINT)/.test(s.key),
+    );
+    expect(shown.map((s) => s.key)).toEqual([]);
+  });
 });
 
 describe("describeEnvVar", () => {
@@ -80,6 +90,14 @@ describe("describeEnvVar", () => {
     const db = describeEnvVar("url", "postgresql://user:pw@db.internal:5432/ts");
     expect(db.hint).toBe("postgresql://db.internal");
     expect(describeEnvVar("url", "not a url").hint).toBe("set, not a URL");
+  });
+
+  it("says of an identifier only that it is set, with a fingerprint to compare services on", () => {
+    const r = describeEnvVar("identifier", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU");
+    expect(r).toEqual({ state: "set", hint: null, print: expect.stringMatching(/^[0-9a-f]{12}$/) });
+    expect(JSON.stringify(r)).not.toContain("7xKX");
+    expect(describeEnvVar("identifier", "https://s3.eu-west-1.amazonaws.com").hint).toBeNull();
+    expect(describeEnvVar("identifier", undefined)).toEqual({ state: "missing", hint: null });
   });
 
   it("cuts a long setting short", () => {

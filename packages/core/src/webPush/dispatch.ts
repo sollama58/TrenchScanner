@@ -368,7 +368,7 @@ async function dispatchPass(
             modelName: true,
             confidence: true,
             tier: true,
-            calibratedPct: true,
+            shownPct: true,
             reasons: true,
             narrativeVerdict: true,
             liveMcapUsd: true,

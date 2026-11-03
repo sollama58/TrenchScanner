@@ -997,7 +997,8 @@ function Alerts() {
               <h3>Training samples</h3>
               <p className="muted small">
                 Newest sample {when(h.samples.newestAnchorAt)} · {n(h.samples.lastHourRows)} in the last hour.
-                The "event" kind is the base rate every model has to beat.
+                The "event" kind (cycle moments) is the base rate every model has to beat; "entry" rows, the
+                fast path's moments, are not in that baseline.
               </p>
               <Table
                 head={["Kind", ...rateHead]}
