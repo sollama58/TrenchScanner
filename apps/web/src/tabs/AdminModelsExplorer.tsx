@@ -29,6 +29,8 @@ interface Outcomes {
   hit4xPct: number | null;
   hit10xPct: number | null;
   afterStopPct: number | null;
+  /** Of the clean 2x wins, the share a human could hardly have taken (2x inside 60 s or a peak under 2.2x). */
+  wickWinPct: number | null;
   mix: { tenX: number; fourX: number; twoX: number; afterStop: number; miss: number } | null;
   predictedPct: number | null;
   simAvgPct: number | null;
@@ -146,6 +148,11 @@ const num1 = (v: number | null | undefined) => (v === null || v === undefined ? 
 const lift = (v: number | null | undefined) => (v === null || v === undefined ? "–" : `${v.toFixed(2)}×`);
 const signed = (v: number | null | undefined) =>
   v === null || v === undefined ? "–" : `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+/**
+ * The wick-win share after a 2x rate. The owner chose (2 Nov 2026) to keep counting these 2x's as wins
+ * and record their share next to every rate, so "–" when no clean win has a verdict yet.
+ */
+const wick = (o: { wickWinPct: number | null }) => `wick wins ${rate(o.wickWinPct)}`;
 
 export function ModelsExplorer({ seats }: { seats: readonly { id: string; name: string }[] }) {
   const [win, setWin] = useState<ExplorerWindow>({ kind: "preset", minutes: 24 * 60 });
@@ -270,7 +277,7 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
               ? "ok"
               : undefined
           }
-          sub={`${n(cur.feed.graded)} graded, ${n(cur.feed.pending)} pending · prior ${rate(pri.feed.hit2xPct)} (${delta(cur.feed.hit2xPct, pri.feed.hit2xPct, "pts")})`}
+          sub={`${n(cur.feed.graded)} graded, ${n(cur.feed.pending)} pending · ${wick(cur.feed)} · prior ${rate(pri.feed.hit2xPct)} (${delta(cur.feed.hit2xPct, pri.feed.hit2xPct, "pts")})`}
         />
         <Kpi
           label="Hit 4x · 10x"
@@ -280,7 +287,7 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
         <Kpi
           label="Cycle-moments base 2x"
           value={rate(cur.market.hit2xPct)}
-          sub={`${n(cur.market.graded)} cycle moments (the fast path's entry moments are not in it) · prior ${rate(pri.market.hit2xPct)}`}
+          sub={`${n(cur.market.graded)} cycle moments (the fast path's entry moments are not in it) · ${wick(cur.market)} · prior ${rate(pri.market.hit2xPct)}`}
         />
         <Kpi
           label="Lift"
@@ -399,6 +406,7 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
           "Miss",
           "Pending",
           "Predicted 2x",
+          "Wick wins",
         ]}
         rows={(
           [
@@ -418,10 +426,13 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
           rate(o.mix?.miss),
           n(o.pending),
           rate(o.predictedPct),
+          rate(o.wickWinPct),
         ])}
       />
       <p className="faint small">
         The outcome columns split the graded calls so they add to 100%; the KPIs above count every 2x and 4x.
+        Wick wins: of the clean 2x's, the share that reached 2x inside 60 seconds or whose peak stayed under
+        2.2x, which a human could hardly have taken. They still count as wins.
       </p>
 
       <h3>Fast path vs cycle</h3>
@@ -446,7 +457,9 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
           rate(p.sharePct),
           n(p.outcomes.calls),
           n(p.outcomes.graded),
-          rate(p.outcomes.hit2xPct),
+          <span key="2x" title={wick(p.outcomes)}>
+            {rate(p.outcomes.hit2xPct)}
+          </span>,
           rate(p.outcomes.hit4xPct),
           rate(p.outcomes.predictedPct),
           lift(p.lift),
@@ -489,7 +502,9 @@ export function ExplorerBody({ r, onPickModel }: { r: Report; onPickModel: (id: 
           </button>,
           `${n(m.calls)} (${num1(m.callsPerHour)})`,
           n(m.outcomes.graded),
-          rate(m.outcomes.hit2xPct),
+          <span key="2x" title={wick(m.outcomes)}>
+            {rate(m.outcomes.hit2xPct)}
+          </span>,
           <Change key="d" now={m.outcomes.hit2xPct} before={m.prior.hit2xPct} />,
           rate(m.outcomes.hit4xPct),
           rate(m.outcomes.hit10xPct),

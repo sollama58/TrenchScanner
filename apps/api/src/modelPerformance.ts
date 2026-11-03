@@ -27,6 +27,16 @@ export const PERF_BUCKET_MINUTES = [5, 10, 15, 30, 60, 120, 180, 360, 720] as co
 const PERF_MAX_BUCKETS = 36;
 /** A bucket's rate needs this many graded calls before it is drawn; fewer reads as noise. */
 export const PERF_MIN_GRADED_FOR_RATE = 5;
+
+/**
+ * A "wick win": a clean 2x a human could hardly have taken, because the price reached 2x within
+ * WICK_WIN_SECONDS of the anchor, or never got past WICK_WIN_PEAK_MULTIPLE before the stop. On
+ * tape-graded rows 11% of wins hit 2x inside 60 s and 16% peaked under 2.2x, against 0% and 9% on
+ * minute-sampled rows (audit 2026-11-02, GF-7). Wick wins stay wins - the label is the label - and
+ * their share is reported next to each 2x rate (user decision "keep, record the share").
+ */
+export const WICK_WIN_SECONDS = 60;
+export const WICK_WIN_PEAK_MULTIPLE = 2.2;
 /** Far above a real 14 days (~90k alerts); only bounds a runaway read. */
 const PERF_MAX_ROWS = 250_000;
 
@@ -71,6 +81,8 @@ export interface PerfAlertRow extends PerfCoverage {
   simPct: number | null;
   simOpen: boolean;
   peakPct: number | null;
+  /** For a clean win, whether it was a wick win (WICK_WIN_SECONDS, WICK_WIN_PEAK_MULTIPLE); null otherwise or unknown. */
+  wick: boolean | null;
   detectedAt: number | null;
   launchedAt: number | null;
 }
@@ -81,6 +93,8 @@ export interface PerfMomentRow extends PerfCoverage {
   hit2x: boolean | null;
   disqualified: boolean | null;
   hit4x: boolean | null;
+  /** As PerfAlertRow.wick. */
+  wick: boolean | null;
 }
 
 export interface PerfWindow {
@@ -100,6 +114,19 @@ export function bucketMinutesFor(spanMinutes: number): number {
   return PERF_BUCKET_MINUTES[PERF_BUCKET_MINUTES.length - 1]!;
 }
 
+/**
+ * The wick verdict for a grading row `co`: true/false for a clean win (`hit2x`, `disq` are the
+ * row's label columns), null otherwise or when the row lacks the figures (rows from before 10-09).
+ */
+function wickSql(hit2x: Prisma.Sql, disq: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`CASE
+    WHEN ${hit2x} AND NOT COALESCE(${disq}, false)
+         AND (co."hit2xAt" IS NOT NULL OR co."peakBeforeStopPriceUsd" IS NOT NULL)
+    THEN (co."hit2xAt" IS NOT NULL AND co."hit2xAt" < co."anchorAt" + make_interval(secs => ${WICK_WIN_SECONDS}))
+         OR (co."peakBeforeStopPriceUsd" IS NOT NULL AND co."peakBeforeStopPriceUsd" < ${WICK_WIN_PEAK_MULTIPLE} * co."anchorPriceUsd")
+    ELSE NULL END`;
+}
+
 // ---------- Tallies ----------
 
 interface Tally {
@@ -116,6 +143,9 @@ interface Tally {
   predN: number;
   predSum: number;
   peaks: number[];
+  /** Clean wins whose wick verdict is known, and how many of them were wick wins. */
+  wickKnown: number;
+  wickWins: number;
 }
 
 const emptyTally = (): Tally => ({
@@ -132,10 +162,12 @@ const emptyTally = (): Tally => ({
   predN: 0,
   predSum: 0,
   peaks: [],
+  wickKnown: 0,
+  wickWins: 0,
 });
 
 type Graded = Pick<PerfAlertRow, "hit2x" | "disqualified" | "hit4x"> &
-  Partial<Pick<PerfAlertRow, "hit10x" | "simPct" | "simOpen" | "peakPct" | "calibratedPct">>;
+  Partial<Pick<PerfAlertRow, "hit10x" | "simPct" | "simOpen" | "peakPct" | "calibratedPct" | "wick">>;
 
 function add(t: Tally, r: Graded): void {
   t.calls += 1;
@@ -147,6 +179,10 @@ function add(t: Tally, r: Graded): void {
   t.graded += 1;
   const clean = r.hit2x && !r.disqualified;
   if (clean) t.won2x += 1;
+  if (clean && r.wick !== undefined && r.wick !== null) {
+    t.wickKnown += 1;
+    if (r.wick) t.wickWins += 1;
+  }
   if (r.hit4x) t.won4x += 1;
   if (r.disqualified) t.afterStop += 1;
   // A clean winner's 10x verdict waits for its hour; until then it is not graded for 10x.
@@ -185,6 +221,12 @@ export interface PerfOutcomes {
   afterStopPct: number | null;
   /** The share of graded calls by outcome, adding to 100: 10x, 4x, 2x, doubled after the stop, miss. */
   mix: { tenX: number; fourX: number; twoX: number; afterStop: number; miss: number } | null;
+  /**
+   * Of the clean wins with a known verdict, the share that were wick wins: 2x inside
+   * WICK_WIN_SECONDS of the anchor, or a peak under WICK_WIN_PEAK_MULTIPLE before the stop. Null
+   * with no such win.
+   */
+  wickWinPct: number | null;
   /** Mean of the calibrated 2x rate the seats stated as they called, percent. */
   predictedPct: number | null;
   simAvgPct: number | null;
@@ -217,6 +259,7 @@ function outcomes(t: Tally): PerfOutcomes {
             miss: pct(miss, t.graded)!,
           }
         : null,
+    wickWinPct: pct(t.wickWins, t.wickKnown),
     predictedPct: t.predN > 0 ? round1(t.predSum / t.predN) : null,
     simAvgPct: t.simN > 0 ? round1(t.simSum / t.simN) : null,
     simOpen: t.simOpen,
@@ -653,6 +696,7 @@ export async function buildModelPerformance(
         sim: number | null;
         sim_open: boolean;
         peak: number | null;
+        wick: boolean | null;
         detected_at: Date | null;
         launched_at: Date | null;
       })[]
@@ -674,6 +718,7 @@ export async function buildModelPerformance(
              COALESCE(a."simReturnPct", co."simReturnPct", co."openReturnPct") AS sim,
              (COALESCE(a."simReturnPct", co."simReturnPct") IS NULL AND co."openReturnPct" IS NOT NULL) AS sim_open,
              COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
+             ${wickSql(Prisma.sql`COALESCE(a."hit2xIn1h", co."hit2xIn1h")`, Prisma.sql`COALESCE(a."disqualified", co."disqualified")`)} AS wick,
              t."firstSeenAt" AS detected_at, t."launchedAt" AS launched_at,
              ${coverageCols(Prisma.sql`co."features"`, tapeMaxAgeMinutes)}
       FROM "CuratedAlert" a
@@ -690,12 +735,14 @@ export async function buildModelPerformance(
         hit2x: boolean | null;
         disq: boolean | null;
         hit4x: boolean | null;
+        wick: boolean | null;
       })[]
     >`
-      SELECT "anchorAt" AS at, "sampleKind" AS kind, "hit2xIn1h" AS hit2x,
-             "disqualified" AS disq, "hit4xIn1h" AS hit4x,
-             ${coverageCols(Prisma.sql`"features"`, tapeMaxAgeMinutes)}
-      FROM "CandidateOutcome"
+      SELECT co."anchorAt" AS at, co."sampleKind" AS kind, co."hit2xIn1h" AS hit2x,
+             co."disqualified" AS disq, co."hit4xIn1h" AS hit4x,
+             ${wickSql(Prisma.sql`co."hit2xIn1h"`, Prisma.sql`co."disqualified"`)} AS wick,
+             ${coverageCols(Prisma.sql`co."features"`, tapeMaxAgeMinutes)}
+      FROM "CandidateOutcome" co
       WHERE "sampleKind" IN ('event', 'entry')
         AND "anchorAt" >= ${from} AND "anchorAt" < ${until}
         AND ${walletSafetyCutsSql()}
@@ -721,6 +768,7 @@ export async function buildModelPerformance(
     simPct: r.sim,
     simOpen: r.sim_open,
     peakPct: r.peak,
+    wick: r.wick,
     detectedAt: r.detected_at ? r.detected_at.getTime() : null,
     launchedAt: r.launched_at ? r.launched_at.getTime() : null,
   }));
@@ -731,6 +779,7 @@ export async function buildModelPerformance(
     hit2x: r.hit2x,
     disqualified: r.disq,
     hit4x: r.hit4x,
+    wick: r.wick,
   }));
   return foldModelPerformance(alerts, moments, window, {
     model,
