@@ -42,6 +42,7 @@ function alert(over: Partial<PerfAlertRow>): PerfAlertRow {
     simPct: -50,
     simOpen: false,
     peakPct: 30,
+    wick: null,
     detectedAt: at - 60_000,
     launchedAt: at - 90_000,
     ...over,
@@ -49,7 +50,16 @@ function alert(over: Partial<PerfAlertRow>): PerfAlertRow {
 }
 
 function moment(over: Partial<PerfMomentRow>): PerfMomentRow {
-  return { ...cover, at: T0, kind: "event", hit2x: false, disqualified: false, hit4x: false, ...over };
+  return {
+    ...cover,
+    at: T0,
+    kind: "event",
+    hit2x: false,
+    disqualified: false,
+    hit4x: false,
+    wick: null,
+    ...over,
+  };
 }
 
 describe("bucketMinutesFor", () => {
@@ -76,7 +86,7 @@ describe("foldModelPerformance", () => {
   it("pools the feed by grading row and divides by the event base", () => {
     const alerts = [
       // Two seats on one row: the feed counts it once.
-      alert({ tokenId: "a", hit2x: true, simPct: 80, at: T0 + 5 * MIN }),
+      alert({ tokenId: "a", hit2x: true, simPct: 80, at: T0 + 5 * MIN, wick: true }),
       alert({
         tokenId: "a",
         model: "catcher",
@@ -84,6 +94,7 @@ describe("foldModelPerformance", () => {
         firstOnRow: false,
         firstForToken: false,
         hit2x: true,
+        wick: false,
         at: T0 + 6 * MIN,
       }),
       alert({ tokenId: "b", at: T0 + 10 * MIN, kind: "entry", detectedAt: T0 + 10 * MIN - 30_000 }),
@@ -93,7 +104,7 @@ describe("foldModelPerformance", () => {
       alert({ tokenId: "p", at: T0 - 30 * MIN }),
     ];
     const moments = [
-      ...Array.from({ length: 8 }, (_, i) => moment({ at: T0 + i * MIN, hit2x: i < 2 })),
+      ...Array.from({ length: 8 }, (_, i) => moment({ at: T0 + i * MIN, hit2x: i < 2, wick: i === 0 })),
       moment({ at: T0 + 9 * MIN, kind: "entry", hit2x: true }),
       moment({ at: T0 - 20 * MIN, hit2x: true }),
       moment({ at: T0 - 21 * MIN }),
@@ -115,6 +126,11 @@ describe("foldModelPerformance", () => {
     expect(r.current.feed.mix).toEqual({ tenX: 0, fourX: 0, twoX: 33.3, afterStop: 33.3, miss: 33.3 });
     expect(r.current.market.hit2xPct).toBe(25);
     expect(r.current.entryMarket.hit2xPct).toBe(100);
+    // Wick wins: the feed's one clean win (row a) was one; of the base's two, one; the fast-path
+    // moment has no verdict.
+    expect(r.current.feed.wickWinPct).toBe(100);
+    expect(r.current.market.wickWinPct).toBe(50);
+    expect(r.current.entryMarket.wickWinPct).toBeNull();
     expect(r.current.lift).toBe(1.33);
     // Detection to the coin's first alert: 60s on a, 30s on b, 60s on c and d.
     expect(r.current.timing.coins).toBe(4);
@@ -135,7 +151,9 @@ describe("foldModelPerformance", () => {
     expect(trees.calls).toBe(4);
     expect(trees.prior.calls).toBe(1);
     expect(trees.fastSharePct).toBe(25);
-    expect(r.models.find((m) => m.id === "catcher")!.outcomes.hit2xPct).toBe(100);
+    const catcher = r.models.find((m) => m.id === "catcher")!;
+    expect(catcher.outcomes.hit2xPct).toBe(100);
+    expect(catcher.outcomes.wickWinPct).toBe(0);
   });
 
   it("scopes the KPIs and series to one seat when asked", () => {
