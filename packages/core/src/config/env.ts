@@ -1246,15 +1246,17 @@ const envSchema = z.object({
   // Admin tab). The last AI_BUDGET_REVIEW_RESERVE_PCT of the cap is kept for reviews of
   // high-conviction picks - background work (text reads, playbook tests, reviews of standard
   // picks) pauses once spend reaches the rest. 0 stops every AI call.
-  // $15 since 2026-10-14 (user decision, with AI_REVIEW_STANDARD_PICKS "never").
+  // $15 since 2026-10-14 (user decision, with AI_REVIEW_STANDARD_PICKS "never" until 2026-11-04).
   AI_DAILY_BUDGET_USD: z.coerce.number().min(0).default(15),
   AI_BUDGET_REVIEW_RESERVE_PCT: z.coerce.number().min(0).max(100).default(40),
   // Which picks the reviewer is pointed at. It always reviews the high-conviction tier: picks any
-  // seat rates tier "high". "never" (the default since 2026-10-14, user decision: live picks only):
-  // nothing else is reviewed. "spare": the default seat's other picks (standard, or from a model
-  // with no high-conviction cutoff) are reviewed too, but only out of the budget left above the
-  // high-conviction reserve.
-  AI_REVIEW_STANDARD_PICKS: z.enum(["spare", "never"]).default("never"),
+  // seat rates tier "high". "spare" (the default since 2026-11-04, user decision): the default
+  // seat's other picks (standard, or from a model with no high-conviction cutoff) are reviewed
+  // too, but only out of the budget left above the high-conviction reserve. "never" (the default
+  // 2026-10-14 to 2026-11-04): nothing else is reviewed. Changed because the high tier had shrunk
+  // to 4 alerts in 7 days, so the judge would have had almost nothing to grade in shadow
+  // (program audit, 2026-11-04).
+  AI_REVIEW_STANDARD_PICKS: z.enum(["spare", "never"]).default("spare"),
 
   // FDSA (packages/core/src/fdsa; owner decision 2026-10-31): an AI desk that reviews every curated
   // alert and paper-trades the ones it picks under its own adaptive exits. It runs alongside the AI

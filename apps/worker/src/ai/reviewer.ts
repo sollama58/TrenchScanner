@@ -327,7 +327,7 @@ export function aiReviewEnabled(env: Env): boolean {
  * high-conviction is reviewed out of the whole daily budget. A pick with no high-conviction
  * rating - a standard pick, or one from a model with no cutoff to rate it by - is not part of that
  * tier: with AI_REVIEW_STANDARD_PICKS "spare" the default seat's are reviewed out of what is left
- * above the high-conviction reserve; otherwise ("never", the default) none are.
+ * above the high-conviction reserve (the default since 2026-11-04); with "never" none are.
  */
 export function reviewPriority(
   decision: CurationDecision,
