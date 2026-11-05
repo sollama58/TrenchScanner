@@ -1,10 +1,10 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma, CANDIDATE_FEATURE_NAMES, TRADE_FLOW_FEATURES, type Env } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { buildLeaderboard } from "../contest.js";
 import { buildLearningCurve } from "../learningCurve.js";
-import { bearerMatches, STATS_TOKEN_MIN_LENGTH } from "./stats.js";
+import { statsGuard } from "./statsAccess.js";
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -24,15 +24,10 @@ const featuresQuerySchema = z.object({ hours: z.coerce.number().int().min(1).max
  * The dashboard shows both behind a subscriber session; a script has no session.
  */
 export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env: Env }) {
-  const token = opts.env.STATS_API_TOKEN;
-  const enabled = token.length >= STATS_TOKEN_MIN_LENGTH;
-
-  async function guard(request: FastifyRequest, reply: FastifyReply) {
-    if (!enabled) return reply.code(404).send({ error: "not_found" });
-    if (!bearerMatches(request.headers.authorization, token)) {
-      return reply.code(401).send({ error: "unauthorized" });
-    }
-  }
+  // /models is the board subscribers see on the Models tab, so partners read it too; /features
+  // (every model input's fill) is the operator's alone.
+  const guard = statsGuard(opts.env, { partner: false });
+  const partnerGuard = statsGuard(opts.env, { partner: true });
 
   // One cache per window (days is 1-30, so at most 30 of them). The leaderboard and learning curve
   // are dozens of aggregates and move as calls are graded, so a minute old is current; without it
@@ -78,7 +73,7 @@ export async function registerStatsModelRoutes(app: FastifyInstance, opts: { env
 
   app.get(
     "/models",
-    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: partnerGuard },
     async (request, reply) => {
       const parsed = modelsQuerySchema.safeParse(request.query);
       if (!parsed.success) {

@@ -4,7 +4,7 @@ import { prisma, redactUrl, type Env } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import type { ReportCaches } from "./curated.js";
-import { bearerMatches, STATS_TOKEN_MIN_LENGTH } from "./stats.js";
+import { statsAuth } from "./statsAccess.js";
 import { registerAdminOpsRoutes } from "./adminOps.js";
 import { registerAdminInsightRoutes } from "./adminInsights.js";
 import { registerAdminModelRoutes } from "./adminModels.js";
@@ -315,8 +315,9 @@ export async function registerStatsOpsRoutes(
     reports: ReportCaches;
   },
 ) {
-  const token = opts.env.STATS_API_TOKEN;
-  const enabled = token.length >= STATS_TOKEN_MIN_LENGTH;
+  // The operator's token only: a partner's (statsAccess.ts) is refused here like a wrong one.
+  const auth = statsAuth(opts.env);
+  const enabled = auth.operatorEnabled;
 
   // Registration-time half of the read-only rule: a route that isn't an allowed read never gets
   // its own handler or hooks here, only a 404.
@@ -333,7 +334,7 @@ export async function registerStatsOpsRoutes(
   // Request-time half: the token, then the method and path again.
   app.addHook("onRequest", async (request, reply) => {
     if (!enabled) return reply.code(404).send({ error: "not_found" });
-    if (!bearerMatches(request.headers.authorization, token)) {
+    if (auth.identify(request.headers.authorization)?.kind !== "operator") {
       return reply.code(401).send({ error: "unauthorized" });
     }
     if (!isOpsRead(request.method, request.routeOptions.url ?? request.url.split("?")[0] ?? "")) {

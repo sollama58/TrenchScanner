@@ -287,6 +287,10 @@ services:
       # least 32 characters; empty leaves the route switched off (404).
       - key: STATS_API_TOKEN
         sync: false
+      # Outside users' tokens, "name:token" pairs (see README, "Partner access"): hit rates, the
+      # model board, candles, the alerts and paths exports and their own alert webhook only.
+      - key: STATS_PARTNER_TOKENS
+        sync: false
       # Telegram alerts (see packages/core/src/telegram): the bot token from @BotFather. Empty
       # leaves the feature off. Set on this service and the worker below.
       - key: TELEGRAM_BOT_TOKEN

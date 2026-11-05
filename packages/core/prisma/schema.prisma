@@ -339,6 +339,62 @@ model WebPushSubscription {
   @@index([userId])
 }
 
+/// An outside service that takes alerts by signed HTTPS POST: one per partner, the name its
+/// STATS_PARTNER_TOKENS entry gives it (apps/api/src/routes/statsAccess.ts). Set by the partner
+/// with its own token (PUT /stats/webhook) and sent by the worker's webhook-dispatch job
+/// (packages/core/src/webhooks/dispatch.ts). Added 2026-11-05 for the first outside user.
+model PartnerWebhook {
+  id                  String    @id @default(cuid())
+  partner             String    @unique
+  /// Where the alerts are POSTed. Partner-chosen, so untrusted: https on 443 to a public address
+  /// only, checked when saved and again (pinned to the address checked) at every send.
+  url                 String
+  /// The HMAC-SHA256 key each body is signed with; shown to the partner when made or rotated.
+  secret              String
+  /// Which models' calls it takes; empty = the default feed's models (the top models).
+  models              String[]  @default([])
+  enabled             Boolean   @default(true)
+  /// Why the dispatcher paused it ("failing", "gone", "partner_removed"); null while running.
+  pausedReason        String?
+  /// Alerts raised at or before this were queued (or never due) - the dispatcher's cursor.
+  sentThrough         DateTime  @default(now())
+  /// Failed attempts in a row; reset by a delivered one. Paused at WEBHOOK_MAX_FAILURES.
+  consecutiveFailures Int       @default(0)
+  lastDeliveryAt      DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  deliveries PartnerWebhookDelivery[]
+}
+
+/// One POST a PartnerWebhook is owed: queued per alert, retried with backoff until delivered or
+/// out of attempts, and swept after WEBHOOK_DELIVERY_RETENTION_DAYS by the dispatcher.
+model PartnerWebhookDelivery {
+  id             String         @id @default(cuid())
+  webhookId      String
+  webhook        PartnerWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  /// "alert.created" or "ping" (the partner's test send).
+  event          String
+  /// The call it carries; null on a ping. With webhookId, the idempotency key.
+  curatedAlertId String?
+  /// The body's data, signed afresh with a new timestamp at each attempt.
+  payload        Json
+  /// "pending", "delivered" or "failed" (out of attempts, or the alert too old to be news).
+  status         String         @default("pending")
+  attempts       Int            @default(0)
+  nextAttemptAt  DateTime       @default(now())
+  /// The last answer's HTTP status; null when it never answered.
+  lastStatus     Int?
+  lastError      String?
+  createdAt      DateTime       @default(now())
+  deliveredAt    DateTime?
+
+  @@unique([webhookId, curatedAlertId])
+  @@index([status, nextAttemptAt])
+  @@index([webhookId, createdAt])
+  @@index([createdAt])
+}
+
 /// One alert a Web Push notification carried to a subscription, written after the push service
 /// took it (webPush/dispatch.ts): the funnel's last stage for push, as TelegramAlertSent is for
 /// Telegram (/stats/export dataset push-sent; audit 2026-10-27 GF-10). A summary notification of

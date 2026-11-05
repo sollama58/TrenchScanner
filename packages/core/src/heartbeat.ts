@@ -32,6 +32,7 @@ export type HeartbeatJob =
   | "kol-wallets"
   | "telegram-dispatch"
   | "web-push-dispatch"
+  | "webhook-dispatch"
   | "pipeline-watch"
   | "trading-bot"
   | "paper-trading"
@@ -71,6 +72,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "telegram-dispatch": "scanner",
   // Beside the Telegram dispatcher, on the same read horizon and the same alert wake-ups.
   "web-push-dispatch": "scanner",
+  // Partner webhooks (webhooks/dispatch.ts): the same read horizon and alert wake-ups again.
+  "webhook-dispatch": "scanner",
   // Holds the Telegram bot token and the admin wallets it notifies (the trainer has neither).
   "pipeline-watch": "scanner",
   // The trading bot runs alone in its own process: it is the only one that can open the bot's

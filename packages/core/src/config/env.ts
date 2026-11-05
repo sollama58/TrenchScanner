@@ -1362,6 +1362,14 @@ const envSchema = z.object({
   // they can't reach the database. Empty (the default) or shorter than STATS_TOKEN_MIN_LENGTH
   // switches the endpoint off: it answers 404 as if it didn't exist.
   STATS_API_TOKEN: z.string().optional().default(""),
+  // Tokens for outside users of /stats (apps/api/src/routes/statsAccess.ts), as "name:token"
+  // pairs separated by commas or new lines. Unlike STATS_API_TOKEN, which reads everything under
+  // /stats including /stats/ops, a partner token reaches only PARTNER_READS (hit rates, the model
+  // board, minute candles, the alerts and paths exports) and its own alert webhook
+  // (/stats/webhook). Each token at least STATS_TOKEN_MIN_LENGTH characters and not the operator
+  // token; a bad entry is skipped with a warning naming it. Removing an entry revokes it and pauses
+  // its webhook at the API's next start. Empty (the default): no partners.
+  STATS_PARTNER_TOKENS: z.string().optional().default(""),
 
   // Telegram alerts (packages/core/src/telegram). The bot token from @BotFather; empty (the
   // default) leaves the whole feature inert: the dashboard's Telegram card says the bot isn't set
@@ -1392,6 +1400,9 @@ const envSchema = z.object({
   // How often the scanner worker looks for new alerts to push (seconds); an alert written wakes a
   // pass sooner.
   WEB_PUSH_DISPATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(10),
+  // How often the scanner worker queues new alerts for partner webhooks and sends what is due
+  // (seconds); an alert written wakes a pass sooner. See packages/core/src/webhooks/dispatch.ts.
+  WEBHOOK_DISPATCH_INTERVAL_SECONDS: z.coerce.number().positive().default(10),
 
   // Where the burn reconciler and the claim endpoint read the chain.
   //

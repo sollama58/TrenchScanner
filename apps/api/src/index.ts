@@ -7,6 +7,7 @@ import {
   startEventLoopWatch,
 } from "@trenchscanner/core";
 import { buildServer } from "./server.js";
+import { pauseRemovedPartnerWebhooks } from "./routes/statsWebhook.js";
 
 const logger = createLogger("api");
 
@@ -55,6 +56,10 @@ async function main() {
   const port = Number(process.env.PORT) || env.API_PORT;
   await app.listen({ port, host: "0.0.0.0" });
   logger.info("api listening", { port });
+  // A partner taken out of STATS_PARTNER_TOKENS loses its webhook along with its reads.
+  void pauseRemovedPartnerWebhooks(env).catch((err: unknown) =>
+    logger.warn("partner webhook sweep failed", { error: String(err) }),
+  );
 
   // Render stops an instance with SIGTERM on every deploy and restart, then kills it outright
   // after its grace period. Node's default for SIGTERM is to exit on the spot, which cut every
