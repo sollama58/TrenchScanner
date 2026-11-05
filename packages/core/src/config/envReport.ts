@@ -217,6 +217,7 @@ export const ENV_MANIFEST: readonly EnvVarSpec[] = [
     same: true,
   },
   { key: "STATS_API_TOKEN", group: "Sign-in and access", kind: "secret", on: { api: "optional" } },
+  { key: "STATS_PARTNER_TOKENS", group: "Sign-in and access", kind: "secret", on: { api: "optional" } },
   // ---- Alerts
   {
     key: "TELEGRAM_BOT_TOKEN",

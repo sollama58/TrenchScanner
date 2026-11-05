@@ -1,5 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   KOL_MAINS,
@@ -30,13 +29,14 @@ import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { exportQuerySchema, exportWindow, startExport } from "./statsExport.js";
 import { buildScreenFunnel, SCREEN_FUNNEL_MAX_HOURS } from "../screenFunnel.js";
 import { candleDiagnosis, recentCandleCoins, recentCandleSources } from "./candles.js";
+import { bearerMatches, PARTNER_EXPORT_DATASETS, statsGuard, STATS_TOKEN_MIN_LENGTH } from "./statsAccess.js";
 
 const logger = createLogger("stats");
 
 const DAY_MS = 86_400_000;
 
-/** A token shorter than this switches the endpoint off rather than guarding it weakly. */
-export const STATS_TOKEN_MIN_LENGTH = 32;
+// Re-exported: the other /stats plugins and their tests import them from here.
+export { bearerMatches, STATS_TOKEN_MIN_LENGTH };
 
 /** Below this many graded calls a rate is reported but not held against the targets. */
 export const MIN_GRADED_FOR_VERDICT = 30;
@@ -236,19 +236,6 @@ export function sumCounts(rows: GradedCounts[]): GradedCounts {
   );
 }
 
-/**
- * Constant-time bearer check. Both sides are hashed first so the comparison length never depends
- * on the guess, and timingSafeEqual never throws on a length mismatch.
- */
-export function bearerMatches(header: string | undefined, token: string): boolean {
-  if (!header || !token) return false;
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
-  if (!match) return false;
-  const a = createHash("sha256").update(match[1]!).digest();
-  const b = createHash("sha256").update(token).digest();
-  return timingSafeEqual(a, b);
-}
-
 /** Postgres returns count(*) as bigint; every column of a counts row comes back through here. */
 type RawCounts = {
   calls: bigint;
@@ -356,14 +343,15 @@ export async function baselineRates(
  *
  * Not behind a session: it exists for scripts and cloud sessions that can reach the API over
  * HTTPS but not the database. Guarded by STATS_API_TOKEN instead, and absent (404) without one.
+ * A partner's token (STATS_PARTNER_TOKENS, statsAccess.ts) reaches the hit rates (trimmed), the
+ * alerts and paths exports and the candles' bars here; every other route answers it 404.
  */
 export async function registerStatsRoutes(
   app: FastifyInstance,
   opts: { env: Env; timings?: RouteTimings; liveRefresher?: OnDemandLiveRefresher },
 ) {
   const token = opts.env.STATS_API_TOKEN;
-  const enabled = token.length >= STATS_TOKEN_MIN_LENGTH;
-  if (token && !enabled) {
+  if (token && token.length < STATS_TOKEN_MIN_LENGTH) {
     logger.warn(`STATS_API_TOKEN is shorter than ${STATS_TOKEN_MIN_LENGTH} characters - /stats is disabled`);
   }
 
@@ -372,16 +360,13 @@ export async function registerStatsRoutes(
     hitRate4xPct: opts.env.CURATED_TARGET_GOAL_RATE_PCT,
   };
 
-  async function guard(request: FastifyRequest, reply: FastifyReply) {
-    if (!enabled) return reply.code(404).send({ error: "not_found" });
-    if (!bearerMatches(request.headers.authorization, token)) {
-      return reply.code(401).send({ error: "unauthorized" });
-    }
-  }
+  // The operator's routes, and the few a partner may read too (statsAccess.ts PARTNER_READS).
+  const guard = statsGuard(opts.env, { partner: false });
+  const partnerGuard = statsGuard(opts.env, { partner: true });
 
   app.get(
     "/hit-rates",
-    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: partnerGuard },
     async (request, reply) => {
       const parsed = querySchema.safeParse(request.query);
       if (!parsed.success) {
@@ -391,7 +376,8 @@ export async function registerStatsRoutes(
       const until = parsed.data.until ?? new Date();
       const since = parsed.data.since ?? new Date(until.getTime() - parsed.data.days * DAY_MS);
       reply.header("cache-control", "no-store");
-      return buildHitRateReport(since, until, targets, opts.env);
+      const report = await buildHitRateReport(since, until, targets, opts.env);
+      return request.statsCaller?.kind === "partner" ? partnerHitRateView(report) : report;
     },
   );
   /**
@@ -516,7 +502,7 @@ export async function registerStatsRoutes(
    */
   app.get(
     "/export",
-    { config: { rateLimit: { max: 12, timeWindow: "1 minute" } }, compress: false, preHandler: guard },
+    { config: { rateLimit: { max: 12, timeWindow: "1 minute" } }, compress: false, preHandler: partnerGuard },
     async (request, reply) => {
       const parsed = exportQuerySchema.safeParse(request.query);
       if (!parsed.success) {
@@ -524,8 +510,15 @@ export async function registerStatsRoutes(
         return;
       }
       const q = parsed.data;
+      const partner = request.statsCaller?.kind === "partner";
+      // A partner's datasets only, and never the last free export slot, so an outside pull can't
+      // keep the operator's own exports waiting.
+      if (partner && !PARTNER_EXPORT_DATASETS.includes(q.dataset)) {
+        reply.code(404).send({ error: "not_found" });
+        return;
+      }
       const { since, until } = exportWindow(q);
-      const stream = startExport(q, since, until);
+      const stream = startExport(q, since, until, partner ? { maxInFlight: 1 } : {});
       if (!stream) {
         reply.code(429).send({ error: "export_busy" });
         return;
@@ -579,11 +572,18 @@ export async function registerStatsRoutes(
   );
   app.get(
     "/candles/:mint",
-    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: partnerGuard },
     async (request, reply) => {
       reply.header("cache-control", "no-store");
       const out = await candleDiagnosis((request.params as { mint: string }).mint, request.query);
-      if ("error" in out) reply.code(400);
+      if ("error" in out) {
+        reply.code(400);
+        return out;
+      }
+      // A partner gets the chart's bars and the paging cursor, not how the store built them.
+      if (request.statsCaller?.kind === "partner") {
+        return { mint: out.mint, tf: out.tf, bars: out.answer, next: out.next };
+      }
       return out;
     },
   );
@@ -682,6 +682,23 @@ export function aiReviewerRunMode(
     configuredMode,
     keySet,
     reportedBy: workerKey === undefined ? "api" : "worker",
+  };
+}
+
+/**
+ * The hit-rate report as a partner sees it: the rules, the targets and how the models' calls
+ * graded. Left out: other users' filters (names and ids, byFilter), the AI reviewer's setup
+ * (mode, whether a key is set, its playbooks), shadow emissions and the banking samples.
+ */
+export function partnerHitRateView(report: Awaited<ReturnType<typeof buildHitRateReport>>) {
+  return {
+    window: report.window,
+    rules: report.rules,
+    targets: report.targets,
+    minGradedForVerdict: report.minGradedForVerdict,
+    curatedAlerts: report.curatedAlerts,
+    curatorConfidenceBands: report.curatorConfidenceBands,
+    winnerRuns: report.winnerRuns,
   };
 }
 

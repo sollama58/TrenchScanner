@@ -44,6 +44,7 @@ const SECRETS: (keyof Env)[] = [
   "DATABASE_URL",
   "ANTHROPIC_API_KEY",
   "STATS_API_TOKEN",
+  "STATS_PARTNER_TOKENS",
   "SOLANA_RPC_URL",
 ];
 

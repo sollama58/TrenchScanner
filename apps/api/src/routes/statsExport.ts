@@ -1368,7 +1368,14 @@ let inFlight = 0;
  * Starts a gzip stream of the export, or returns null when MAX_CONCURRENT_EXPORTS are already
  * running. The slot frees when the stream ends, fails or the client goes away.
  */
-export function startExport(q: ExportQuery, since: Date, until: Date): NodeJS.ReadableStream | null {
+export function startExport(
+  q: ExportQuery,
+  since: Date,
+  until: Date,
+  /** Fewer slots than MAX_CONCURRENT_EXPORTS for this caller (a partner takes one at most). */
+  opts: { maxInFlight?: number } = {},
+): NodeJS.ReadableStream | null {
+  if (inFlight >= Math.min(opts.maxInFlight ?? MAX_CONCURRENT_EXPORTS, MAX_CONCURRENT_EXPORTS)) return null;
   return startExportStream(exportChunks(q, since, until), q.dataset);
 }
 

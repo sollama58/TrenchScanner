@@ -40,6 +40,7 @@ import {
   runTelegramDispatch,
   dispatchFailure,
   runWebPushDispatch,
+  runWebhookDispatch,
   takeManualRunRequests,
   onAlertWritten,
   COMMIT_GRACE_MS,
@@ -778,6 +779,38 @@ async function main() {
         return summary;
       },
       env.WEB_PUSH_DISPATCH_INTERVAL_SECONDS / 60,
+      {
+        deadlineMinutes: 10,
+        runEarly: {
+          everyMs: 100,
+          quiet: true,
+          due: async () =>
+            written.length > 0 && Date.now() >= Math.max(written[0]! + COMMIT_GRACE_MS, retryAt),
+        },
+      },
+    );
+  });
+  // POSTs each partner webhook (set with a STATS_PARTNER_TOKENS token at PUT /stats/webhook) the
+  // calls it takes, signed, retrying what failed - see packages/core/src/webhooks/dispatch.ts.
+  // Woken by a written alert like the two dispatchers above.
+  schedule("webhook-dispatch", () => {
+    const written: number[] = [];
+    let retryAt = 0;
+    onAlertWritten(() => {
+      if (written.length < 1_000) written.push(Date.now());
+    });
+    return scheduleInterval(
+      "webhook-dispatch",
+      async () => {
+        const startedAt = Date.now();
+        retryAt = startedAt + 1_000;
+        const { horizon, ...summary } = await runWebhookDispatch(env);
+        const covered = horizon ? horizon.getTime() : startedAt - COMMIT_GRACE_MS;
+        while (written.length > 0 && written[0]! <= covered) written.shift();
+        retryAt = written.length > 0 ? Date.now() + 1_000 : 0;
+        return summary;
+      },
+      env.WEBHOOK_DISPATCH_INTERVAL_SECONDS / 60,
       {
         deadlineMinutes: 10,
         runEarly: {
