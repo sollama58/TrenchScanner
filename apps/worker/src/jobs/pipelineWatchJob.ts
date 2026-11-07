@@ -631,9 +631,17 @@ export function findDisabledChatProblems(disabledChats: number): Problem[] {
  *  - the desk is set to run and the scanner does not say it is off, yet no review has been stored
  *    for FDSA_QUIET_MS while at least FDSA_QUIET_MIN_ALERTS curated alerts arrived (the budget cap,
  *    reviews held after errors, or a dead queue). With few alerts the quiet is the market's.
+ *  - every decide stored in the last FDSA_DECIDE_FAIL_WINDOW_MS failed, FDSA_DECIDE_FAIL_MIN or more
+ *    of them. From 2026-11-05 01:08 UTC every decide failed on the Anthropic usage limit for three
+ *    days (137 shortlisted coins went undecided) and neither notice above fired: the model-score
+ *    screen kept storing a review every cycle and a failed decide is stored too, so the desk was
+ *    never "quiet" (model system audit 2026-11-07). One notice while the run of failures lasts; it
+ *    clears on the first decide that comes back.
  */
 export const FDSA_QUIET_MS = 30 * 60_000;
 export const FDSA_QUIET_MIN_ALERTS = 10;
+export const FDSA_DECIDE_FAIL_WINDOW_MS = 6 * 3_600_000;
+export const FDSA_DECIDE_FAIL_MIN = 5;
 
 export interface FdsaCheck {
   /** FdsaDesk.running; null with no desk row (the desk was never set up: nothing to watch). */
@@ -644,6 +652,11 @@ export interface FdsaCheck {
   lastReviewAt: Date | null;
   /** Curated alerts created in the last FDSA_QUIET_MS. */
   alertsInWindow: number;
+  /** Decide reviews stored in the last FDSA_DECIDE_FAIL_WINDOW_MS, and how many of them carry an error. */
+  decidesInWindow: number;
+  decidesFailedInWindow: number;
+  /** The newest failed decide's error, or null. Provider text: shown shortened, never acted on. */
+  lastDecideError: string | null;
 }
 
 /** Pure: see the note above. */
@@ -656,6 +669,19 @@ export function findFdsaProblems(c: FdsaCheck | null, now: number): Problem[] {
         text:
           "FDSA: the desk is set to run but the scanner has it off (FDSA_ENABLED or the Anthropic key) - " +
           "no alert is reviewed or traded",
+        side: true,
+      },
+    ];
+  }
+  if (c.decidesInWindow >= FDSA_DECIDE_FAIL_MIN && c.decidesFailedInWindow >= c.decidesInWindow) {
+    const hours = Math.round(FDSA_DECIDE_FAIL_WINDOW_MS / 3_600_000);
+    const why = c.lastDecideError === null ? "" : ` (last error: ${shortError(c.lastDecideError)})`;
+    return [
+      {
+        key: "fdsa-decide-failing",
+        text:
+          `FDSA: every decide in the last ${hours} h failed (${c.decidesFailedInWindow} of ${c.decidesInWindow})${why} - ` +
+          "the screen's shortlist goes undecided and the desk trades nothing; the Anthropic usage limit or key is the usual cause",
         side: true,
       },
     ];
@@ -675,6 +701,12 @@ export function findFdsaProblems(c: FdsaCheck | null, now: number): Problem[] {
       side: true,
     },
   ];
+}
+
+/** A provider error on one line, cut to 90 characters: it names the failure and nothing more. */
+function shortError(error: string): string {
+  const flat = error.replace(/\s+/g, " ").trim();
+  return flat.length > 90 ? `${flat.slice(0, 90)}…` : flat;
 }
 
 /**
@@ -1040,17 +1072,26 @@ async function readAgedOutSinceBoot(): Promise<number | null> {
 async function readFdsaCheck(now: number): Promise<FdsaCheck | null> {
   const desk = await prisma.fdsaDesk.findUnique({ where: { id: "fdsa" }, select: { running: true } });
   if (!desk) return null;
-  const [scan, last, alertsInWindow] = await Promise.all([
+  const [scan, last, alertsInWindow, decides] = await Promise.all([
     prisma.systemHeartbeat.findUnique({ where: { job: "scan" }, select: { meta: true } }),
     prisma.fdsaReview.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
     prisma.curatedAlert.count({ where: { createdAt: { gte: new Date(now - FDSA_QUIET_MS) } } }),
+    prisma.fdsaReview.findMany({
+      where: { stage: "decide", createdAt: { gte: new Date(now - FDSA_DECIDE_FAIL_WINDOW_MS) } },
+      orderBy: { createdAt: "desc" },
+      select: { error: true },
+    }),
   ]);
   const fdsa = objectField((scan?.meta ?? null) as Record<string, unknown> | null, "fdsa");
+  const failed = decides.filter((d) => d.error !== null && d.error !== "");
   return {
     deskRunning: desk.running,
     scannerEnabled: typeof fdsa?.enabled === "boolean" ? fdsa.enabled : null,
     lastReviewAt: last?.createdAt ?? null,
     alertsInWindow,
+    decidesInWindow: decides.length,
+    decidesFailedInWindow: failed.length,
+    lastDecideError: failed[0]?.error ?? null,
   };
 }
 
