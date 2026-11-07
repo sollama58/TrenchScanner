@@ -29,6 +29,7 @@ export type HeartbeatJob =
   | "dev-launch-risk"
   | "kol-side-wallets"
   | "wallet-cohorts"
+  | "fdsa-exit-lab"
   | "kol-wallets"
   | "telegram-dispatch"
   | "web-push-dispatch"
@@ -106,6 +107,9 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "kol-side-wallets": "trainer",
   // Batch SQL over the trade tape, like wallet-risk (walletCohortJob.ts).
   "wallet-cohorts": "trainer",
+  // Replays FDSA exit plans over the recorded price paths (fdsaExitLabJob.ts): batch CPU over
+  // stored rows, no outside call.
+  "fdsa-exit-lab": "trainer",
   // The scanner: the service SOLANA_TRACKER_API_KEY is set on, beside the other provider keys.
   "kol-wallets": "scanner",
 };

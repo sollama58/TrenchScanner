@@ -120,6 +120,7 @@ import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runDevLaunchRiskJob } from "./jobs/devLaunchRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
 import { runWalletCohortJob } from "./jobs/walletCohortJob.js";
+import { runFdsaExitLabJob } from "./jobs/fdsaExitLabJob.js";
 import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
 import { refreshKolAvatars } from "./jobs/kolAvatars.js";
 import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } from "./trainingSchedule.js";
@@ -302,6 +303,8 @@ const SHUTDOWN_WRITES_MS = 8_000;
 const PAPER_TRADING_INTERVAL_MS = 10_000;
 /** How often a Free Access period that has ended is looked for, to clean up after it. */
 const FREE_ACCESS_CLEANUP_INTERVAL_MINUTES = 5;
+/** How often the FDSA exit lab replays its plans (runFdsaExitLabJob). */
+const FDSA_EXIT_LAB_MINUTES = 12 * 60;
 /** How often the composite score's weights are refit (runScoreWeightsJob). */
 const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
 
@@ -1223,6 +1226,25 @@ async function main() {
             45 * 60_000,
             Date.now(),
           ),
+      },
+    ),
+  );
+  // The FDSA exit lab (fdsaExitLabJob.ts; owner decision 2026-11-07): every 12 hours, replays exit
+  // plans over the recorded price paths and reports the tuned plan. Its first run waits for the slot
+  // the last successful one set, so a redeploy doesn't re-run a minute of CPU each time.
+  schedule("fdsa-exit-lab", () =>
+    scheduleInterval(
+      "fdsa-exit-lab",
+      takingRunNow("fdsa-exit-lab", () => runFdsaExitLabJob()),
+      FDSA_EXIT_LAB_MINUTES,
+      {
+        deadlineMinutes: 30,
+        runEarly: onRunNow("fdsa-exit-lab"),
+        firstRunDelayMs: async () => {
+          const last = await lastSuccessfulRunAt("fdsa-exit-lab");
+          if (!last) return 5 * 60_000;
+          return Math.max(0, last.getTime() + FDSA_EXIT_LAB_MINUTES * 60_000 - Date.now());
+        },
       },
     ),
   );
