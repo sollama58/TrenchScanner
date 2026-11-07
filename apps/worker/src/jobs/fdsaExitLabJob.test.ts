@@ -106,7 +106,9 @@ describe.skipIf(!dbAvailable)("fdsa exit lab job", () => {
 
   it("reports the tuned plan, the baselines and Claude's plans as heartbeat meta", async () => {
     const meta = await runFdsaExitLabJob(NOW);
-    expect(meta.plansTried).toBe(648);
+    expect(meta.plansTried).toBe(972);
+    expect(meta.auditTrailTest).toBeTruthy();
+    expect(meta.auditTakeTest).toBeTruthy();
     expect(typeof meta.tunedPlan).toBe("string");
     const tuned = meta.tunedTest as Record<string, number>;
     const fdsaDefault = meta.fdsaDefaultTest as Record<string, number>;

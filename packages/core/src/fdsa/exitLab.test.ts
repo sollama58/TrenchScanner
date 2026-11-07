@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   FDSA_LAB_FRICTIONS,
+  AUDIT_TAKE_PLAN,
+  AUDIT_TRAIL_PLAN,
   LADDER_AS_FDSA_PLAN,
   labPlanGrid,
   labPointsFromPath,
@@ -132,9 +134,10 @@ describe("labPointsFromPath", () => {
 describe("labPlanGrid", () => {
   it("is all valid plans", () => {
     const grid = labPlanGrid();
-    expect(grid.length).toBe(648);
+    expect(grid.length).toBe(972);
     for (const p of grid) expect(fdsaExitPlanSchema.safeParse(p).success).toBe(true);
-    expect(fdsaExitPlanSchema.safeParse(LADDER_AS_FDSA_PLAN).success).toBe(true);
+    for (const p of [LADDER_AS_FDSA_PLAN, AUDIT_TRAIL_PLAN, AUDIT_TAKE_PLAN])
+      expect(fdsaExitPlanSchema.safeParse(p).success).toBe(true);
   });
 });
 
@@ -164,7 +167,13 @@ describe("runExitLab", () => {
     expect(report.tuned!.test.meanReturnPct!).toBeGreaterThan(report.baselines[0]!.test.meanReturnPct!);
     expect(report.testFrom).toBe(new Date(Date.UTC(2026, 10, 1, 20)).toISOString());
     expect(report.claudePlans!.trades).toBe(1);
-    expect(report.shortlisted.map((s) => s.name)).toEqual(["tuned", "fdsa-default", "ladder"]);
+    expect(report.shortlisted.map((s) => s.name)).toEqual([
+      "tuned",
+      "fdsa-default",
+      "ladder",
+      "audit-trail",
+      "audit-take",
+    ]);
   });
 });
 

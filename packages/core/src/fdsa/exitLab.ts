@@ -243,9 +243,32 @@ export const LADDER_AS_FDSA_PLAN: FdsaExitPlan = {
 };
 
 /**
+ * Two rules from the model-system audit's offline replay (2026-11-07, 1,378 called coins of 31 Oct
+ * to 3 Nov, the same 16 s entry and 1% each way): a 20% trail armed at 1.2x with a -20% stop and a
+ * 30-minute cap returned +10.8% an alert there, and a fixed 1.3x take with a -20% stop and a
+ * 10-minute cap about break-even. Scored here as baselines so the lab checks them on its own coins.
+ */
+export const AUDIT_TRAIL_PLAN: FdsaExitPlan = {
+  stopMultiple: 0.8,
+  lockIns: [],
+  trail: [{ fromMultiple: 1.2, fraction: 0.2 }],
+  partials: [],
+  maxHoldMinutes: 30,
+  stall: null,
+};
+export const AUDIT_TAKE_PLAN: FdsaExitPlan = {
+  stopMultiple: 0.8,
+  lockIns: [],
+  trail: [],
+  partials: [{ atMultiple: 1.3, sellFraction: 1 }],
+  maxHoldMinutes: 10,
+  stall: null,
+};
+
+/**
  * The plans the tuned-rule search tries: every combination of a stop, an early lock-in (protecting
  * a gain under 2x, which no FDSA plan did), an early trail, the trail from 2x, partial sells and a
- * stall rule, 648 in all. Each is a valid FdsaExitPlan (the schema's own refinements hold), so
+ * stall rule, 972 in all. Each is a valid FdsaExitPlan (the schema's own refinements hold), so
  * the winner can be handed to the desk as it stands.
  */
 export function labPlanGrid(): FdsaExitPlan[] {
@@ -255,7 +278,11 @@ export function labPlanGrid(): FdsaExitPlan[] {
     [{ atMultiple: 1.3, floorMultiple: 1.0 }],
     [{ atMultiple: 1.5, floorMultiple: 1.15 }],
   ];
-  const earlyTrails: FdsaExitPlan["trail"][] = [[], [{ fromMultiple: 1.3, fraction: 0.3 }]];
+  const earlyTrails: FdsaExitPlan["trail"][] = [
+    [],
+    [{ fromMultiple: 1.2, fraction: 0.2 }],
+    [{ fromMultiple: 1.3, fraction: 0.3 }],
+  ];
   const trail2x = [0.2, 0.3, 0.4];
   const partials: FdsaExitPlan["partials"][] = [
     [],
@@ -371,7 +398,12 @@ export async function runExitLab(
   fdsaDefault.testStream = summarizeLab(
     replayAll(test, FDSA_DEFAULT_EXIT_PLAN, { ...fr, tickSec: 1, sellDelaySec: 1 }),
   );
-  const baselines = [fdsaDefault, report("ladder", LADDER_AS_FDSA_PLAN)];
+  const baselines = [
+    fdsaDefault,
+    report("ladder", LADDER_AS_FDSA_PLAN),
+    report("audit-trail", AUDIT_TRAIL_PLAN),
+    report("audit-take", AUDIT_TAKE_PLAN),
+  ];
 
   const shortlisted = [...(tuned ? [tuned] : []), ...baselines].map((r) => ({
     name: r.name,

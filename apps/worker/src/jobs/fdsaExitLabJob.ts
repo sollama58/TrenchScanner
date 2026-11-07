@@ -26,8 +26,8 @@ const logger = createLogger("fdsa-exit-lab");
 /** Days of alerts replayed; price paths are kept PRICE_PATH_RETENTION_DAYS (21). */
 export const LAB_DAYS = 14;
 /**
- * Most coins replayed, the latest kept: a few hundred points each in memory, and 648 plans over
- * each on the trainer's CPU (about a minute at this size, the loop handed back between plans).
+ * Most coins replayed, the latest kept: a few hundred points each in memory, and 972 plans over
+ * each on the trainer's CPU (about a minute and a half at this size, the loop handed back between plans).
  */
 export const LAB_MAX_TRADES = 6_000;
 const MINT_BATCH = 500;
@@ -116,6 +116,9 @@ function flat(s: LabSummary | null | undefined): Record<string, number | null> |
   };
 }
 
+/** A plan's name as a meta key: "fdsa-default" -> "fdsaDefault". */
+const keyOf = (name: string) => name.replace(/[^a-zA-Z0-9]+(.)/g, (_, c: string) => c.toUpperCase());
+
 /** The report as heartbeat meta: one level of nesting, plans as JSON text. */
 export function exitLabMeta(report: ExitLabReport, alerts: number): JobRunMeta {
   const meta: JobRunMeta = {
@@ -129,7 +132,7 @@ export function exitLabMeta(report: ExitLabReport, alerts: number): JobRunMeta {
   };
   const named = [...(report.tuned ? [report.tuned] : []), ...report.baselines];
   for (const r of named) {
-    const key = r.name === "fdsa-default" ? "fdsaDefault" : r.name;
+    const key = keyOf(r.name);
     meta[`${key}Train`] = flat(r.train);
     meta[`${key}Test`] = flat(r.test);
     if (r.testStream) meta[`${key}TestEverySecond`] = flat(r.testStream);
@@ -140,7 +143,7 @@ export function exitLabMeta(report: ExitLabReport, alerts: number): JobRunMeta {
     meta[`runnerUp${i + 1}Plan`] = JSON.stringify(r.plan);
   });
   for (const s of report.shortlisted) {
-    meta[`shortlisted_${s.name === "fdsa-default" ? "fdsaDefault" : s.name}Test`] = flat(s.test);
+    meta[`shortlisted_${keyOf(s.name)}Test`] = flat(s.test);
   }
   if (report.claudePlans) {
     meta.claudePlans = flat(report.claudePlans.claude);
