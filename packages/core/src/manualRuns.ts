@@ -67,6 +67,11 @@ export const MANUAL_RUN_JOBS: readonly ManualRunJob[] = [
     heavy: false,
   },
   {
+    job: "fdsa-exit-lab",
+    does: "Replays FDSA exit plans over the recorded price paths and re-picks the tuned plan.",
+    heavy: true,
+  },
+  {
     job: "kol-wallets",
     does: "Re-reads Solana Tracker's KOL roster.",
     heavy: false,
