@@ -17,7 +17,9 @@ if [[ ! -x /usr/lib/postgresql/$MAJOR/bin/postgres ]]; then
     sudo pg_dropcluster --stop "$version" "$name"
   done
   sudo install -d /usr/share/postgresql-common/pgdg
-  sudo curl -fsSL --retry 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+  # --retry-all-errors: a connection dropped mid-transfer (curl exit 56) is not one of the errors
+  # plain --retry retries, and it failed 4 CI jobs on 2026-11-07 before any test ran.
+  sudo curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     https://www.postgresql.org/media/keys/ACCC4CF8.asc
   echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" |
     sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
