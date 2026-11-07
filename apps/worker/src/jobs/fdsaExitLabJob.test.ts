@@ -111,7 +111,7 @@ describe.skipIf(!dbAvailable)("fdsa exit lab job", () => {
     const tuned = meta.tunedTest as Record<string, number>;
     const fdsaDefault = meta.fdsaDefaultTest as Record<string, number>;
     // On coins that pop and die, the tuned plan banks something the default (waiting for 2x) can't.
-    expect(tuned.meanReturnPct).toBeGreaterThan(fdsaDefault.meanReturnPct);
+    expect(tuned.meanReturnPct!).toBeGreaterThan(fdsaDefault.meanReturnPct!);
     expect(meta.claudePlans).not.toBeNull();
     expect(meta.fdsaDefaultTestEverySecond).toBeTruthy();
   });
