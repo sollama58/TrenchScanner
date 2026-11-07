@@ -35,6 +35,7 @@ import {
   type TrainerJobCheck,
   findTelegramHoldProblems,
   TELEGRAM_HOLD_ALERT_MS,
+  FDSA_DECIDE_FAIL_MIN,
   findFdsaProblems,
   FDSA_QUIET_MS,
   FDSA_QUIET_MIN_ALERTS,
@@ -704,6 +705,9 @@ describe("pipeline watch: the AI desk (audit 2026-11-02, DB-4)", () => {
     scannerEnabled: true,
     lastReviewAt: new Date(NOW - MIN),
     alertsInWindow: 40,
+    decidesInWindow: 0,
+    decidesFailedInWindow: 0,
+    lastDecideError: null,
     ...over,
   });
 
@@ -737,6 +741,45 @@ describe("pipeline watch: the AI desk (audit 2026-11-02, DB-4)", () => {
       findFdsaProblems(check({ deskRunning: false, scannerEnabled: false, lastReviewAt: null }), NOW),
     ).toEqual([]);
     expect(findFdsaProblems(null, NOW)).toEqual([]);
+  });
+
+  it("flags a run of failed decides even while the screen keeps storing reviews (audit 2026-11-07)", () => {
+    const stalled = check({
+      decidesInWindow: FDSA_DECIDE_FAIL_MIN,
+      decidesFailedInWindow: FDSA_DECIDE_FAIL_MIN,
+      lastDecideError:
+        'API error 400: 400 {"type":"error","error":{"type":"invalid_request_error",\n"message":"usage limit"}}',
+    });
+    const problems = findFdsaProblems(stalled, NOW);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ key: "fdsa-decide-failing", side: true });
+    expect(problems[0]!.text).toContain(`${FDSA_DECIDE_FAIL_MIN} of ${FDSA_DECIDE_FAIL_MIN}`);
+    // The provider's text is shown on one line and cut short, never in full.
+    expect(problems[0]!.text).toContain("API error 400");
+    expect(problems[0]!.text).not.toContain("\n");
+    expect(problems[0]!.text.length).toBeLessThan(400);
+    // Under the minimum run, or with one decide that came back, nothing: a single failure is the API's bad minute.
+    expect(
+      findFdsaProblems(
+        check({ decidesInWindow: FDSA_DECIDE_FAIL_MIN - 1, decidesFailedInWindow: FDSA_DECIDE_FAIL_MIN - 1 }),
+        NOW,
+      ),
+    ).toEqual([]);
+    expect(
+      findFdsaProblems(check({ decidesInWindow: 12, decidesFailedInWindow: 11, lastDecideError: "x" }), NOW),
+    ).toEqual([]);
+    // Off at the scanner still wins: one notice, not two.
+    expect(
+      findFdsaProblems(
+        check({
+          scannerEnabled: false,
+          decidesInWindow: 12,
+          decidesFailedInWindow: 12,
+          lastDecideError: "x",
+        }),
+        NOW,
+      ),
+    ).toMatchObject([{ key: "fdsa-off" }]);
   });
 
   it("words the notice under the scanner-jobs heading, not as a stall", () => {
