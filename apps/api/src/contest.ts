@@ -5,6 +5,8 @@ import {
   curatedTargets,
   defaultContestant,
   loadChampion,
+  loadBenchedSeats,
+  withPassMark,
   loadTopModels,
   resolveDefaultModel,
   resolveDefaultModels,
@@ -128,8 +130,13 @@ export function resetContestStateCache(): void {
 
 export function contestState(env: Env): Promise<ContestState> {
   return stateCache.get(async () => {
-    const [lanes, champion] = await Promise.all([loadCurrentLanes(), loadChampion()]);
-    const roster = withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes);
+    const [lanes, champion, benched] = await Promise.all([
+      loadCurrentLanes(),
+      loadChampion(),
+      loadBenchedSeats(),
+    ]);
+    // A seat the pass mark benched reads as tracking-only here: silent on the board, never the default.
+    const roster = withPassMark(withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes), benched);
     const rows = await prisma.curatorModel.findMany({
       where: { status: "active", contestant: { in: roster.map((c) => c.id) } },
       orderBy: { createdAt: "desc" },
@@ -176,7 +183,7 @@ export function contestState(env: Env): Promise<ContestState> {
     const sittingOut = await sittingOutCombiners(roster);
     const canCall = (id: string) => {
       const spec = roster.find((c) => c.id === id);
-      if (!spec) return false;
+      if (!spec || spec.trackingOnly === true) return false;
       if (spec.role === "rules") return true;
       if (sittingOut.has(id)) return false;
       const threshold = current.get(id)?.threshold;
@@ -325,7 +332,8 @@ export interface LeaderboardEntry {
   last24h: Last24h | null;
   /**
    * calling: it has a cutoff and can send. silent: trained, but its exam had nothing to set a
-   * cutoff from, or it is tracking only (ContestantSpec.trackingOnly), so it sends nothing. untrained: no training run has produced it
+   * cutoff from, or it is tracking only (ContestantSpec.trackingOnly, or benched by the pass mark -
+   * curation/passMark.ts), so it sends nothing. untrained: no training run has produced it
    * yet (the rules contestant is never untrained - it calls on its gate alone).
    */
   status: "calling" | "silent" | "untrained";
@@ -611,10 +619,10 @@ export async function buildLeaderboard(
       targets,
     );
     const status: LeaderboardEntry["status"] =
-      spec.role === "rules"
-        ? "calling"
-        : spec.trackingOnly === true
-          ? "silent"
+      spec.trackingOnly === true
+        ? "silent"
+        : spec.role === "rules"
+          ? "calling"
           : model === null
             ? "untrained"
             : model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD

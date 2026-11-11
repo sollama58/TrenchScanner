@@ -100,6 +100,7 @@ export * from "./curation/modelProfile.js";
 export * from "./curation/probation.js";
 export * from "./curation/laneStore.js";
 export * from "./curation/champion.js";
+export * from "./curation/passMark.js";
 export * from "./curation/feedModels.js";
 export * from "./curation/convictionLine.js";
 export * from "./curation/liveScale.js";
