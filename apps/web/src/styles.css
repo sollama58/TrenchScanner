@@ -7068,7 +7068,8 @@ html:has(dialog.about-modal[open]) {
 /* The Dex pill and the quote pill stay whole. The name gives way before either of them, and
    before the alert age, which shares this row. */
 .title-row .pill.dex-info,
-.title-row .quote-pill {
+.title-row .quote-pill,
+.title-row .launchpad-pill {
   flex: none;
   align-self: center;
 }
@@ -27238,4 +27239,46 @@ button.wlm-remove:hover:not(:disabled) {
   width: 10px;
   height: 10px;
   border-radius: 3px;
+}
+
+/* ---------- Launchpad pill: where the coin launched (user ask 2026-11-11) ---------- */
+/* Beside the ticker on Live Feed cards and Scope rows: Pump.fun, Stonks, Float, Bonk or another
+   Raydium LaunchLab launchpad, each in its own tint. A fact about the coin, not a verdict, so it
+   stays small and never wraps; the name beside it gives way first. */
+.launchpad-pill {
+  --launchpad-tint: var(--muted, #8a8f98);
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--launchpad-tint) 30%, transparent);
+  background: color-mix(in srgb, var(--launchpad-tint) 12%, transparent);
+  color: var(--launchpad-tint);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  cursor: default;
+}
+.launchpad-pumpfun {
+  --launchpad-tint: #3fb27f;
+}
+.launchpad-stonks {
+  --launchpad-tint: #e0a33a;
+}
+.launchpad-float {
+  --launchpad-tint: #4f8ef7;
+}
+.launchpad-bonk {
+  --launchpad-tint: #e8743b;
+}
+.launchpad-launchlab {
+  --launchpad-tint: #9b7bea;
+}
+.scope-launchpad {
+  font-size: calc(9.5px * var(--scope-t, 1));
+  padding: 0 5px;
 }

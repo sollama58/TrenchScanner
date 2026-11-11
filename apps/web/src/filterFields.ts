@@ -4,6 +4,9 @@ import type { FilterCriteria, FilterInput } from "./api";
 export const LAUNCHPAD_CHOICES = [
   { id: "pumpfun", label: "Pump.fun" },
   { id: "stonks", label: "Stonks" },
+  { id: "float", label: "Float" },
+  { id: "bonk", label: "Bonk" },
+  { id: "launchlab", label: "Other LaunchLab" },
 ] as const;
 import { usd } from "./format";
 

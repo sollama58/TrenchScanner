@@ -285,6 +285,11 @@ export interface Token {
   websiteUrl?: string | null;
   /** The DexScreener pair the coin is priced from; null until a reading names it. */
   pairAddress?: string | null;
+  /**
+   * The launchpad the coin came from (core's launchpads.ts: "pumpfun", "stonks", "float", "bonk",
+   * "launchlab"...); null when no source has said. Absent from API builds before 2026-11-11.
+   */
+  launchpad?: string | null;
   /** The coin the token's pair trades against (wrapped SOL for most); null until a reading names it. */
   quoteMint?: string | null;
   quoteSymbol?: string | null;
@@ -1841,6 +1846,7 @@ export type ChaosSite = QuickLink | "pumpfun";
 /** Card fields a user can hide (the API's CARD_FIELDS). */
 export type CardField =
   | "tokenName"
+  | "launchpad"
   | "time"
   | "modelPill"
   | "conviction"

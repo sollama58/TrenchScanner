@@ -21,6 +21,7 @@ export { CHART_MARK_KINDS, CHART_MARKS_REV, DEFAULT_CHART_MARK_KINDS };
 /** Card fields a user can hide. */
 export const CARD_FIELDS = [
   "tokenName",
+  "launchpad",
   "time",
   "modelPill",
   "conviction",

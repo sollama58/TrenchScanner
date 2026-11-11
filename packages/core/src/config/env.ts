@@ -966,10 +966,11 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  // A Meteora DBC or Raydium LaunchLab curve keeps its created time, and a trading one is the
-  // pair ahead of a deeper side pool. Off (the default): those venues are not a clock, which is
-  // what shipped on 2026-10-21. On changes the price and the pair age of those coins, so which
-  // alerts fire (review 2026-10-21). An owner decision.
+  // A Meteora DBC curve keeps its created time, and a trading one is the pair ahead of a deeper
+  // side pool. Off (the default): that venue is not a clock, which is what shipped on 2026-10-21.
+  // On changes the price and the pair age of those coins, so which alerts fire (review
+  // 2026-10-21). An owner decision. A Raydium LaunchLab curve is a curve and a clock either way
+  // since 2026-11-11 (user ask: Float and every other LaunchLab launchpad read as Stonks do).
   LAUNCH_HOME_CLOCK: z
     .enum(["true", "false"])
     .default("false")

@@ -81,8 +81,8 @@ export interface GeckoTerminalClientOptions {
   /** Calls a minute for every other lookup. */
   backgroundPerMinute?: number;
   /**
-   * Keep a Meteora DBC or Raydium LaunchLab curve's age. Off, those ids stay as GeckoTerminal
-   * spelled them and a LaunchLab curve is folded into "raydium", which is what shipped.
+   * Keep a Meteora DBC curve's age. Off, that id stays as GeckoTerminal spelled it, which is what
+   * shipped. A Raydium LaunchLab curve is "launchlab" either way since 2026-11-11 (toDexId).
    */
   launchHomeClock?: boolean;
 }
@@ -316,13 +316,14 @@ const num = (v: string | number | null | undefined): number | undefined => {
 function toDexId(id: string | undefined, launchHomeClock: boolean): string | undefined {
   if (id === undefined) return undefined;
   if (id === "pump-fun") return "pumpfun";
-  // Launch homes stay their own venues when the owner turns the clock on. Folding
-  // raydium-launchlab into "raydium" let a deeper side pool become the pair, and meteora-dbc
-  // is not the "meteora" AMM the clock refuses. DexScreener spells these meteoradbc and launchlab.
-  if (launchHomeClock && id === "raydium-launchlab") return "launchlab";
+  // A LaunchLab curve is a curve (launchpads.ts): folded into "raydium" it read a Float coin still
+  // on its curve as graduated, and let a deeper side pool become the pair (2026-11-11). Meteora
+  // DBC stays its own venue when the owner turns the clock on: it is not the "meteora" AMM the
+  // clock refuses. DexScreener spells these launchlab and meteoradbc.
+  if (id === "raydium-launchlab") return "launchlab";
   if (launchHomeClock && id === "meteora-dbc") return "meteoradbc";
   // GeckoTerminal names each Raydium program ("raydium-clmm", "raydium-cpmm"); DexScreener calls
-  // them all "raydium", which is where a Stonks coin graduates.
+  // them all "raydium", which is where a LaunchLab coin graduates.
   if (id.startsWith("raydium")) return "raydium";
   return id;
 }
@@ -375,7 +376,7 @@ export function parseGeckoTokens(
       pairAddress: p?.address,
       priceUsd,
       marketCapUsd,
-      // DexScreener reports no liquidity for a pre-bond curve (Pump.fun's or Stonks'); GeckoTerminal reports the curve's
+      // DexScreener reports no liquidity for a pre-bond curve (Pump.fun's or LaunchLab's); GeckoTerminal reports the curve's
       // reserves. Kept the same as DexScreener so the scan reads a curve the same either way.
       liquidityUsd: isCurveVenue(dexId) ? undefined : num(p?.reserve_in_usd),
       volume24hUsd: num(p?.volume_usd?.h24),

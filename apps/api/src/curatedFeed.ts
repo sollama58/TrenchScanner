@@ -702,6 +702,8 @@ export const TOKEN_CARD_SELECT = {
   symbol: true,
   name: true,
   pairAddress: true,
+  // Where it launched (Pump.fun, Stonks, Float...), for the card's launchpad pill.
+  launchpad: true,
   // The coin it trades against, for the card's quote pill when that isn't SOL.
   quoteMint: true,
   quoteSymbol: true,

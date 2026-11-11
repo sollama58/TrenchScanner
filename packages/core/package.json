@@ -26,6 +26,12 @@
       "import": "./dist/wilson.js",
       "default": "./dist/wilson.js"
     },
+    "./launchpads": {
+      "trenchscanner-web": "./src/launchpads.ts",
+      "types": "./dist/launchpads.d.ts",
+      "import": "./dist/launchpads.js",
+      "default": "./dist/launchpads.js"
+    },
     "./prisma": "./generated/prisma/index.js"
   },
   "scripts": {

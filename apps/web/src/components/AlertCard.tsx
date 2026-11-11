@@ -32,6 +32,7 @@ import { calibratedRateLabel, calibratedRateTitle, cardCalibratedRate } from "..
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 import { filterCardStyle } from "../filterStyle";
 import { quoteToken } from "../quoteToken";
+import { LaunchpadPill } from "../launchpadPill";
 import {
   TILE_FIRST_BUYERS_OF,
   TILE_RED_FIRST_BUYERS,
@@ -306,6 +307,7 @@ export function AlertCard({
               </strong>
             )}
             <QuotePill token={card.token} />
+            {show("launchpad") && <LaunchpadPill token={card.token} />}
             <DexInfoLabel token={card.token} now={now} />
             {quickBuy("top-left")}
             {show("tokenName") && card.token.name && card.token.symbol && (
