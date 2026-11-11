@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildRankRates,
   CARD_BAND_MIN_PCT,
+  CARD_RATE_MIN_GRADED_LOWER_BOUND,
+  ownBandEarned,
   measuredRateAtRank,
   pooledCalledRate,
   RANK_RATE_MIN_GRADED,
@@ -90,6 +92,68 @@ describe("the served rate and the high tier", () => {
     expect(servedRate(0.6, undefined, 0.99)).toEqual({ calibratedPct: 60, shownPct: null, tier: "standard" });
     // No rate anywhere: no tier (rules calls).
     expect(servedRate(null, undefined, 0.5)).toEqual({
+      calibratedPct: null,
+      shownPct: null,
+      tier: undefined,
+    });
+  });
+});
+
+describe("the lower-bound card rule (owner decision 2026-11-11)", () => {
+  const bands = (...b: [number, number][]) =>
+    b.map(([graded, wins], i) => ({ from: [0.98, 0.95, 0.9, 0.8, 0][i]!, graded, wins }));
+  // The same seat: top 2% at 40% on 200 graded, pooled 21%. 80/200's 95% lower bound is ~33.5%.
+  const seat = bands([200, 80], [300, 90], [500, 100], [1000, 150], [8000, 400]);
+
+  it("needs 200 graded in the band before it quotes the call's own rate", () => {
+    expect(CARD_RATE_MIN_GRADED_LOWER_BOUND).toBe(200);
+    // 199 graded at 40%: the band rule quotes it, the lower-bound rule quotes the pool.
+    const thin = bands([199, 80], [300, 90], [500, 100], [1000, 150], [8000, 400]);
+    expect(servedRate(0.3, thin, 0.99, "band")).toMatchObject({ shownPct: 40.2, tier: "high" });
+    expect(servedRate(0.3, thin, 0.99, "lower-bound")).toEqual({
+      calibratedPct: 40.2,
+      shownPct: 21,
+      tier: "standard",
+    });
+    expect(servedRate(0.3, seat, 0.99, "lower-bound")).toEqual({
+      calibratedPct: 40,
+      shownPct: 40,
+      tier: "high",
+    });
+  });
+
+  it("needs the band's 95% lower bound above the seat's pooled rate", () => {
+    // Top band 36% on 200 graded: over the 35% line, but its lower bound (~29.6%) sits under a
+    // 30% pool, so the card quotes the pool and the call is standard.
+    const close = bands([200, 72], [300, 90], [500, 150], [1000, 300], [8000, 400]);
+    expect(pooledCalledRate(close)).toBeCloseTo(612 / 2000, 6);
+    expect(ownBandEarned(close, 0.99, "band", pooledCalledRate(close))).toBe(true);
+    expect(ownBandEarned(close, 0.99, "lower-bound", pooledCalledRate(close))).toBe(false);
+    expect(servedRate(0.3, close, 0.99, "lower-bound")).toEqual({
+      calibratedPct: 36,
+      shownPct: 30.6,
+      tier: "standard",
+    });
+    // The same band over a 21% pool clears it.
+    expect(
+      servedRate(0.3, bands([200, 72], [300, 90], [500, 100], [1000, 150], [8000, 400]), 0.99, "lower-bound"),
+    ).toEqual({ calibratedPct: 36, shownPct: 36, tier: "high" });
+  });
+
+  it("still holds the 35% line, keeps the call's own rate for the desk, and quotes nothing without a pool", () => {
+    // 34% on 1,000 graded over a 15% pool: the bound clears the pool but not the line.
+    const under = bands([1000, 340], [300, 30], [500, 50], [1000, 100], [8000, 400]);
+    expect(servedRate(0.5, under, 0.99, "lower-bound")).toEqual({
+      calibratedPct: 34,
+      shownPct: 18.6,
+      tier: "standard",
+    });
+    expect(servedRate(0.6, undefined, 0.99, "lower-bound")).toEqual({
+      calibratedPct: 60,
+      shownPct: null,
+      tier: "standard",
+    });
+    expect(servedRate(null, undefined, 0.5, "lower-bound")).toEqual({
       calibratedPct: null,
       shownPct: null,
       tier: undefined,

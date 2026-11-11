@@ -1039,6 +1039,14 @@ const envSchema = z.object({
   // 2026-10-17 (user decision; was 1): a point is within noise between the top seats, so the default
   // flipped between close models.
   CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(3),
+  // How a card decides to quote the call's own rank band as its odds (curation/liveRankRates.ts
+  // servedRate). "band" (the default, what shipped 2026-11-02): the band's measured 2x rate from
+  // CARD_BAND_MIN_PCT up. "lower-bound": that, at least 200 graded moments in the band, and the
+  // band's 95% lower bound above the seat's pooled called rate; otherwise the card quotes the pooled
+  // rate and the call is standard tier. Owner decision 2026-11-11 (model system audit 2026-11-07,
+  // assumption 7): the ≥35% bands claimed 37-42% and realised 27-35% on the holdout week, and the
+  // per-call rate had no skill within a seat. The FDSA screen's calibratedPct is untouched.
+  CARD_RATE_RULE: z.enum(["band", "lower-bound"]).default("band"),
   // The training run's guard (curation/runGuard.ts): a run that would ship broken weights, train on
   // under half the rows the running models saw, or silence every seat that was calling is held
   // back and the running models kept. A held run is let through once the running models are this
