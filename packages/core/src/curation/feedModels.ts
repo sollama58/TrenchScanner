@@ -10,6 +10,7 @@ import {
 } from "./contestants.js";
 import { withLanes } from "./evolution.js";
 import { loadCurrentLanes } from "./laneStore.js";
+import { loadBenchedSeats, withPassMark } from "./passMark.js";
 import { loadTopModels } from "./topModels.js";
 import { NEVER_EMIT_THRESHOLD, defaultContestant } from "./trainingRun.js";
 
@@ -207,13 +208,18 @@ export function feedCallsKey(calls: FeedCalls): string {
  * combiners, the top models), without its cache.
  */
 export async function loadFeedModelState(env: Env): Promise<FeedModelState> {
-  const [lanes, champion] = await Promise.all([loadCurrentLanes(), loadChampion()]);
-  const roster = withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes);
+  const [lanes, champion, benched] = await Promise.all([
+    loadCurrentLanes(),
+    loadChampion(),
+    loadBenchedSeats(),
+  ]);
+  // A seat the pass mark benched sends nothing, so it is never the default (curation/passMark.ts).
+  const roster = withPassMark(withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes), benched);
   const ids = roster.map((c) => c.id);
   const [cutoffs, sittingOut] = await Promise.all([activeModelCutoffs(ids), sittingOutCombiners(roster)]);
   const canCall = (id: string) => {
     const spec = roster.find((c) => c.id === id);
-    if (!spec) return false;
+    if (!spec || spec.trackingOnly === true) return false;
     if (spec.role === "rules") return true;
     if (sittingOut.has(id)) return false;
     const threshold = cutoffs.get(id)?.threshold;

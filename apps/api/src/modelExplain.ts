@@ -507,10 +507,10 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
     const metrics = current?.metrics ?? {};
     const params = current ? await loadParams(current.id) : null;
     const status: SeatExplain["status"] =
-      spec.role === "rules"
-        ? "calling"
-        : spec.trackingOnly === true
-          ? "silent"
+      spec.trackingOnly === true
+        ? "silent"
+        : spec.role === "rules"
+          ? "calling"
           : current === null
             ? "untrained"
             : current.threshold !== null && current.threshold < NEVER_EMIT_THRESHOLD

@@ -1042,6 +1042,44 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(banked[SHARP_AGREEMENT_CONTESTANT]).toBeGreaterThanOrEqual(2 / 3);
   });
 
+  it("a seat the pass mark benched records its would-be call but files nothing", async () => {
+    // User decision 2026-11-11 (MT-2): a benched seat keeps deciding, so the record that can bring
+    // it back (CandidateOutcome.seatCalls) keeps growing, but it sends no card.
+    await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    const judged = {
+      graded: 400,
+      wins: 40,
+      marketGraded: 1000,
+      marketWins: 150,
+      liveLiftLower: 0.5,
+      examLift: null,
+      reason: "test",
+      judgedAt: new Date(),
+      changedAt: new Date(),
+    };
+    await prisma.curatorPassMark.upsert({
+      where: { contestant: "linear" },
+      create: { contestant: "linear", calling: false, ...judged },
+      update: { calling: false, ...judged },
+    });
+    try {
+      resetCuratorModelCache();
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-benched` } });
+      const scored = curatableFixture(token.mintAddress);
+      const sample = await recordCandidateSample(token.id, scored, env);
+      const cycle = newCuratedCycle();
+      await collectCuratedContender(cycle, token, scored, sample, env);
+      expect(cycle.byModel.has("linear")).toBe(false);
+      expect(cycle.byModel.has(RULES_CONTESTANT)).toBe(true);
+      const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: sample!.id } });
+      expect(row.seatScores).toMatchObject({ linear: expect.any(Number) });
+      expect(row.seatCalls).toEqual(expect.arrayContaining(["linear", RULES_CONTESTANT]));
+    } finally {
+      await prisma.curatorPassMark.delete({ where: { contestant: "linear" } });
+      resetCuratorModelCache();
+    }
+  });
+
   it("the consensus calls on its own ledger, naming the members behind the call", async () => {
     await seedConsensus();
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-consensus` } });
