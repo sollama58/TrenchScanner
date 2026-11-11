@@ -79,6 +79,7 @@ import {
   loadModelGates,
   passesModelGate,
   seatConsiders,
+  type CardRateRule,
   type ServedCuratorExtras,
   type StackedCuratorParams,
   type TrainedCuratorParams,
@@ -567,7 +568,7 @@ function decideCurations(
         reasons: curate ? topModelReasons(params, features) : [],
         rationale: modelRationale(params, features),
         source: id,
-        ...servedFields(params, probability, entry.spec.id, live, own),
+        ...servedFields(params, probability, entry.spec.id, live, env.CARD_RATE_RULE, own),
       });
       continue;
     }
@@ -603,7 +604,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons: curate ? topModelReasons(params, features) : [],
         source: id,
-        ...servedFields(params, probability, entry.spec.id, live, own),
+        ...servedFields(params, probability, entry.spec.id, live, env.CARD_RATE_RULE, own),
       });
     }
   }
@@ -663,7 +664,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons,
         source: id,
-        ...servedFields(params, probability, entry.spec.id, live),
+        ...servedFields(params, probability, entry.spec.id, live, env.CARD_RATE_RULE),
       });
       continue;
     }
@@ -694,7 +695,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons,
         source: id,
-        ...servedFields(params, probability, entry.spec.id, live),
+        ...servedFields(params, probability, entry.spec.id, live, env.CARD_RATE_RULE),
       });
       continue;
     }
@@ -730,7 +731,7 @@ function decideCurations(
       confidence: probability * 100,
       reasons,
       source: id,
-      ...servedFields(params, probability, entry.spec.id, live),
+      ...servedFields(params, probability, entry.spec.id, live, env.CARD_RATE_RULE),
     });
   }
   if (population === "entry" && env.CURATOR_ENTRY_PROOF)
@@ -758,13 +759,16 @@ function holdUnprovenFastCalls(
  * The tier, the calibrated 2x rate and the rate the card quotes for a model's probability - see
  * ServedCuratorExtras and curation/liveRankRates.ts servedRate. The run's calibration table gives
  * the rate at the call's rank; the seat's live bands replace it where enough moments are graded,
- * decide the tier and give the pooled rate the card quotes under CARD_BAND_MIN_PCT.
+ * decide the tier and give the pooled rate the card quotes where the call's own band doesn't earn
+ * the quote under `rule` (CARD_BAND_MIN_PCT, ownBandEarned).
  */
 function servedFields(
   params: ServedCuratorExtras,
   probability: number,
   seat: string,
   live: LiveScales,
+  /** How the card decides to quote the call's own band (CARD_RATE_RULE, liveRankRates.ts). */
+  rule: CardRateRule,
   /** The seat's own live scores, when its rank is read on them (learners - see liveScale.ts). */
   liveScores?: readonly number[],
 ): Pick<CurationDecision, "tier" | "calibratedPct" | "shownPct"> {
@@ -775,8 +779,8 @@ function servedFields(
   const ranked = liveScores ?? usableLiveScores(live.scores, seat);
   const served =
     ranked === undefined
-      ? servedRate(rate, undefined, 0)
-      : servedRate(rate, live.rankRates?.get(seat), rankAmong(ranked, probability));
+      ? servedRate(rate, undefined, 0, rule)
+      : servedRate(rate, live.rankRates?.get(seat), rankAmong(ranked, probability), rule);
   const out: Pick<CurationDecision, "tier" | "calibratedPct" | "shownPct"> = {};
   if (served.tier !== undefined) out.tier = served.tier;
   if (served.calibratedPct !== null) out.calibratedPct = served.calibratedPct;
