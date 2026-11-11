@@ -122,6 +122,8 @@ export const MANUAL_RUN_EXCLUDED: Readonly<Partial<Record<HeartbeatJob, string>>
   "trade-canary": "Already runs every 15 minutes.",
   "free-access":
     "Deletes accounts for good. It runs every few minutes, an hour after a period ends or is switched off.",
+  "fdsa-decide-replay":
+    "Spends on an Anthropic batch. It runs by itself, once, when FDSA_DECIDE_REPLAY is set to a new tag, and checks hourly for the results.",
 };
 
 /** The entry for `job`, or undefined when it can't be run from the panel. */

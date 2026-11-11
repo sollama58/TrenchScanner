@@ -108,6 +108,8 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "wallet-cohorts": 3 * 3_600_000,
   // Every 12 hours: the FDSA exit lab's replay (fdsaExitLabJob.ts). Nothing live waits on it.
   "fdsa-exit-lab": 36 * 3_600_000,
+  // Hourly: the FDSA decide replay's submit and result check (fdsaDecideReplay). Nothing live waits on it.
+  "fdsa-decide-replay": 3 * 3_600_000,
   // Daily: the KOL roster from Solana Tracker (kolWalletsJob.ts). Nothing user-facing waits on it.
   "kol-wallets": 26 * 3_600_000,
 };

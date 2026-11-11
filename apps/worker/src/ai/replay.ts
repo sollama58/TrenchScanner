@@ -422,8 +422,13 @@ export interface ScoredReplayRun {
  * left submitted: the next pass deletes its partial verdicts and ingests again. Marking scored
  * is a conditional update, so two overlapping passes cannot both settle the same batch.
  */
+/** The reviewer's own replays; the FDSA decide replay shares the tables under its own purpose (fdsa/decideReplay.ts). */
+export const REVIEWER_REPLAY_PURPOSES: readonly string[] = ["baseline", "evolution"];
+
 export async function pollReplayRuns(env: Env, signal?: AbortSignal): Promise<ScoredReplayRun[]> {
-  const runs = await prisma.aiReplayRun.findMany({ where: { status: "submitted" } });
+  const runs = await prisma.aiReplayRun.findMany({
+    where: { status: "submitted", purpose: { in: [...REVIEWER_REPLAY_PURPOSES] } },
+  });
   const scored: ScoredReplayRun[] = [];
   for (const run of runs) {
     if (signal?.aborted) return scored;

@@ -121,6 +121,7 @@ import { runDevLaunchRiskJob } from "./jobs/devLaunchRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
 import { runWalletCohortJob } from "./jobs/walletCohortJob.js";
 import { runFdsaExitLabJob } from "./jobs/fdsaExitLabJob.js";
+import { runFdsaDecideReplayJob } from "./fdsa/decideReplay.js";
 import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
 import { refreshKolAvatars } from "./jobs/kolAvatars.js";
 import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } from "./trainingSchedule.js";
@@ -218,6 +219,7 @@ const BURN_SCAN_DEADLINE_MINUTES = 30;
 const KOL_WALLETS_HOUR_UTC = 6;
 /** How often the AI judge job checks on replay batches and playbook rounds. */
 const AI_JUDGE_INTERVAL_MINUTES = 10;
+const FDSA_DECIDE_REPLAY_MINUTES = 60;
 /**
  * How often the default model is re-chosen from the leaderboard between training runs. Live
  * records change every minute as calls are graded; a training run only comes every
@@ -1428,6 +1430,17 @@ async function main() {
       ),
       AI_JUDGE_INTERVAL_MINUTES,
       { deadlineMinutes: 30, runEarly: onRunNow("ai-judge") },
+    ),
+  );
+  // The FDSA decide replay (fdsa/decideReplay.ts; owner decision 2026-11-11): hourly, submits the
+  // tag's one batch and collects its results. Inert while FDSA_DECIDE_REPLAY is unset. Under the
+  // job lock so two trainers over a deploy can't both submit the same tag's batch and bill twice.
+  schedule("fdsa-decide-replay", () =>
+    scheduleInterval(
+      "fdsa-decide-replay",
+      () => withJobLock("fdsa-decide-replay", () => runFdsaDecideReplayJob(env), { stopWhenLockLost: true }),
+      FDSA_DECIDE_REPLAY_MINUTES,
+      { deadlineMinutes: 20 },
     ),
   );
 
