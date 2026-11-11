@@ -1340,6 +1340,19 @@ const envSchema = z.object({
   FDSA_EXIT_RESERVE_PCT: z.coerce.number().min(0).max(100).default(25),
   // FDSA calls in flight at once (both stages), so a busy cycle doesn't hit the key's rate limit.
   FDSA_MAX_IN_FLIGHT: z.coerce.number().int().min(1).max(20).default(3),
+  // The FDSA decide replay (worker fdsa/decideReplay.ts; owner decision 2026-11-11 on the model
+  // system audit 2026-11-07, "approve up to $30 via Batches"). Set to a run tag (any word, say
+  // "audit-2026-11") and the trainer re-asks the live decide prompt, through the Message Batches
+  // API, about the last FDSA_DECIDE_REPLAY_ITEMS graded shortlisted alerts, each with the brief its
+  // live decide was sent: once at the live effort and once a step cheaper. The scorecard (how each
+  // pass ranked the alerts against their labels and against the scanner model's own odds) is the
+  // job's heartbeat meta and the run row (AiReplayRun, purpose "fdsa-decide"). One replay per tag;
+  // a new tag runs another. Empty, the default, runs nothing. The spend across every tag is capped
+  // at FDSA_DECIDE_REPLAY_MAX_USD and sits outside both daily caps: it is a one-off, approved on
+  // its own, and must not stop the day's live reviews.
+  FDSA_DECIDE_REPLAY: z.string().default(""),
+  FDSA_DECIDE_REPLAY_ITEMS: z.coerce.number().int().min(1).max(1000).default(500),
+  FDSA_DECIDE_REPLAY_MAX_USD: z.coerce.number().min(0).default(30),
 
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),

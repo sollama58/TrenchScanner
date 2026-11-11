@@ -30,6 +30,7 @@ export type HeartbeatJob =
   | "kol-side-wallets"
   | "wallet-cohorts"
   | "fdsa-exit-lab"
+  | "fdsa-decide-replay"
   | "kol-wallets"
   | "telegram-dispatch"
   | "web-push-dispatch"
@@ -110,6 +111,9 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   // Replays FDSA exit plans over the recorded price paths (fdsaExitLabJob.ts): batch CPU over
   // stored rows, no outside call.
   "fdsa-exit-lab": "trainer",
+  // Re-asks the decide prompt about graded alerts through the Batches API (fdsa/decideReplay.ts):
+  // batch work on the key the trainer already holds for ai-judge, nothing the desk waits on.
+  "fdsa-decide-replay": "trainer",
   // The scanner: the service SOLANA_TRACKER_API_KEY is set on, beside the other provider keys.
   "kol-wallets": "scanner",
 };
@@ -249,6 +253,7 @@ export function jobLockKey(job: HeartbeatJob): string {
 export const JOB_LOCKED_JOBS: readonly HeartbeatJob[] = [
   "ai-judge",
   "cleanup",
+  "fdsa-decide-replay",
   "curator-training",
   "kol-side-wallets",
   "kol-wallets",

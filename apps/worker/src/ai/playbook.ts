@@ -19,7 +19,13 @@ import {
 } from "@trenchscanner/core";
 import { anthropicClient, describeAnthropicError, lenientFormat } from "./client.js";
 import { ensureActivePlaybook, resetActivePlaybookCache, type ActivePlaybook } from "./playbookStore.js";
-import { loadReplayItems, replayRequestUsd, submitReplay, type ScoredReplayRun } from "./replay.js";
+import {
+  loadReplayItems,
+  replayRequestUsd,
+  REVIEWER_REPLAY_PURPOSES,
+  submitReplay,
+  type ScoredReplayRun,
+} from "./replay.js";
 import {
   aiBudgetRoomUsd,
   estimateCallUsd,
@@ -97,7 +103,12 @@ export async function maybeEvolvePlaybook(
   opts: { baselineOnly?: boolean } = {},
 ): Promise<EvolutionStep> {
   if (!env.AI_PLAYBOOK_EVOLUTION) return "disabled";
-  if ((await prisma.aiReplayRun.count({ where: { status: "submitted" } })) > 0) return "replay-pending";
+  if (
+    (await prisma.aiReplayRun.count({
+      where: { status: "submitted", purpose: { in: [...REVIEWER_REPLAY_PURPOSES] } },
+    })) > 0
+  )
+    return "replay-pending";
   const lastEvolution = await prisma.aiReplayRun.findFirst({
     where: { purpose: "evolution" },
     orderBy: { createdAt: "desc" },
