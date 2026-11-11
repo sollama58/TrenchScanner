@@ -1,10 +1,11 @@
 import {
   isCurveVenue,
   isLaunchHomeCurve,
-  normalizeLaunchpad,
+  isLaunchLabLaunchpad,
+  launchLabCurveVenue,
   PUMPFUN_LAUNCHPAD,
+  resolveLaunchpad,
   SCANNED_LAUNCHPADS,
-  STONKS_LAUNCHPAD,
 } from "../launchpads.js";
 import { MARKET_SOURCE } from "../marketSource.js";
 import { fetchJson } from "./httpClient.js";
@@ -45,6 +46,11 @@ interface JupiterToken {
   updatedAt?: string | null;
   /** The launchpad the mint was created on ("pump.fun", ...). */
   launchpad?: string | null;
+  /**
+   * The launchpad's own config the coin launched under: for a Raydium LaunchLab coin its pool's
+   * platform config, which tells Float, Stonks and Bonk apart (launchpads.ts resolveLaunchpad).
+   */
+  partnerConfig?: string | null;
   /** The pool a launchpad coin moved to when its curve filled; absent while on the curve. */
   graduatedPool?: string | null;
   /** When it did. */
@@ -136,8 +142,8 @@ export interface JupiterClientOptions {
    */
   burst?: number;
   /**
-   * Keep a Meteora DBC or Raydium LaunchLab curve's age. Off, those launchpads have no dex id
-   * here, which is what shipped.
+   * Keep a Meteora DBC curve's age. Off, that launchpad has no dex id here, which is what shipped.
+   * (A Raydium LaunchLab curve keeps its age either way since 2026-11-11: launchpads.ts.)
    */
   launchHomeClock?: boolean;
 }
@@ -381,7 +387,7 @@ export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
   if (!Array.isArray(body)) return [];
   const out: DiscoveredCoin[] = [];
   for (const t of body as JupiterToken[]) {
-    const launchpad = normalizeLaunchpad(t?.launchpad);
+    const launchpad = resolveLaunchpad(t?.launchpad, t?.partnerConfig);
     if (!t || typeof t.id !== "string" || !launchpad || !SCANNED_LAUNCHPADS.has(launchpad)) continue;
     const priceUsd = finite(t.usdPrice);
     const created = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;
@@ -440,9 +446,11 @@ export function parseJupiterTokens(body: unknown, requested: Set<string>): Candi
 }
 
 /**
- * DexScreener's venue id for a Jupiter launchpad. Pump.fun and Stonks as before. Meteora DBC
- * (`met-dbc`) and Raydium LaunchLab stay on their curve until Jupiter reports a graduated pool;
- * LaunchLab then moves to Raydium, and a graduated DBC has no dex id of its own here.
+ * DexScreener's venue id for a Jupiter launchpad. Pump.fun as before. Every Raydium LaunchLab
+ * launchpad (Stonks, Float, Bonk and the rest) is on its LaunchLab curve ("stonkfun" for Stonks,
+ * GeckoTerminal's name, else "launchlab") until Jupiter reports a graduated pool, then on Raydium.
+ * Meteora DBC (`met-dbc`) stays on its curve until it graduates, behind LAUNCH_HOME_CLOCK; a
+ * graduated DBC has no dex id of its own here.
  */
 function dexIdForLaunch(
   launchpad: string | undefined,
@@ -450,13 +458,10 @@ function dexIdForLaunch(
   launchHomeClock: boolean,
 ): string | undefined {
   if (launchpad === PUMPFUN_LAUNCHPAD) return graduated ? "pumpswap" : "pumpfun";
-  if (launchpad === STONKS_LAUNCHPAD) return graduated ? "raydium" : "stonkfun";
+  if (isLaunchLabLaunchpad(launchpad)) return graduated ? "raydium" : launchLabCurveVenue(launchpad);
   if (!launchHomeClock) return undefined;
   if (launchpad === "met-dbc" || launchpad === "meteora-dbc" || launchpad === "meteoradbc") {
     return graduated ? undefined : "meteoradbc";
-  }
-  if (launchpad === "raydium-launchlab" || launchpad === "launchlab") {
-    return graduated ? "raydium" : "launchlab";
   }
   return undefined;
 }
@@ -482,16 +487,16 @@ export function parseJupiterLaunches(
   for (const t of body as JupiterToken[]) {
     if (!t || typeof t.id !== "string" || !requested.has(t.id) || out.has(t.id)) continue;
     const priceUsd = finite(t.usdPrice);
-    const launchpad = normalizeLaunchpad(t.launchpad);
+    const launchpad = resolveLaunchpad(t.launchpad, t.partnerConfig);
     // On the coin's supply now, after burns, as DexScreener counts it too (mintSupply.ts): fdv is
     // the price on the mint's whole supply, which burns take out of.
     const marketCapUsd = positive(t.fdv) ?? positive(t.mcap);
     if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
-    // A Stonks coin's LaunchLab curve is "stonkfun" (GeckoTerminal's name: DexScreener lists no
-    // curve), and it graduates into a Raydium pool. Meteora DBC and Raydium LaunchLab are the
-    // same kind of home: on the curve their created time is the pair clock, and a graduated
-    // LaunchLab coin moves to Raydium. A graduated DBC's AMM shares Jupiter's lack of a dex id
-    // with every other pool, so that clock stays unknown rather than trusting a side pool.
+    // A LaunchLab coin's curve is "stonkfun" for Stonks (GeckoTerminal's name: DexScreener lists
+    // no Stonks curve) and "launchlab" for the rest, and it graduates into a Raydium pool. Meteora
+    // DBC is the same kind of home: on the curve its created time is the pair clock. A graduated
+    // DBC's AMM shares Jupiter's lack of a dex id with every other pool, so that clock stays
+    // unknown rather than trusting a side pool.
     const dexId = dexIdForLaunch(launchpad, Boolean(t.graduatedPool), launchHomeClock);
     const liquidity = finite(t.liquidity);
     // On the curve the canonical pair is the bonding curve (firstPool, opened at launch). Once

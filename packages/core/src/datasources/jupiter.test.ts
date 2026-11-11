@@ -262,6 +262,47 @@ describe("parseJupiterLaunches", () => {
     expect(dbcGrad?.dexId).toBeUndefined();
     expect(dbcGrad?.pairCreatedAt).toBeUndefined();
   });
+
+  it("reads a Float coin on its LaunchLab curve as a curve with the clock flag off, and its Raydium pool after", () => {
+    const float = "2TDPJJPV6nvTEqXABxrqno6Uzpipxxvh1zjLN3SMYn69";
+    const [curve, graduated] = parseJupiterLaunches(
+      [
+        {
+          id: "floatCurve",
+          usdPrice: 0.00002,
+          fdv: 18_000,
+          liquidity: 5_000,
+          launchpad: "raydium-launchlab",
+          partnerConfig: float,
+          firstPool: { createdAt: "2026-11-11T00:30:00Z" },
+        },
+        {
+          id: "floatGrad",
+          usdPrice: 0.0007,
+          fdv: 700_000,
+          liquidity: 77_000,
+          launchpad: "raydium-launchlab",
+          partnerConfig: float,
+          firstPool: { createdAt: "2026-11-08T20:00:00Z" },
+          graduatedPool: "cpmm",
+          graduatedAt: "2026-11-08T20:26:22Z",
+        },
+      ],
+      new Set(["floatCurve", "floatGrad"]),
+    );
+    expect(curve).toMatchObject({
+      launchpad: "float",
+      dexId: "launchlab",
+      pairCreatedAt: new Date("2026-11-11T00:30:00Z"),
+      liquidityUsd: undefined,
+    });
+    expect(graduated).toMatchObject({
+      launchpad: "float",
+      dexId: "raydium",
+      pairCreatedAt: new Date("2026-11-08T20:26:22Z"),
+      liquidityUsd: 154_000,
+    });
+  });
 });
 
 describe("parseJupiterQuotes", () => {
@@ -494,7 +535,7 @@ describe("JupiterFirstLookup", () => {
 });
 
 describe("parseJupiterMovingLaunches", () => {
-  it("keeps Pump.fun and Stonks launches, priced on the supply after burns, with no socials claimed", () => {
+  it("keeps Pump.fun and LaunchLab launches, priced on the supply after burns, with no socials claimed", () => {
     const coins = parseJupiterMovingLaunches([
       {
         id: "pumpMint",
@@ -507,11 +548,26 @@ describe("parseJupiterMovingLaunches", () => {
         firstPool: { createdAt: "2026-10-15T12:00:00Z" },
         graduatedAt: "2026-10-15T12:30:00Z",
       },
-      { id: "otherMint", usdPrice: 1, launchpad: "letsbonk.fun" },
+      { id: "dbcMint", usdPrice: 1, launchpad: "met-dbc" },
       { id: "noPad", usdPrice: 1 },
       { id: "stonkMint", usdPrice: 0.0001, mcap: 99_000, fdv: 100_000, launchpad: "stonkfun" },
+      { id: "bonkMint", usdPrice: 1, launchpad: "letsbonk.fun" },
+      // Float launches under its own LaunchLab platform config; Jupiter calls it raydium-launchlab.
+      {
+        id: "floatMint",
+        usdPrice: 1,
+        launchpad: "raydium-launchlab",
+        partnerConfig: "2TDPJJPV6nvTEqXABxrqno6Uzpipxxvh1zjLN3SMYn69",
+      },
+      { id: "labMint", usdPrice: 1, launchpad: "raydium-launchlab", partnerConfig: "SomeOtherConfig" },
     ]);
-    expect(coins).toHaveLength(2);
+    expect(coins.map((c) => [c.mintAddress, c.launchpad])).toEqual([
+      ["pumpMint", "pumpfun"],
+      ["stonkMint", "stonks"],
+      ["bonkMint", "bonk"],
+      ["floatMint", "float"],
+      ["labMint", "launchlab"],
+    ]);
     expect(coins[1]).toMatchObject({ mintAddress: "stonkMint", launchpad: "stonks", marketCapUsd: 100_000 });
     expect(coins[0]!.launchpad).toBe("pumpfun");
     expect(coins[0]).toMatchObject({

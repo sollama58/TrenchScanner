@@ -11,7 +11,8 @@ import {
   type LaunchQuoteSource,
   scanBand,
   PUMPFUN_LAUNCHPAD,
-  STONKS_LAUNCHPAD,
+  isLaunchLabLaunchpad,
+  LAUNCHLAB_LAUNCHPAD,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
   type Env,
@@ -210,9 +211,10 @@ export function liveLaunchSource(
   if (!source) return undefined;
   const cutoff = now - LIVE_LAUNCH_MINUTES * 60_000;
   const mints = tracked
-    // A Stonks coin at any age: DexScreener never lists its LaunchLab curve, so on the curve only
-    // the live read prices it (sorted after the young launches, by first-seen time like them).
-    .filter((t) => t.firstSeenAt.getTime() > cutoff || t.launchpad === STONKS_LAUNCHPAD)
+    // A LaunchLab coin (Stonks, Float, Bonk...) at any age: DexScreener never lists its curve, so
+    // on the curve only the live read prices it (sorted after the young launches, by first-seen
+    // time like them).
+    .filter((t) => t.firstSeenAt.getTime() > cutoff || isLaunchLabLaunchpad(t.launchpad))
     .sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime())
     .slice(0, LIVE_LAUNCH_MAX)
     .map((t) => t.mintAddress);
@@ -380,6 +382,12 @@ export function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: stri
     creator: coin.creator,
   };
 }
+
+/**
+ * Recorded launchpads a LaunchLab platform's own name replaces: the generic LaunchLab, and the raw
+ * spellings a row could take before they were mapped (2026-11-11).
+ */
+const UNREFINED_LAUNCHLAB = [LAUNCHLAB_LAUNCHPAD, "raydium-launchlab", "letsbonk.fun", "stonkfun"];
 
 /** How often a live mint's lastLiveAt/lastMcapUsd is rewritten - see liveStampDue. */
 const LIVE_STAMP_THROTTLE_SECONDS = 120;
@@ -606,14 +614,25 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
   await recordCreators(valid.flatMap((c) => (c.creator ? [[c.mintAddress, c.creator] as const] : [])));
 
   // The launchpad for mints already on the table that a source names now (a coin first found on
-  // DexScreener's feeds, which never say). Settles to zero rows once every such mint has one.
+  // DexScreener's feeds, which never say). A LaunchLab platform a source names (Float, Stonks,
+  // Bonk) also replaces the generic LaunchLab, and the raw spellings rows took before 2026-11-11
+  // (UNREFINED_LAUNCHLAB). Settles to zero rows once every such mint has one.
   const byLaunchpad = new Map<string, string[]>();
   for (const c of valid) {
     if (c.launchpad) byLaunchpad.set(c.launchpad, [...(byLaunchpad.get(c.launchpad) ?? []), c.mintAddress]);
   }
   for (const [launchpad, mints] of byLaunchpad) {
+    const refinable = isLaunchLabLaunchpad(launchpad)
+      ? UNREFINED_LAUNCHLAB.filter((recorded) => recorded !== launchpad)
+      : [];
     await prisma.token
-      .updateMany({ where: { mintAddress: { in: mints }, launchpad: null }, data: { launchpad } })
+      .updateMany({
+        where: {
+          mintAddress: { in: mints },
+          OR: [{ launchpad: null }, ...(refinable.length > 0 ? [{ launchpad: { in: refinable } }] : [])],
+        },
+        data: { launchpad },
+      })
       .catch((err) => logger.warn("failed to record launchpads", { error: String(err) }));
   }
 

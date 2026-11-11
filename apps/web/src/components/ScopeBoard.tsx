@@ -1,3 +1,4 @@
+import { LaunchpadPill } from "../launchpadPill";
 import { SectionBoundary } from "./SectionBoundary";
 import { ScopeRowSkeletons } from "./Skeleton";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -811,6 +812,7 @@ export const ScopeRow = memo(function ScopeRow({
               </button>
             )}
             <QuotePill token={card.token} className="scope-quote" />
+            <LaunchpadPill token={card.token} className="scope-launchpad" />
             {/* Beside the ticker, where the Dex pill was (user ask 2026-10-22). */}
             {d.showSearch && (
               <CardSearchButton

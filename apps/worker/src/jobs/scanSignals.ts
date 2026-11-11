@@ -11,7 +11,7 @@ import {
   coinWalletRisk,
   coinWalletWins,
   isCurveVenue,
-  STONKS_LAUNCHPAD,
+  isLaunchLabLaunchpad,
   type Env,
   type RugCheckProfile,
   type PumpLaunchResult,
@@ -88,7 +88,7 @@ export function secondLookDue(
  * A chain reading in `onChainHolders` for a coin RugCheck has a report for replaces the report's
  * holder figures (core's withChainHolders): the screen's holder cuts read who holds the coin now.
  *
- * A Stonks coin in `stonksPoolLocks` had its Raydium pool's LP read burned or locked on chain
+ * A LaunchLab coin in `stonksPoolLocks` had its Raydium pool's LP read burned or locked on chain
  * (stonksPoolLock.ts), the reading RugCheck has none of for a pool it doesn't list.
  */
 export function buildOnChainProfile(
@@ -116,15 +116,15 @@ export function buildOnChainProfile(
 }
 
 /**
- * Whether a candidate's pool LP is read from the chain (stonksPoolLock.ts): a Stonks coin
- * graduated onto Raydium whose RugCheck report lists none of its LaunchLab markets, or that has no
+ * Whether a candidate's pool LP is read from the chain (stonksPoolLock.ts): a LaunchLab coin
+ * (Stonks, Float, Bonk...) graduated onto Raydium whose RugCheck report lists none of its LaunchLab markets, or that has no
  * report. With a LaunchLab market listed, RugCheck's reading of it stands. Exported for tests.
  */
 export function needsStonksPoolLockRead(
   candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
   rugProfiles: Map<string, RugCheckProfile>,
 ): boolean {
-  if (candidate.launchpad !== STONKS_LAUNCHPAD || candidate.dexId !== "raydium" || !candidate.pairAddress)
+  if (!isLaunchLabLaunchpad(candidate.launchpad) || candidate.dexId !== "raydium" || !candidate.pairAddress)
     return false;
   const report = rugProfiles.get(candidate.mintAddress);
   return !report || (report.launchLabLpBurned === undefined && !report.lpBurned);
@@ -156,10 +156,10 @@ function profileFromSources(
       withChainHolders(rugProfile, onChainHolders.get(mintAddress)),
       candidate.pairAddress,
     );
-    // A Stonks coin's LP is judged on its LaunchLab markets alone, as a Pump.fun coin's is on its
-    // own (rugcheck.ts launchLabLpBurned): side pools others open aren't its holders' exit.
+    // A LaunchLab coin's LP is judged on its LaunchLab markets alone, as a Pump.fun coin's is on
+    // its own (rugcheck.ts launchLabLpBurned): side pools others open aren't its holders' exit.
     const profile =
-      candidate.launchpad === STONKS_LAUNCHPAD && rugProfile.launchLabLpBurned !== undefined
+      isLaunchLabLaunchpad(candidate.launchpad) && rugProfile.launchLabLpBurned !== undefined
         ? { ...venueless, lpBurned: rugProfile.launchLabLpBurned }
         : venueless;
     // A report listing no market at all hasn't read the LP: a Pump.fun venue's is locked by the
@@ -284,8 +284,8 @@ export function freshGraduatesOverCut(
 }
 
 /**
- * A launchpad's bonding curve (Pump.fun's, or Stonks' LaunchLab curve) or the PumpSwap pool a
- * Pump.fun coin graduates into: liquidity nobody can pull. A Stonks coin's Raydium pool is not
+ * A launchpad's bonding curve (Pump.fun's, or a LaunchLab curve) or the PumpSwap pool a
+ * Pump.fun coin graduates into: liquidity nobody can pull. A LaunchLab coin's Raydium pool is not
  * assumed locked: its LP is RugCheck's to report, or the chain's (stonksPoolLock.ts).
  */
 export function pumpVenue(dexId: string | undefined): boolean {

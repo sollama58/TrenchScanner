@@ -966,10 +966,11 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  // A Meteora DBC or Raydium LaunchLab curve keeps its created time, and a trading one is the
-  // pair ahead of a deeper side pool. Off (the default): those venues are not a clock, which is
-  // what shipped on 2026-10-21. On changes the price and the pair age of those coins, so which
-  // alerts fire (review 2026-10-21). An owner decision.
+  // A Meteora DBC curve keeps its created time, and a trading one is the pair ahead of a deeper
+  // side pool. Off (the default): that venue is not a clock, which is what shipped on 2026-10-21.
+  // On changes the price and the pair age of those coins, so which alerts fire (review
+  // 2026-10-21). An owner decision. A Raydium LaunchLab curve is a curve and a clock either way
+  // since 2026-11-11 (user ask: Float and every other LaunchLab launchpad read as Stonks do).
   LAUNCH_HOME_CLOCK: z
     .enum(["true", "false"])
     .default("false")
@@ -1047,6 +1048,14 @@ const envSchema = z.object({
   // changed on 74% of days, lost 3.8 points from the record that earned it to the next day and did
   // worse than a fixed seat; 21 seats at one true rate would show a 29.7% best by chance.
   CURATOR_CHAMPION_RULE: z.enum(["score", "lower-bound"]).default("score"),
+  // How a card decides to quote the call's own rank band as its odds (curation/liveRankRates.ts
+  // servedRate). "band" (the default, what shipped 2026-11-02): the band's measured 2x rate from
+  // CARD_BAND_MIN_PCT up. "lower-bound": that, at least 200 graded moments in the band, and the
+  // band's 95% lower bound above the seat's pooled called rate; otherwise the card quotes the pooled
+  // rate and the call is standard tier. Owner decision 2026-11-11 (model system audit 2026-11-07,
+  // assumption 7): the ≥35% bands claimed 37-42% and realised 27-35% on the holdout week, and the
+  // per-call rate had no skill within a seat. The FDSA screen's calibratedPct is untouched.
+  CARD_RATE_RULE: z.enum(["band", "lower-bound"]).default("band"),
   // The training run's guard (curation/runGuard.ts): a run that would ship broken weights, train on
   // under half the rows the running models saw, or silence every seat that was calling is held
   // back and the running models kept. A held run is let through once the running models are this

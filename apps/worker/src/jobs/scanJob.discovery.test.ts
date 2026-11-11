@@ -101,6 +101,9 @@ describe("a fresh graduate's own pool in its RugCheck holders", () => {
     const listed = new Map([["Fresh", { ...profile(20), lpBurned: false, launchLabLpBurned: false }]]);
     expect(needsStonksPoolLockRead(stonks, listed)).toBe(false);
     expect(needsStonksPoolLockRead({ ...stonks, launchpad: "pumpfun" }, sidePoolsOnly)).toBe(false);
+    // Every LaunchLab launchpad graduates the same way (Float's coins into NVDAx pools, 2026-11-11).
+    expect(needsStonksPoolLockRead({ ...stonks, launchpad: "float" }, sidePoolsOnly)).toBe(true);
+    expect(needsStonksPoolLockRead({ ...stonks, launchpad: "launchlab" }, sidePoolsOnly)).toBe(true);
     expect(needsStonksPoolLockRead({ ...stonks, dexId: "stonkfun" }, sidePoolsOnly)).toBe(false);
     expect(needsStonksPoolLockRead(stonks, new Map())).toBe(true);
   });
