@@ -76,6 +76,7 @@ export const OPS_READS: readonly string[] = [
   "/fdsa/positions",
   "/fdsa/record",
   "/fdsa/reviews",
+  "/fdsa/lab",
 ];
 
 const OPS_PREFIX = "/stats/ops";

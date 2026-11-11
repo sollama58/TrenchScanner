@@ -412,6 +412,17 @@ export async function registerFdsaRoutes(app: FastifyInstance, { env }: { env: E
     return fdsaRecord(parsed.data.days);
   });
 
+  /**
+   * The exit lab's latest report (worker's fdsaExitLabJob.ts): the tuned plan and every baseline,
+   * as the run's heartbeat meta holds them. The worker report (/worker) keeps only a run's numbers
+   * and flags, so the summaries and plans are read here. Null before the lab's first run.
+   */
+  app.get("/lab", async () => {
+    const row = await prisma.systemHeartbeat.findUnique({ where: { job: "fdsa-exit-lab" } });
+    if (!row) return { ranAt: null, report: null };
+    return { ranAt: row.lastRunAt, lastError: row.lastError, report: row.meta ?? null };
+  });
+
   /** The latest reviews, passes included, with the model's reasoning (stored text, shown as text). */
   app.get("/reviews", async (request, reply) => {
     const parsed = reviewsSchema.safeParse(request.query);

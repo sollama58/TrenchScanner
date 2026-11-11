@@ -128,6 +128,7 @@ describe.skipIf(!dbAvailable)("/stats/ops", () => {
     "/stats/ops/curator/retrain",
     "/stats/ops/fdsa",
     "/stats/ops/fdsa/reviews",
+    "/stats/ops/fdsa/lab",
     "/stats/ops/api-usage",
   ])("%s answers the token", async (url) => {
     const res = await get(url);
