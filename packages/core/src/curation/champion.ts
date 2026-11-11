@@ -7,6 +7,7 @@ import { TOP_MODELS_GRADE_LAG_MINUTES, TOP_MODELS_RANK_WINDOW_HOURS } from "./to
 import type { Env } from "../config/env.js";
 import type { PrecisionTargets } from "./trainer.js";
 import { defaultContestant, NEVER_EMIT_THRESHOLD, type StoredEvalMetrics } from "./trainingRun.js";
+import { wilsonLowerBound } from "../wilson.js";
 
 /**
  * The default model: the leaderboard's best performer, re-chosen after every training run.
@@ -36,14 +37,62 @@ import { defaultContestant, NEVER_EMIT_THRESHOLD, type StoredEvalMetrics } from 
  *  - a challenger has to beat the sitting champion's lower bound by `margin` percentage points.
  * Until some model qualifies, the default stays on the old rule: the consensus once it can call,
  * else Rules (defaultContestant).
+ *
+ * The "lower-bound" rule (CURATOR_CHAMPION_RULE, owner decision 2026-11-11): the Wilson lower
+ * bound of the 2x rate over the last CHAMPION_LOWER_BOUND_WINDOW_HOURS with at least
+ * CHAMPION_LOWER_BOUND_MIN_GRADED graded calls, the margin in points of that bound, and no "best"
+ * badge (showsBestModel). The model system audit of 2026-11-07 (assumption 6) replayed the 72-hour
+ * rule day by day: the pick changed on 74% of days, its record fell 3.8 points from the window
+ * that earned it to the next day, and "always sharp-trees" did better; with 21 seats at one true
+ * rate and 150 graded calls each, the best-looking one shows 29.7% by chance. A 7-day bound on
+ * 400 calls reads the one persistent edge instead of the sample.
  */
 
-/** The live window the champion is judged on - the Default trio's ranking window. */
+/** The live window the champion is judged on under the score rule - the Default trio's ranking window. */
 export const CHAMPION_WINDOW_HOURS = TOP_MODELS_RANK_WINDOW_HOURS;
+/** The lower-bound rule's window, floor and interval (95%). */
+export const CHAMPION_LOWER_BOUND_WINDOW_HOURS = 7 * 24;
+export const CHAMPION_LOWER_BOUND_MIN_GRADED = 400;
+export const CHAMPION_LOWER_BOUND_Z = 1.96;
+
+export type ChampionRule = "score" | "lower-bound";
 
 export interface ChampionRules {
   minLiveGraded: number;
   margin: number;
+  /** How standings are ranked; "score" when absent. */
+  rule?: ChampionRule;
+}
+
+/** The champion rules the env sets: the score rule's knobs, or the lower-bound rule's fixed ones. */
+export function championRules(
+  env: Pick<Env, "CURATOR_CHAMPION_RULE" | "CURATOR_CHAMPION_MIN_LIVE_GRADED" | "CURATOR_CHAMPION_MARGIN">,
+): ChampionRules {
+  if (env.CURATOR_CHAMPION_RULE === "lower-bound") {
+    return {
+      rule: "lower-bound",
+      minLiveGraded: CHAMPION_LOWER_BOUND_MIN_GRADED,
+      margin: env.CURATOR_CHAMPION_MARGIN,
+    };
+  }
+  return {
+    rule: "score",
+    minLiveGraded: env.CURATOR_CHAMPION_MIN_LIVE_GRADED,
+    margin: env.CURATOR_CHAMPION_MARGIN,
+  };
+}
+
+/** The window a rule judges on. */
+export function championWindowHours(rule: ChampionRule | undefined): number {
+  return rule === "lower-bound" ? CHAMPION_LOWER_BOUND_WINDOW_HOURS : CHAMPION_WINDOW_HOURS;
+}
+
+/**
+ * Whether the board marks a "best" model (contest.ts, feedModels.ts). Under the lower-bound rule
+ * it does not: the badge is the 24-hour best score, which flips between close seats daily.
+ */
+export function showsBestModel(env: Pick<Env, "CURATOR_CHAMPION_RULE">): boolean {
+  return env.CURATOR_CHAMPION_RULE !== "lower-bound";
 }
 
 export interface ChampionStanding {
@@ -56,6 +105,8 @@ export interface ChampionStanding {
   wins: number;
   /** The live record's full-scorecard score (recordScore); null with nothing graded. */
   score: number | null;
+  /** The Wilson lower bound of the 2x rate, in percent (CHAMPION_LOWER_BOUND_Z); null with nothing graded. */
+  lowerBound?: number | null;
 }
 
 export interface ChampionPick {
@@ -80,7 +131,9 @@ export function pickChampion(
       reason: `No model has ${rules.minLiveGraded} graded live alerts yet, so the default stays on ${nameOf(fallback)}.`,
     };
   }
-  const pct = (s: ChampionStanding) => s.score ?? 0;
+  const lowerBound = rules.rule === "lower-bound";
+  const pct = (s: ChampionStanding) => (lowerBound ? (s.lowerBound ?? 0) : (s.score ?? 0));
+  const what = lowerBound ? "2x lower bound" : "score";
   const top = [...eligible].sort(
     (a, b) => pct(b) - pct(a) || b.graded - a.graded || a.id.localeCompare(b.id),
   )[0]!;
@@ -91,17 +144,27 @@ export function pickChampion(
       id: held.id,
       qualified: true,
       reason:
-        `${held.name} keeps the default: ${top.name}'s score leads by ${(pct(top) - pct(held)).toFixed(1)} ` +
+        `${held.name} keeps the default: ${top.name}'s ${what} leads by ${(pct(top) - pct(held)).toFixed(1)} ` +
         `points, under the ${rules.margin}-point margin a challenger needs.`,
     };
   }
+  const hours = championWindowHours(rules.rule);
   return {
     id: top.id,
     qualified: true,
-    reason:
-      `Best score on the full scorecard (${pct(top).toFixed(1)}, ${top.wins} of ${top.graded} doubled) over the last ` +
-      `${CHAMPION_WINDOW_HOURS} hours among models with at least ${rules.minLiveGraded} graded live alerts.`,
+    reason: lowerBound
+      ? `Highest 2x lower bound (${pct(top).toFixed(1)}%, ${top.wins} of ${top.graded} doubled) over the last ` +
+        `${hours / 24} days among models with at least ${rules.minLiveGraded} graded live alerts.`
+      : `Best score on the full scorecard (${pct(top).toFixed(1)}, ${top.wins} of ${top.graded} doubled) over the last ` +
+        `${hours} hours among models with at least ${rules.minLiveGraded} graded live alerts.`,
   };
+}
+
+/** The lower-bound rule's ranking key: the 2x rate's Wilson lower bound in percent, null with nothing graded. */
+export function standingLowerBound(record: { wins: number; graded: number }): number | null {
+  return record.graded > 0
+    ? wilsonLowerBound(record.wins, record.graded, CHAMPION_LOWER_BOUND_Z) * 100
+    : null;
 }
 
 /**
@@ -194,7 +257,7 @@ export async function rechooseChampion(input: {
   const ids = input.roster.map((c) => c.id);
   // Ending the grade lag before now, so every call in the window has been graded.
   const until = new Date(now.getTime() - TOP_MODELS_GRADE_LAG_MINUTES * 60_000);
-  const since = new Date(until.getTime() - CHAMPION_WINDOW_HOURS * 3_600_000);
+  const since = new Date(until.getTime() - championWindowHours(input.rules.rule) * 3_600_000);
   const [current, live, incumbent, catches] = await Promise.all([
     activeModelCutoffs(ids),
     liveCallRecords(ids, since, input.lanes, { until }),
@@ -221,6 +284,7 @@ export async function rechooseChampion(input: {
         withLiveCatch(live.get(spec.id) ?? emptyRecord(), catches.byModel.get(spec.id)),
         input.targets,
       ),
+      lowerBound: standingLowerBound(live.get(spec.id) ?? emptyRecord()),
     };
   });
   const consensusEnabled = ids.includes(CONSENSUS_CONTESTANT);
@@ -236,9 +300,10 @@ export async function rechooseChampion(input: {
     data: {
       contestant: pick.id,
       name: chosen?.name ?? pick.id,
-      // The live score it was chosen on (the 2x lower bound in percent 2026-10-14..17, the
-      // pooled composite before).
-      score: chosen?.score ?? null,
+      // The live figure it was chosen on: the scorecard score, or under the lower-bound rule the 2x
+      // lower bound in percent (as 2026-10-14..17; the pooled composite before that).
+      score:
+        (pick.qualified && input.rules.rule === "lower-bound" ? chosen?.lowerBound : chosen?.score) ?? null,
       liveGraded: chosen?.graded ?? 0,
       previous: incumbent?.contestant ?? null,
       reason: pick.reason,
