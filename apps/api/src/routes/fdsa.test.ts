@@ -187,6 +187,7 @@ describe.skipIf(!dbAvailable)("FDSA routes", () => {
       ["GET", "/admin/fdsa/positions"],
       ["GET", "/admin/fdsa/record"],
       ["GET", "/admin/fdsa/reviews"],
+      ["GET", "/admin/fdsa/lab"],
     ];
     for (const [method, url, body] of routes) {
       expect((await call(method, url, "other", body)).statusCode, `${method} ${url}`).toBe(403);
@@ -410,6 +411,22 @@ describe.skipIf(!dbAvailable)("FDSA routes", () => {
       hit2x: true,
       ladderReturnPct: 40,
     });
+  });
+
+  it("serves the exit lab's whole report, which the worker report cuts to its numbers", async () => {
+    const meta = { trainTrades: 20, tunedTest: { meanReturnPct: 4.2 }, tunedPlan: "{}" };
+    await prisma.systemHeartbeat.upsert({
+      where: { job: "fdsa-exit-lab" },
+      create: { job: "fdsa-exit-lab", lastRunAt: new Date(), meta },
+      update: { lastRunAt: new Date(), meta, lastError: null },
+    });
+    try {
+      const res = await call("GET", "/admin/fdsa/lab", "admin");
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().report).toEqual(meta);
+    } finally {
+      await prisma.systemHeartbeat.delete({ where: { job: "fdsa-exit-lab" } });
+    }
   });
 
   it("reports the record on trades, verdicts and passes with samples, the pool and the ladder", async () => {
