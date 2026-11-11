@@ -16,6 +16,7 @@ import {
   liveCallRecords,
   liveCatchRates,
   loadCurrentLanes,
+  championRules,
   rechooseChampion,
   seededRng,
   withLanes,
@@ -699,7 +700,7 @@ export async function rechooseDefaultModel(
   const { champion, changed, pick } = await rechooseChampion({
     roster: withPassMark(roster, new Set(benched)),
     lanes,
-    rules: { minLiveGraded: env.CURATOR_CHAMPION_MIN_LIVE_GRADED, margin: env.CURATOR_CHAMPION_MARGIN },
+    rules: championRules(env),
     targets: curatedTargets(env),
   });
   logger.info(changed ? "default model re-chosen" : "default model unchanged", {

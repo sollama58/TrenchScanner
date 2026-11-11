@@ -63,6 +63,7 @@ import {
   type ModelProfile,
   modelProfile,
   shownLaneName,
+  showsBestModel,
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
 import { baselineRates, type GradedRates } from "./routes/stats.js";
@@ -202,7 +203,7 @@ export function contestState(env: Env): Promise<ContestState> {
       champion,
       defaultModel,
       defaultModels: resolveDefaultModels(top, defaultModel, champion?.contestant ?? null),
-      bestModel: best,
+      bestModel: showsBestModel(env) ? best : null,
       last24h,
     };
   });
