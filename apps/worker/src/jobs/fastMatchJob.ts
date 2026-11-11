@@ -4,6 +4,7 @@ import {
   createLogger,
   buildScoredToken,
   launchpadFromVenue,
+  bestLaunchpad,
   scoreToken,
   refreshScoreWeights,
   forEachWithConcurrency,
@@ -320,8 +321,12 @@ export async function runFastMatchCycle(
     const onChain = profileFromSnapshot(candidate.mintAddress, entry.snapshot);
     if (!onChain) return;
 
-    // DexScreener's pair doesn't say where a graduated Stonks coin came from; the scan did.
-    const launchpad = entry.token.launchpad ?? launchpadFromVenue(candidate.dexId);
+    // DexScreener's pair doesn't say where a graduated LaunchLab coin came from; the scan did.
+    const launchpad = bestLaunchpad(
+      entry.token.launchpad,
+      candidate.launchpad,
+      launchpadFromVenue(candidate.dexId),
+    );
     const scored = buildScoredToken(launchpad ? { ...candidate, launchpad } : candidate, onChain, {
       // The earlier of the two, as the scan does: a graduated token's canonical pair is its
       // PumpSwap pool, created at graduation, not at launch. A junk pool leaves pairCreatedAt

@@ -398,7 +398,8 @@ describe("pair clock", () => {
   it("keeps a Meteora DBC or LaunchLab curve's age when that curve is the pair", () => {
     const at = Date.parse("2026-10-21T12:00:00Z");
     expect(canonicalPairCreatedAt("meteoradbc", at)).toBeUndefined();
-    expect(canonicalPairCreatedAt("launchlab", at)).toBeUndefined();
+    // A LaunchLab curve is the coin's home with the flag off too (2026-11-11), as Stonks' was.
+    expect(canonicalPairCreatedAt("launchlab", at)).toEqual(new Date(at));
     expect(canonicalPairCreatedAt("meteoradbc", at, true)).toEqual(new Date(at));
     expect(canonicalPairCreatedAt("launchlab", at, true)).toEqual(new Date(at));
     expect(canonicalPairCreatedAt("meteora", at, true)).toBeUndefined();
@@ -1265,6 +1266,11 @@ describe("parseGeckoTokens", () => {
     const off = parseGeckoTokens(body, new Set([mint]));
     expect(off[0]?.dexId).not.toBe("meteoradbc");
     expect(off[0]?.pairCreatedAt).toBeUndefined();
+    // A trading LaunchLab curve is the pair with the flag off too (2026-11-11): folded into
+    // "raydium", it read a Float coin on its curve as graduated beside its later CPMM pool.
+    const labOff = parseGeckoTokens(body, new Set(["labMint"]))[0];
+    expect(labOff).toMatchObject({ dexId: "launchlab", pairAddress: "lab-pool", liquidityUsd: undefined });
+    expect(labOff?.pairCreatedAt?.toISOString()).toBe("2026-10-21T12:30:00.000Z");
     const by = new Map(
       parseGeckoTokens(body, new Set([mint, "labMint"]), true).map((t) => [t.mintAddress, t]),
     );

@@ -217,6 +217,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
     title: "Header",
     fields: [
       { id: "tokenName", label: "Token name" },
+      { id: "launchpad", label: "Launchpad (Pump.fun, Stonks, Float...)" },
       { id: "time", label: "Time since alert" },
       { id: "modelPill", label: "Model and confidence" },
       { id: "conviction", label: "High conviction" },

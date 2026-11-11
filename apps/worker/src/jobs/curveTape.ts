@@ -1,7 +1,7 @@
 import {
   CurveTape,
   EMPTY_CURVE_PATH,
-  STONKS_LAUNCHPAD,
+  isLaunchLabLaunchpad,
   WRAPPED_SOL_MINT,
   createLogger,
   decodeCurve,
@@ -49,12 +49,13 @@ const logger = createLogger("curve-tape");
  * graduated, whichever is later. Its changes go on a tape of their own (the curve's features and
  * prices stay the curve's), which the chart's candle writer saves as "pool" bars (curveCandles.ts).
  *
- * Stonks coins are followed the same way, for the chart only (user report 2026-10-25: their
- * charts and prices trailed Pump.fun's, with no 1-second bars stored at all). A Stonks coin's curve
+ * LaunchLab coins (Stonks since 2026-10-25, Float, Bonk and every other LaunchLab launchpad since
+ * 2026-11-11) are followed the same way, for the chart only (user report 2026-10-25: their charts
+ * and prices trailed Pump.fun's, with no 1-second bars stored at all). A LaunchLab coin's curve
  * is its Raydium LaunchLab pool, found once per coin (findLaunchLabPool: its address on the likely
  * quotes, else a program scan) and then streamed and read as a Pump.fun curve is. Its ticks feed
  * the chart's candles alone: the scoring features, the labels, the entry watch and the price path
- * recorder read Pump.fun curves only, as they were trained and graded. A graduated Stonks coin is
+ * recorder read Pump.fun curves only, as they were trained and graded. A graduated LaunchLab coin is
  * let go (its Raydium pool is not followed here).
  */
 
@@ -144,7 +145,7 @@ export interface CurveTapeConfig {
    */
   screenLaunches?: (mints: string[]) => Promise<string[]>;
   /**
-   * A Stonks coin's LaunchLab curve was read and is quoted in `quoteMint` (wrapped SOL for SOL):
+   * A LaunchLab coin's LaunchLab curve was read and is quoted in `quoteMint` (wrapped SOL for SOL):
    * the worker records it on the Token where none is, so the minute backfill finds the curve's
    * pool (core's poolsOf).
    */
@@ -167,7 +168,7 @@ interface Followed {
   pathSaved?: boolean;
   /** Reads in a row that found no curve account (round): a brand-new coin's is given a moment to confirm. */
   misses?: number;
-  /** `curve` is a Stonks coin's LaunchLab pool: followed for the chart's candles only. */
+  /** `curve` is a LaunchLab coin's LaunchLab pool: followed for the chart's candles only. */
   launchLab?: boolean;
   /** When the stream last delivered an update for it (ms epoch). */
   deliveredAt?: number;
@@ -251,13 +252,13 @@ const done = new Set<string>();
 const MAX_DONE = 20_000;
 /** Mints whose PumpSwap pool was asked for POOL_MISS_LIMIT rounds and never appeared. */
 const noPool = new Set<string>();
-/** Each Stonks coin's LaunchLab pool once looked for (null: it has none), so a coin is sought once. */
+/** Each LaunchLab coin's LaunchLab pool once looked for (null: it has none), so a coin is sought once. */
 const launchLabPools = new Map<string, string | null>();
-/** Stonks coins let go as done (graduated, or their pool emptied): not followed again. */
+/** LaunchLab coins let go as done (graduated, or their pool emptied): not followed again. */
 const launchLabDone = new Set<string>();
-/** The Stonks coins followYoungCurves wants whose pool is not known yet, sought in the next round. */
+/** The LaunchLab coins followYoungCurves wants whose pool is not known yet, sought in the next round. */
 let launchLabWanted = new Map<string, { rank: number; bornAt: number; until: number }>();
-/** Stonks coins whose quote was handed to onLaunchLabQuote. */
+/** LaunchLab coins whose quote was handed to onLaunchLabQuote. */
 const quoteNoted = new Set<string>();
 /** LaunchLab pool lookups a round makes at most (1 credit each, ~10 more when one needs the scan). */
 export const LAUNCHLAB_FINDS_PER_ROUND = 4;
@@ -455,7 +456,7 @@ function graduate(mint: string, state: CurveState, now: number): void {
   // The emptied curve may not say what it was quoted in any more: the tape held it.
   const quoteIsSol = tape.ticksAfter(mint, Infinity)?.quoteIsSol ?? state.quoteIsSol;
   drop(mint, true);
-  // A Stonks coin graduates into a Raydium CPMM pool, not PumpSwap: let go.
+  // A LaunchLab coin graduates into a Raydium CPMM pool, not PumpSwap: let go.
   if (f?.launchLab) return;
   if (!f || !cfg || !quoteIsSol || !reader?.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
   // The curve just completed: its pool is about to exist, whatever an earlier ask found.
@@ -617,7 +618,7 @@ export function followYoungCurves(
   for (const { coin: t, isAsked } of all) {
     if (wanted.size >= cfg.maxMints) break;
     if (wanted.has(t.mintAddress)) continue;
-    const launchLab = t.launchpad === STONKS_LAUNCHPAD;
+    const launchLab = isLaunchLabLaunchpad(t.launchpad);
     if (launchLab && (launchLabDone.has(t.mintAddress) || launchLabPools.get(t.mintAddress) === null))
       continue;
     const bornAt = (t.launchedAt ?? t.firstSeenAt).getTime();
@@ -645,7 +646,7 @@ export function followYoungCurves(
   for (const [mint, f] of followed) {
     if (held.has(mint)) continue;
     const w = wanted.get(mint);
-    // A Stonks coin first followed as a new launch's Pump.fun curve is followed on its pool instead.
+    // A LaunchLab coin first followed as a new launch's Pump.fun curve is followed on its pool instead.
     if (!w || (w.launchLab && !f.launchLab)) drop(mint, false);
   }
   launchLabWanted = new Map();
@@ -804,7 +805,7 @@ export function curvePriceOf(mint: string, now = Date.now()): number | null {
  */
 export function curveLabelPrices(mint: string, afterMs: number, untilMs: number) {
   const f = followed.get(mint);
-  // Stonks curves are followed for the chart alone: the labels stay on what they were graded on.
+  // LaunchLab curves are followed for the chart alone: the labels stay on what they were graded on.
   if (f?.launchLab) return tape.labelPrices(mint, afterMs, afterMs);
   const until = f && cfg ? Math.min(untilMs, f.bornAt + cfg.maxAgeMinutes * 60_000) : untilMs;
   return tape.labelPrices(mint, afterMs, Math.max(afterMs, until));
@@ -866,7 +867,7 @@ function drop(mint: string, forGood: boolean): void {
 }
 
 /**
- * Looks for the LaunchLab pools of the Stonks coins followYoungCurves wants (the nearest the band
+ * Looks for the LaunchLab pools of the LaunchLab coins (Stonks, Float...) followYoungCurves wants (the nearest the band
  * first, LAUNCHLAB_FINDS_PER_ROUND a round), and follows each one found from this round's reads.
  */
 async function launchLabRound(now: number): Promise<void> {

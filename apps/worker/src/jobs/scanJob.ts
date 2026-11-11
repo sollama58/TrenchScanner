@@ -31,8 +31,9 @@ import {
   type FreshQuote,
   walletChecksKnown,
   launchpadFromVenue,
+  bestLaunchpad,
   PUMPFUN_LAUNCHPAD,
-  STONKS_LAUNCHPAD,
+  isLaunchLabLaunchpad,
   withLaunchBags,
   withWindowFlow,
   forEachWithConcurrency,
@@ -1026,8 +1027,8 @@ function startLinkedWalletStage(
  * was watched is the live figure and stands; a tape read up to five minutes old stands in for
  * one that wasn't, and without either the fields stay unknown (null, never 0).
  *
- * A coin the stream never carries (`streamless`: a Stonks coin, on Raydium's LaunchLab and CPMM
- * pool) reads from the tape alone - its stream window, if the book was ever asked, would read an
+ * A coin the stream never carries (`streamless`: a LaunchLab coin - Stonks, Float... - on Raydium's
+ * LaunchLab and CPMM pool) reads from the tape alone - its stream window, if the book was ever asked, would read an
  * empty five minutes as a dead coin.
  */
 export function withTapeWindow(
@@ -2027,7 +2028,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
     deps.pumpLaunchBackups,
   );
   lap("pumpLaunch");
-  // A graduated Stonks coin whose pool RugCheck doesn't list (one paired with a tokenized stock)
+  // A graduated LaunchLab coin whose pool RugCheck doesn't list (one paired with a tokenized stock)
   // has its pool's LP lock read from the chain instead (stonksPoolLock.ts).
   const stonksPoolLocks = await resolveStonksPoolLocks(
     candidates.flatMap((c) =>
@@ -2488,8 +2489,11 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   pruneSniperWaits(Date.now());
   // Every candidate's trades get followed from here on (a no-op for ones already tracked) - the
   // order-flow features need a few minutes of watching before they say anything.
-  // Stonks coins' trades never come through PumpPortal (their flow is read off the live tape).
-  deps.stream?.watch?.(candidates.filter((c) => c.launchpad !== STONKS_LAUNCHPAD).map((c) => c.mintAddress));
+  // LaunchLab coins' trades (Stonks, Float...) never come through PumpPortal (their flow is read
+  // off the live tape).
+  deps.stream?.watch?.(
+    candidates.filter((c) => !isLaunchLabLaunchpad(c.launchpad)).map((c) => c.mintAddress),
+  );
   // What every decision reads besides its own coin's readings, loaded once for the pass: the
   // priors, and one reading of the market for the whole cycle - the same context on every sample.
   // A fast scan takes the last cycle's band count, not its own one coin, so its row reads the
@@ -3615,8 +3619,12 @@ async function processCandidate(
       // Re-scans come from DexScreener, which carries neither of these; discovery stored them.
       description: candidate.description ?? existingToken?.description ?? undefined,
       dexBoosted: existingToken ? existingToken.dexBoosted : undefined,
-      // Recorded at discovery; a graduated Stonks coin's Raydium pool doesn't say.
-      launchpad: existingToken?.launchpad ?? candidate.launchpad ?? launchpadFromVenue(candidate.dexId),
+      // Recorded at discovery; a graduated LaunchLab coin's Raydium pool doesn't say.
+      launchpad: bestLaunchpad(
+        existingToken?.launchpad,
+        candidate.launchpad,
+        launchpadFromVenue(candidate.dexId),
+      ),
       // Socials too: DexScreener reports them for almost nothing in this band, while the Token
       // row keeps what Pump.fun's metadata said at discovery (tokenChanges keeps them sticky).
       // Read from the candidate alone, hasTwitter was 0 on 204 of the 240 coins whose X post
@@ -3656,11 +3664,15 @@ async function processCandidate(
   );
   // The 5m order flow and the launch's bags off the live tape's chain trades wherever the stream
   // has none (withTapeWindow): on PumpPortal's free tier that is every coin, as the free stream
-  // delivers launches and graduations only (model audit 2026-10-26, §16). A Stonks coin's trades
-  // never come through PumpPortal at all. The bags need the coin's whole history on the page and
+  // delivers launches and graduations only (model audit 2026-10-26, §16). A LaunchLab coin's
+  // trades never come through PumpPortal at all. The bags need the coin's whole history on the page and
   // the creator wallet off the on-chain profile for the dev's; they fill only what is unknown.
   const flow = withLaunchBags(
-    withTapeWindow(tradeFlow, liveWindowFlowOf(candidate.mintAddress), scored.launchpad === STONKS_LAUNCHPAD),
+    withTapeWindow(
+      tradeFlow,
+      liveWindowFlowOf(candidate.mintAddress),
+      isLaunchLabLaunchpad(scored.launchpad),
+    ),
     liveLaunchBagsOf(candidate.mintAddress, (onChainProfile as { creator?: string } | null)?.creator),
   );
   if (flow) scored.tradeFlow = flow;

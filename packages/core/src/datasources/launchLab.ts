@@ -4,7 +4,7 @@ import { WRAPPED_SOL_MINT } from "../venueAccounts.js";
 import { findProgramAddress } from "../solana.js";
 
 /**
- * Raydium LaunchLab's bonding curve (Stonks launches: launchpads.ts), read for its price like a
+ * Raydium LaunchLab's bonding curve (Stonks, Float, Bonk launches: launchpads.ts), read for its price like a
  * Pump.fun curve (user ask 2026-10-18: 1-second charts for every fresh coin). A LaunchLab pool is
  * one account per coin and quote, holding its virtual and real reserves: the price is
  * (virtualQuote + realQuote) / (virtualBase - realBase), in base units. Its address is
@@ -14,12 +14,20 @@ import { findProgramAddress } from "../solana.js";
 
 export const LAUNCHLAB_PROGRAM = "LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj";
 /**
- * The quotes Stonks creators pick most (SOL, and stonk.fun's own STONK coin; seen 2026-10-25 on the
- * day's calls, beside PEPE and WETH): a coin's pool on one of them is found by its address alone,
- * one account read, before the program scan (findLaunchLabPool).
+ * The quotes LaunchLab creators pick most (SOL, stonk.fun's own STONK coin, Float's own FLOAT coin
+ * and USDC; seen 2026-10-25 on Stonks' calls beside PEPE and WETH, and 2026-11-11 over Float's
+ * 4,874 pools, a third of them quoted in a coin): a coin's pool on one of them is found by its
+ * address alone, one account read, before the program scan (findLaunchLabPool).
  */
 export const STONK_MINT = "6GmAFSYs4gk3FDao5FzzySQpPZaWsa4rUJHacpMpUNgx";
-export const LAUNCHLAB_LIKELY_QUOTES: readonly string[] = [WRAPPED_SOL_MINT, STONK_MINT];
+export const FLOAT_MINT = "Bv1a7cEj5aRnJQhMw4kRQqAFesMSd5LwcDnUzq52BMmr";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+export const LAUNCHLAB_LIKELY_QUOTES: readonly string[] = [
+  WRAPPED_SOL_MINT,
+  STONK_MINT,
+  FLOAT_MINT,
+  USDC_MINT,
+];
 
 /** The LaunchLab pool of `mint` against `quoteMint` (SOL by default), or undefined for a non-address. */
 export function launchLabPoolOf(mint: string, quoteMint: string = WRAPPED_SOL_MINT): string | undefined {
@@ -45,7 +53,10 @@ const VIRTUAL_BASE_OFFSET = 37;
 const VIRTUAL_QUOTE_OFFSET = 45;
 const REAL_BASE_OFFSET = 53;
 const REAL_QUOTE_OFFSET = 61;
-/** After fees, the vesting schedule and the two configs: the base and quote mints. */
+/**
+ * After the fees, the vesting schedule and the two configs (global, then the platform's, at 173:
+ * launchpads.ts tells Float, Stonks and Bonk apart by it): the base and quote mints.
+ */
 export const LAUNCHLAB_BASE_MINT_OFFSET = 205;
 const QUOTE_MINT_OFFSET = 237;
 /** How many bytes of the pool a reader needs: through the quote mint. */

@@ -5,14 +5,14 @@ import { FailureBackoff } from "./failureBackoff.js";
 const logger = createLogger("stonks-pool-lock");
 
 /**
- * Whether a graduated Stonks coin's Raydium CPMM pool has its LP burned or locked, read from the
+ * Whether a graduated LaunchLab coin's (Stonks, Float, Bonk...) Raydium CPMM pool has its LP burned or locked, read from the
  * chain (core's HeliusClient.getCpmmLpLockedBatch). RugCheck lists only SOL-quoted markets: a coin
  * whose curve was quoted in a tokenized stock graduates into a pool paired with that stock, which
  * RugCheck never lists, and the coin was judged on the Meteora side pools others opened in SOL -
  * 0% locked, so "LP not burned" (DER1K...WTsZ against SAMA4, 2026-10-19: its CPMM pool held 85%
  * of its liquidity, LP 100% in Raydium's lock).
  *
- * Asked only for a Stonks coin trading on Raydium whose RugCheck report lists no LaunchLab market
+ * Asked only for a LaunchLab coin trading on Raydium whose RugCheck report lists no LaunchLab market
  * (or that has no report). Locked LP stays locked, so a locked answer is held for the life of the
  * process; any other answer is read again after UNLOCKED_RECHECK_MINUTES, and a failed read is
  * backed off. Rate limits: a handful of RPC calls per pool, once per pool.

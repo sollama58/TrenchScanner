@@ -3,7 +3,7 @@ import {
   deriveGraduated,
   forEachWithConcurrency,
   isCurveVenue,
-  STONKS_LAUNCHPAD,
+  isLaunchLabLaunchpad,
   type DexScreenerClient,
   type Env,
   type PumpFunClient,
@@ -323,8 +323,9 @@ export function resolveLaunchTimes(
       continue;
     }
     // Only a graduated Pump.fun coin: on its curve the pair says, and Pump.fun has no answer for
-    // another launchpad's coin. A null in memory is Pump.fun's own "no such coin".
-    if (launched === null || deriveGraduated(c.dexId) !== true || c.launchpad === STONKS_LAUNCHPAD) continue;
+    // another launchpad's coin (a LaunchLab one: Stonks, Float, Bonk...). A null in memory is
+    // Pump.fun's own "no such coin".
+    if (launched === null || deriveGraduated(c.dexId) !== true || isLaunchLabLaunchpad(c.launchpad)) continue;
     if (launchLookupsInFlight.has(mint) || launchBackoff.blocked(mint, now)) continue;
     if (lookups.length >= env.LAUNCH_TIME_LOOKUPS_MAX_PER_CYCLE) continue;
     lookups.push(mint);

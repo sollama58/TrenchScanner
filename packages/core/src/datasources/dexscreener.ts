@@ -124,9 +124,10 @@ export interface DexScreenerClientOptions {
    */
   staleCheck?: StalePriceSource;
   /**
-   * Keep a Meteora DBC or Raydium LaunchLab curve's age, and price off that curve when it is the
-   * coin's home. Off (the default): those venues are not a clock and a deeper side pool can be
-   * the pair, which is what shipped on 2026-10-21. On is an owner decision (review 2026-10-21).
+   * Keep a Meteora DBC curve's age, and price off that curve when it is the coin's home. Off (the
+   * default): that venue is not a clock and a deeper side pool can be the pair, which is what
+   * shipped on 2026-10-21. On is an owner decision (review 2026-10-21). A Raydium LaunchLab curve
+   * is both either way since 2026-11-11 (launchpads.ts).
    */
   launchHomeClock?: boolean;
 }
@@ -1294,7 +1295,7 @@ const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;
  */
 const MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD = 250;
 
-/** Raydium is the graduation venue for older Pump.fun coins and for Stonks. */
+/** Raydium is the graduation venue for older Pump.fun coins and every LaunchLab coin. */
 function isRaydiumVenue(dexId: string | undefined): boolean {
   return typeof dexId === "string" && dexId.startsWith("raydium");
 }
@@ -1309,12 +1310,13 @@ function graduatesOntoRaydium(dexId: string | undefined): boolean {
 
 /**
  * Venues whose created time may be the pair clock: a launch's own bonding curve, PumpSwap
- * (Pump.fun's graduation pool), and Raydium (older Pump.fun graduations, Stonks, and LaunchLab
+ * (Pump.fun's graduation pool), and Raydium (older Pump.fun graduations, and every LaunchLab coin
  * after it bonds). A Meteora AMM, or any other side pool, is not one of these. (2026-10-21, user
- * ask: a Meteora DBC or Raydium LaunchLab curve that is the coin's real home keeps its age.)
+ * ask: a Meteora DBC or Raydium LaunchLab curve that is the coin's real home keeps its age; the
+ * LaunchLab curve always does since 2026-11-11, as Stonks' did, and DBC behind LAUNCH_HOME_CLOCK.)
  */
 export function isCanonicalClockVenue(dexId: string | undefined, launchHomeClock = false): boolean {
-  if (!launchHomeClock && (dexId === "meteoradbc" || dexId === "launchlab")) return false;
+  if (!launchHomeClock && dexId === "meteoradbc") return false;
   return isLaunchHomeCurve(dexId) || dexId === "pumpswap" || isRaydiumVenue(dexId);
 }
 
@@ -1475,6 +1477,6 @@ function toCandidateToken(pair: DexScreenerPair, launchHomeClock = false): Candi
  * indexed) means unknown, not "not graduated" - deliberately not assumed either way.
  */
 export function deriveGraduated(dexId: string | undefined): boolean | undefined {
-  // A Stonks coin's LaunchLab curve ("stonkfun") is a curve too (launchpads.ts).
+  // A LaunchLab curve ("stonkfun" for Stonks, "launchlab" for the rest) is a curve too (launchpads.ts).
   return dexId === undefined ? undefined : !isCurveVenue(dexId);
 }
