@@ -1126,6 +1126,25 @@ model CuratorChampion {
   @@index([chosenAt])
 }
 
+/// The pass mark for calling live (curation/passMark.ts): one row per seat, re-judged with the
+/// default model. A seat with calling false is benched: it scores and is banked, but sends nothing.
+model CuratorPassMark {
+  contestant    String   @id
+  calling       Boolean
+  /// The seat's graded would-be calls in the window and the clean 2x among them.
+  graded        Int
+  wins          Int
+  /// Every graded decision moment in the window and the clean 2x among them.
+  marketGraded  Int
+  marketWins    Int
+  liveLiftLower Float?
+  examLift      Float?
+  reason        String
+  judgedAt      DateTime
+  /// When calling last changed (first judged, for a seat never benched).
+  changedAt     DateTime
+}
+
 /// The default feed's top models for one refresh slot (TOP_MODELS_REFRESH_MINUTES in topModels.ts),
 /// picked once when the slot starts and held until the next one, so a restart or a training run in
 /// between can't reshuffle the feed (user decision 2026-10-12: every 6 hours). An empty list means
@@ -1299,6 +1318,10 @@ model CandidateOutcome {
   /// last 24 hours of these (curation/convictionLine.ts), so it follows the live score scale
   /// instead of a line drawn on the training rows. Null on other kinds and before 2026-10-14.
   seatScores     Json?
+  /// The seats whose own cutoff this moment cleared (["trees", ...], [] for none), written with
+  /// seatScores. Benched and tracking-only seats count too: it is the record the pass mark judges
+  /// a seat on, sent or not (curation/passMark.ts). Null before 2026-11-11.
+  seatCalls      Json?
 
   // ---- Watch state (driven by apps/worker/src/jobs/candidateOutcomeJob.ts) ----
   /// When the watcher should next price-check this row. Advances every tick whether or not

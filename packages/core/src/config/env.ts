@@ -1039,6 +1039,14 @@ const envSchema = z.object({
   // 2026-10-17 (user decision; was 1): a point is within noise between the top seats, so the default
   // flipped between close models.
   CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(3),
+  // How the champion is ranked (curation/champion.ts). "score" (the default, what shipped): the
+  // full-scorecard score over the last 72 hours with MIN_LIVE_GRADED graded calls. "lower-bound":
+  // the Wilson lower bound (95%) of the 2x rate over the last 7 days with at least 400 graded
+  // calls, MARGIN in points of that bound, and no "best" badge on the board. Owner decision
+  // 2026-11-11 (model system audit 2026-11-07, assumption 6): replayed day by day, the 72-hour pick
+  // changed on 74% of days, lost 3.8 points from the record that earned it to the next day and did
+  // worse than a fixed seat; 21 seats at one true rate would show a 29.7% best by chance.
+  CURATOR_CHAMPION_RULE: z.enum(["score", "lower-bound"]).default("score"),
   // How a card decides to quote the call's own rank band as its odds (curation/liveRankRates.ts
   // servedRate). "band" (the default, what shipped 2026-11-02): the band's measured 2x rate from
   // CARD_BAND_MIN_PCT up. "lower-bound": that, at least 200 graded moments in the band, and the

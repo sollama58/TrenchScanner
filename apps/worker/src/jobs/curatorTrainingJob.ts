@@ -16,9 +16,12 @@ import {
   liveCallRecords,
   liveCatchRates,
   loadCurrentLanes,
+  championRules,
   rechooseChampion,
   seededRng,
   withLanes,
+  rejudgePassMarks,
+  withPassMark,
   NEVER_EMIT_THRESHOLD,
   MODEL_WRITE_TX_OPTIONS,
   COMBINER_MODEL_KINDS,
@@ -675,17 +678,29 @@ async function loadIncumbents() {
 }
 
 /**
- * Re-chooses the default model (the leaderboard's best performer - curation/champion.ts) and logs
- * a change. Also run once at worker start when nothing has been chosen yet.
+ * Re-judges each seat against the pass mark (curation/passMark.ts), then re-chooses the default
+ * model (the leaderboard's best performer - curation/champion.ts) and logs a change. Also run once
+ * at worker start when nothing has been chosen yet.
  */
 export async function rechooseDefaultModel(
   env: Env,
-): Promise<{ model: string; changed: boolean; liveGraded: number }> {
+): Promise<{ model: string; changed: boolean; liveGraded: number; benched: string }> {
   const lanes = await loadCurrentLanes();
+  const roster = withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes);
+  // The pass mark first (curation/passMark.ts): a seat it benches can't hold the default.
+  const marks = await rejudgePassMarks(roster);
+  for (const id of marks.changed) {
+    const v = marks.verdicts.find((m) => m.contestant === id);
+    if (v)
+      logger.info(v.calling ? "seat passed the pass mark: calling again" : "seat benched by the pass mark", {
+        ...v,
+      });
+  }
+  const benched = marks.verdicts.filter((v) => !v.calling).map((v) => v.contestant);
   const { champion, changed, pick } = await rechooseChampion({
-    roster: withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes),
+    roster: withPassMark(roster, new Set(benched)),
     lanes,
-    rules: { minLiveGraded: env.CURATOR_CHAMPION_MIN_LIVE_GRADED, margin: env.CURATOR_CHAMPION_MARGIN },
+    rules: championRules(env),
     targets: curatedTargets(env),
   });
   logger.info(changed ? "default model re-chosen" : "default model unchanged", {
@@ -694,7 +709,7 @@ export async function rechooseDefaultModel(
     liveGraded: champion.liveGraded,
     reason: pick.reason,
   });
-  return { model: champion.contestant, changed, liveGraded: champion.liveGraded };
+  return { model: champion.contestant, changed, liveGraded: champion.liveGraded, benched: benched.join(",") };
 }
 
 /**

@@ -22,6 +22,7 @@ import {
   withLanes,
   defaultContestant,
   loadChampion,
+  loadBenchedSeats,
   NEVER_EMIT_THRESHOLD,
   resolveDefaultModel,
   rankFromQuantiles,
@@ -153,6 +154,11 @@ interface CuratorRoster {
   entries: RosterEntry[];
   /** The contestant whose calls are the default feed - see defaultContestant. */
   defaultModel: string;
+  /**
+   * Seats the pass mark benched (curation/passMark.ts): they decide, score and bank as before,
+   * so the record that can bring them back keeps growing, but send nothing.
+   */
+  benched: ReadonlySet<string>;
 }
 
 let modelCache: { fetchedAt: number; key: string; roster: CuratorRoster } | null = null;
@@ -217,7 +223,8 @@ async function loadLiveScalesKeeping(env: Env): Promise<LiveScales> {
 /**
  * Every seat's probability at a decision moment, onto its row (CandidateOutcome.seatScores). A
  * retired seat still scoring for a combiner is banked too: the combiner reads it on its live
- * scale like any other member.
+ * scale like any other member. The seats that would call it go on the row too
+ * (CandidateOutcome.seatCalls), benched ones included: the pass mark judges them on it.
  */
 async function recordSeatScores(
   rowId: string,
@@ -234,8 +241,9 @@ async function recordSeatScores(
     if (!(seat in scores) && Number.isFinite(probability)) scores[seat] = probability;
   }
   if (Object.keys(scores).length === 0) return;
+  const seatCalls = [...decisions].filter(([, d]) => d.curate).map(([seat]) => seat);
   try {
-    await prisma.candidateOutcome.update({ where: { id: rowId }, data: { seatScores: scores } });
+    await prisma.candidateOutcome.update({ where: { id: rowId }, data: { seatScores: scores, seatCalls } });
   } catch (err) {
     // A lost row costs one moment from the next lines, never the decision.
     logger.warn("failed to record seat scores", { rowId, error: String(err) });
@@ -384,8 +392,9 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
   const consensus = usable.find((e) => e.spec.id === CONSENSUS_CONTESTANT);
   // The default is the stored best performer (curation/champion.ts) while it can still send here;
   // else the consensus once it can call, else Rules - the same answer the API gives.
-  const champion = await loadChampion();
+  const [champion, benched] = await Promise.all([loadChampion(), loadBenchedSeats()]);
   const canCall = (id: string) =>
+    !benched.has(id) &&
     usable.some(
       (e) =>
         e.spec.id === id &&
@@ -399,6 +408,7 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
       canCall,
       defaultContestant(consensus?.role === "stacked" ? consensus.model.params.threshold : null),
     ),
+    benched,
   };
   modelCache = { fetchedAt: Date.now(), key, roster };
   return roster;
@@ -911,6 +921,8 @@ export async function collectCuratedContender(
   if (banksSeatScores(population) && retry === undefined && cycleSample?.created) {
     await recordSeatScores(cycleSample.id, decisions, memberScores);
   }
+  // A benched seat's decision has banked above; past here it neither calls nor notes other cards.
+  for (const seat of roster.benched) decisions.delete(seat);
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
   const narrative = decisions.get(NARRATIVE_CONTESTANT);
   // A failed note costs only the Narrative seat's card on this coin, never every seat's decision.
@@ -1075,7 +1087,9 @@ export async function emitCuratedCycle(
   for (const [seat, contenders] of cycle.byModel) {
     for (const c of contenders) calledBy.set(c.token.id, [...(calledBy.get(c.token.id) ?? []), seat]);
   }
-  const callingSeats = roster.entries.filter((e) => e.spec.trackingOnly !== true).length;
+  const callingSeats = roster.entries.filter(
+    (e) => e.spec.trackingOnly !== true && !roster.benched.has(e.spec.id),
+  ).length;
   const seatSpec = (id: string) => roster.entries.find((e) => e.spec.id === id)?.spec;
   const agreementOf = (tokenId: string) => {
     const seats = calledBy.get(tokenId) ?? [];

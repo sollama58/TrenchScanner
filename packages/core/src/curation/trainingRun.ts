@@ -194,6 +194,11 @@ export interface StoredEvalMetrics {
   /** The exam's governed call record - what the leaderboard scores before live calls exist. */
   exam?: CallRecord;
   /**
+   * The share of the exam's reference rows (every decision moment it graded) that doubled: the
+   * pass mark's exam lift is exam.wins / exam.graded over it (passMark.ts). Absent before 2026-11-11.
+   */
+  examReferenceWinRate?: number;
+  /**
    * The high-conviction tier's rank cutoff and its out-of-sample record, when tiering is on.
    * `earned` (absent on older rows = earned) says whether that record out-scored the model's
    * cutoff record, which is what it takes for the shipped model to tier any call "high" (user
@@ -1718,6 +1723,10 @@ export async function runEvolvingContest(
       });
     }
   }
+
+  // The pass mark's exam side (passMark.ts) reads each seat's exam against the rows' own 2x rate,
+  // the line the voting combiners' members are held to above.
+  if (referenceWinRate > 0) for (const r of results) r.metrics.examReferenceWinRate = referenceWinRate;
 
   // Roster order, so storage and logs read the same way the leaderboard lists them.
   const order = new Map(cfg.contestants.map((c, i) => [c.id, i]));
