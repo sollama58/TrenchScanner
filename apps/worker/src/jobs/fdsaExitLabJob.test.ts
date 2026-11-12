@@ -121,7 +121,27 @@ describe.skipIf(!dbAvailable)("fdsa exit lab job", () => {
   it("flattens to one level of nesting", async () => {
     const { trades } = await loadLabTrades(NOW);
     const { runExitLab } = await import("@trenchscanner/core");
-    const meta = exitLabMeta(await runExitLab(trades), 0);
+    const report = await runExitLab(trades);
+    // The learned trader, when it had enough to learn from, as its own keys.
+    const summary = report.tuned!.test;
+    const meta = exitLabMeta(
+      {
+        ...report,
+        learned: {
+          cut: 0.7,
+          trees: 12,
+          rows: 900,
+          sellShare: 0.3,
+          train: summary,
+          test: summary,
+          shortlistedTest: summary,
+        },
+      },
+      0,
+    );
+    expect(meta.learned).toEqual({ cut: 0.7, trees: 12, rows: 900, sellShare: 0.3 });
+    expect((meta.learnedTest as Record<string, number>).trades).toBe(summary.trades);
+    expect(meta.shortlisted_learnedTest).toBeTruthy();
     for (const v of Object.values(meta)) {
       if (v && typeof v === "object")
         for (const w of Object.values(v)) expect(typeof w === "object" && w !== null).toBe(false);
