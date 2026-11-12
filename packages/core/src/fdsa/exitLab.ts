@@ -1,6 +1,7 @@
 import { decideAdaptiveExit, type FdsaExitReason, type FdsaPositionState } from "./adaptiveExit.js";
 import {
   FDSA_DEFAULT_EXIT_PLAN,
+  FDSA_PRE_LAB_EXIT_PLAN,
   FDSA_HARD_FLOOR_MULTIPLE,
   fdsaExitPlanSchema,
   type FdsaExitPlan,
@@ -359,7 +360,7 @@ export interface ExitLabOptions {
 }
 
 /**
- * The lab's run: the baselines (FDSA's default plan, the ladder) and every grid plan on the earlier
+ * The lab's run: the baselines (FDSA's default plan, the one before the lab, the ladder) and every grid plan on the earlier
  * trades, the best by mean return picked there, and all of them graded on the later trades, which
  * the pick never saw.
  */
@@ -400,6 +401,7 @@ export async function runExitLab(
   );
   const baselines = [
     fdsaDefault,
+    report("pre-lab-default", FDSA_PRE_LAB_EXIT_PLAN),
     report("ladder", LADDER_AS_FDSA_PLAN),
     report("audit-trail", AUDIT_TRAIL_PLAN),
     report("audit-take", AUDIT_TAKE_PLAN),

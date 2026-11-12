@@ -111,11 +111,13 @@ export const fdsaExitPlanSchema = z
 export type FdsaExitPlan = z.infer<typeof fdsaExitPlanSchema>;
 
 /**
- * The plan the shape of the prompt's example and the fallback for tests: the -50% stop until 2x,
- * then break-even, a trail that tightens as the high climbs, a quarter sold at 2x, and the rest
- * left to run. Closed after 3 hours, or at 30 minutes while still under 1.2x (the label window).
+ * FDSA's default plan until 2026-11-12: the -50% stop until 2x, then break-even, a trail that
+ * tightens as the high climbs, a quarter sold at 2x, and the rest left to run; closed after 3
+ * hours, or at 30 minutes while still under 1.2x. The exit lab's first run (2026-11-11, 1,650
+ * held-out coins) put it at -11.0% a trade, its stop-outs at -55.6% (gaps fill under the stop).
+ * Kept as the lab's "pre-lab-default" baseline.
  */
-export const FDSA_DEFAULT_EXIT_PLAN: FdsaExitPlan = {
+export const FDSA_PRE_LAB_EXIT_PLAN: FdsaExitPlan = {
   stopMultiple: FDSA_HARD_FLOOR_MULTIPLE,
   lockIns: [{ atMultiple: 2, floorMultiple: 1 }],
   trail: [
@@ -127,6 +129,99 @@ export const FDSA_DEFAULT_EXIT_PLAN: FdsaExitPlan = {
   maxHoldMinutes: 180,
   stall: { afterMinutes: 30, belowMultiple: 1.2 },
 };
+
+/**
+ * The exit lab's tuned plan (exitLab.ts; first run 2026-11-11), FDSA's default since owner
+ * decision 2026-11-12 ("Tuned plan as floor, then phase 2"): a -20% stop, from 1.2x a trail giving
+ * back 20% of the peak, half sold at 2x with the rest locked at break-even, and closed after 3
+ * minutes while still under 1.05x. On 1,650 held-out coins it made -2.9% a trade against the old
+ * default's -11.0%, and +5.2% against -6.0% on the screen's shortlist. The prompt's example and the
+ * fallback when a ranked trade's plan can't be used.
+ */
+export const FDSA_DEFAULT_EXIT_PLAN: FdsaExitPlan = {
+  stopMultiple: 0.8,
+  lockIns: [{ atMultiple: 2, floorMultiple: 1 }],
+  trail: [
+    { fromMultiple: 1.2, fraction: 0.2 },
+    { fromMultiple: 2, fraction: 0.2 },
+    { fromMultiple: 4, fraction: 0.2 },
+  ],
+  partials: [{ atMultiple: 2, sellFraction: 0.5 }],
+  maxHoldMinutes: 180,
+  stall: { afterMinutes: 3, belowMultiple: 1.05 },
+};
+
+/**
+ * The protection every plan Claude sends is held to (owner decision 2026-11-12: the tuned plan as
+ * the floor on Claude's plans): the tuned plan's stop, trail and stall. Claude can be tighter on
+ * each, never looser. Its lock-in (break-even at 2x) is implied: the trail already holds 1.6x
+ * there. Partials and the hold cap stay Claude's call.
+ */
+export const FDSA_EXIT_PLAN_FLOOR = {
+  stopMultiple: FDSA_DEFAULT_EXIT_PLAN.stopMultiple,
+  trail: [{ fromMultiple: 1.2, fraction: 0.2 }],
+  stall: FDSA_DEFAULT_EXIT_PLAN.stall!,
+} as const;
+
+type TrailTier = { fromMultiple: number; fraction: number };
+
+/** The give-back a trail applies at a peak (the highest tier reached), or null under its first tier. */
+function trailFractionAt(trail: readonly TrailTier[], peak: number): number | null {
+  let tier: TrailTier | null = null;
+  for (const t of trail)
+    if (peak >= t.fromMultiple && (!tier || t.fromMultiple >= tier.fromMultiple)) tier = t;
+  return tier ? tier.fraction : null;
+}
+
+/**
+ * Two trails as one that is at least as tight as each at every peak: a tier at every level either
+ * starts (`a`'s own levels all kept), giving back the smaller of the two fractions there. Cut to FDSA_PLAN_MAX_STEPS by
+ * folding a tier into the one under it at the smaller fraction, which only ever tightens it.
+ */
+function tightestTrail(a: readonly TrailTier[], b: readonly TrailTier[]): TrailTier[] {
+  const levels = [...new Set([...a, ...b].map((t) => t.fromMultiple))].sort((x, y) => x - y);
+  let tiers: TrailTier[] = [];
+  for (const at of levels) {
+    const fs = [trailFractionAt(a, at), trailFractionAt(b, at)].filter((f): f is number => f !== null);
+    const fraction = Math.min(...fs);
+    // A level only `b` starts, no tighter than the tier under it, adds nothing; `a`'s own stay.
+    const own = a.some((t) => t.fromMultiple === at);
+    if (!own && tiers.length > 0 && tiers.at(-1)!.fraction === fraction) continue;
+    tiers.push({ fromMultiple: at, fraction });
+  }
+  while (tiers.length > FDSA_PLAN_MAX_STEPS) {
+    let i = 1;
+    for (let j = 2; j < tiers.length; j++)
+      if (
+        Math.abs(tiers[j]!.fraction - tiers[j - 1]!.fraction) <
+        Math.abs(tiers[i]!.fraction - tiers[i - 1]!.fraction)
+      )
+        i = j;
+    tiers[i - 1] = { ...tiers[i - 1]!, fraction: Math.min(tiers[i - 1]!.fraction, tiers[i]!.fraction) };
+    tiers = tiers.filter((_, k) => k !== i);
+  }
+  return tiers;
+}
+
+/**
+ * A plan held to FDSA_EXIT_PLAN_FLOOR: its stop raised to the floor's, its trail at least as
+ * tight as the floor's at every peak, and its stall kept only when it fires at least as early and
+ * as high as the floor's (otherwise the floor's). Everything else is the plan's own.
+ */
+export function withFdsaExitFloor(plan: FdsaExitPlan): FdsaExitPlan {
+  const F = FDSA_EXIT_PLAN_FLOOR;
+  const own = plan.stall;
+  const stall =
+    own && own.afterMinutes <= F.stall.afterMinutes && own.belowMultiple >= F.stall.belowMultiple
+      ? own
+      : { ...F.stall };
+  return {
+    ...plan,
+    stopMultiple: Math.max(plan.stopMultiple, F.stopMultiple),
+    trail: tightestTrail(plan.trail, F.trail),
+    stall,
+  };
+}
 
 /**
  * The plan as the model sends it (structured output): the same shape with no bounds, because
@@ -276,8 +371,8 @@ export function fdsaPartialTarget(plan: FdsaExitPlan, multiple: number): number 
 }
 
 /**
- * A revision as it applies to a running position: the clamped proposal with its stop raised to
- * at least the position's current floor, so a revision can tighten but never loosen the stop
+ * A revision as it applies to a running position: the clamped proposal, held to
+ * FDSA_EXIT_PLAN_FLOOR, with its stop raised to at least the position's current floor, so a revision can tighten but never loosen the stop
  * (decision 8). Partials are cumulative targets (see the schema), so nothing already sold sells
  * again. Returns null when the proposal can't be used; the running plan then stays in force.
  */
@@ -285,8 +380,9 @@ export function applyFdsaRevision(
   proposed: unknown,
   position: { floorMultiple: number },
 ): FdsaExitPlan | null {
-  const plan = clampFdsaExitPlan(proposed);
-  if (!plan) return null;
+  const clamped = clampFdsaExitPlan(proposed);
+  if (!clamped) return null;
+  const plan = withFdsaExitFloor(clamped);
   const floor = Math.max(
     FDSA_HARD_FLOOR_MULTIPLE,
     finite(position.floorMultiple) ? position.floorMultiple : 0,

@@ -9,6 +9,7 @@ import {
   readAiBudget,
   FDSA_DEFAULT_EXIT_PLAN,
   FDSA_DESK_ID,
+  FDSA_EXIT_PLAN_FLOOR,
   FDSA_HARD_FLOOR_MULTIPLE,
   FDSA_PROMPT_VERSION,
   FDSA_PROMPT_VERSIONS,
@@ -220,7 +221,8 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
     expect(out.screen?.decision).toBe("shortlist");
     expect(out.decide?.decision).toBe("trade");
     expect(out.decide?.probability4x).toBe(0.62);
-    expect(out.decide?.exitPlan?.stopMultiple).toBe(FDSA_HARD_FLOOR_MULTIPLE);
+    // Clamped up from the answer's stop, then held to the exit floor's -20%.
+    expect(out.decide?.exitPlan?.stopMultiple).toBe(FDSA_EXIT_PLAN_FLOOR.stopMultiple);
 
     // The screen on Haiku at low effort with no fallback; the decide on Opus with the fallback.
     const [screenReq, decideReq] = requests as {
@@ -275,7 +277,9 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
     expect(rows[0]!.brief).not.toContain("alert and desk:");
     // The decide prompt names the bar the code enforces.
     expect((decideReq!.system[0] as { text: string }).text).toContain("at 50% or more");
-    expect((decide.exitPlan as { stopMultiple: number }).stopMultiple).toBe(FDSA_HARD_FLOOR_MULTIPLE);
+    expect((decide.exitPlan as { stopMultiple: number }).stopMultiple).toBe(
+      FDSA_EXIT_PLAN_FLOOR.stopMultiple,
+    );
     expect(decide.costUsd).toBeGreaterThan(0);
     expect(decide.anchorPriceUsd).toBe(0.0001);
 
