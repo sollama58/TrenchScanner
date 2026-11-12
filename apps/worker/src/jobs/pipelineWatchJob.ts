@@ -78,6 +78,11 @@ export interface FlowCheck {
   recent: number;
   /** Produced in the day before the window; 0 means the stage isn't in use, so it isn't judged. */
   baseline: number;
+  /**
+   * TokenSage only: reads it answered as failed in the window, which `recent` leaves out. A
+   * quiet flow with failures in it is TokenSage failing, not the scanner stalling.
+   */
+  failed?: number;
 }
 
 export interface JobCheck {
@@ -100,7 +105,7 @@ export const FLOW_WINDOWS_MINUTES = {
   discovery: 15,
   /** Decision rows (CandidateOutcome "event"): the moments every model decides on. */
   decisions: 30,
-  /** TokenSage reads stored (TokenNarrative.checkedAt). */
+  /** TokenSage reads stored (TokenNarrative.checkedAt), failed answers left out. */
   tokensage: 15,
   /** Model alerts (CuratedAlert). Quieter than the rest, so the longest window. */
   modelAlerts: 90,
@@ -320,10 +325,18 @@ export function findProblems(
   }
   for (const f of flows) {
     if (f.recent === 0 && f.baseline > 0) {
-      out.push({
-        key: f.key,
-        text: `${f.label}: none in the last ${f.windowMinutes} min (${f.baseline} in the day before)`,
-      });
+      const text = `${f.label}: none in the last ${f.windowMinutes} min (${f.baseline} in the day before)`;
+      // The scanner is asking and TokenSage is answering, every read as failed: a restart here
+      // mends nothing, so notify only, and say where to look.
+      out.push(
+        (f.failed ?? 0) > 0
+          ? {
+              key: f.key,
+              text: `${text}; TokenSage answered ${f.failed} as failed - look at TokenSage`,
+              side: true,
+            }
+          : { key: f.key, text },
+      );
     }
   }
   for (const j of jobs) {
@@ -952,13 +965,33 @@ async function countFlows(now: number): Promise<FlowCheck[]> {
             where: { sampleKind: "event", anchorAt: { gte: from, lt: to } },
           });
         case "tokensage":
-          return prisma.tokenNarrative.count({ where: { checkedAt: { gte: from, lt: to } } });
+          // Failed answers are stored with checkedAt too. Counted, they kept this flow "flowing"
+          // from 2026-11-09 17:30 UTC for 2.5 days while TokenSage failed every read (its HTTP
+          // pool wedged) and the ns* inputs fell from ~48% of rows to ~1%.
+          return prisma.tokenNarrative.count({
+            where: { checkedAt: { gte: from, lt: to }, status: { not: "failed" } },
+          });
         case "modelAlerts":
           return prisma.curatedAlert.count({ where: { createdAt: { gte: from, lt: to } } });
       }
     };
-    const [recent, baseline] = await Promise.all([count(start, new Date(now)), count(dayStart, start)]);
-    out.push({ key, label: FLOW_LABELS[key], windowMinutes, recent, baseline });
+    const [recent, baseline, failed] = await Promise.all([
+      count(start, new Date(now)),
+      count(dayStart, start),
+      key === "tokensage"
+        ? prisma.tokenNarrative.count({
+            where: { checkedAt: { gte: start, lt: new Date(now) }, status: "failed" },
+          })
+        : Promise.resolve(undefined),
+    ]);
+    out.push({
+      key,
+      label: FLOW_LABELS[key],
+      windowMinutes,
+      recent,
+      baseline,
+      ...(failed !== undefined ? { failed } : {}),
+    });
   }
   return out;
 }

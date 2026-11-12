@@ -58,6 +58,13 @@ describe("pipeline watch: what counts as stalled", () => {
     expect(problems.map((p) => p.key)).toEqual(["tokensage"]);
   });
 
+  it("puts a quiet TokenSage flow full of failed answers down to TokenSage: notify, no restart", () => {
+    const [p] = findProblems([{ ...flow("tokensage", 0, 4_000), failed: 37 }], [], NOW);
+    expect(p).toMatchObject({ key: "tokensage", side: true });
+    expect(p!.text).toContain("TokenSage answered 37 as failed");
+    expect(findProblems([{ ...flow("tokensage", 0, 4_000), failed: 0 }], [], NOW)[0]?.side).toBeUndefined();
+  });
+
   it("leaves a flow that isn't in use alone", () => {
     expect(findProblems([flow("tokensage", 0, 0)], [], NOW)).toEqual([]);
   });
@@ -865,6 +872,16 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
     expect((err as JobFailure).meta).toMatchObject({ stalledKeys: expect.stringContaining("tokensage") });
     // No admin wallets configured: nobody to tell.
     expect(sendMessage).not.toHaveBeenCalled();
+
+    // A failed answer is not a read stored (2026-11-09: TokenSage failed every read for 2.5 days
+    // and this flow, counting them, read as flowing).
+    await prisma.tokenNarrative.create({
+      data: { mintAddress: `${TAG}-f`, depth: "basic", status: "failed", checkedAt: new Date(now - MIN) },
+    });
+    const failing = await runPipelineWatch(env, { now, telegram: { sendMessage } }).catch((e: unknown) => e);
+    expect(failing).toBeInstanceOf(JobFailure);
+    expect((failing as JobFailure).message).toContain("TokenSage answered 1 as failed");
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: `${TAG}-f` } });
 
     await prisma.tokenNarrative.create({
       data: { mintAddress: `${TAG}-b`, depth: "basic", status: "complete", checkedAt: new Date(now - MIN) },

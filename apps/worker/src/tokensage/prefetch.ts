@@ -183,7 +183,14 @@ let fullBlockedUntil = 0;
 interface Stats {
   requested: number;
   stored: number;
+  /** Mints cached as failed (TokenNarrative status "failed"), definitive or after a few tries. */
   failed: number;
+  /**
+   * Every answer that was a failed job, transient or not. Only `failed` was counted, and a
+   * transient failure waits out a cooldown first, so on 2026-11-09 to 11-12, with TokenSage
+   * failing every read, the cycle showed 3 requests and no errors (check-in 2026-11-11).
+   */
+  readsFailed: number;
   turnedAway: number;
   errors: number;
   /** Queued mints dropped after PENDING_GIVE_UP_MS without an answer (TokenSage never finished them). */
@@ -197,6 +204,7 @@ const NO_STATS: Stats = {
   requested: 0,
   stored: 0,
   failed: 0,
+  readsFailed: 0,
   turnedAway: 0,
   errors: 0,
   givenUp: 0,
@@ -631,6 +639,7 @@ async function storeFailure(mintAddress: string, depth: TokenSageDepth, reason: 
  */
 async function noteFailure(mint: string, depth: TokenSageDepth, error: unknown): Promise<void> {
   pending.delete(mint);
+  stats.readsFailed += 1;
   const reason = typeof error === "string" && error.trim() !== "" ? error : "analysis failed";
   // Matched by prefix: a batch item's error is "<code>: <detail>", and an older TokenSage sent
   // a dead worker as "worker died; retried automatically after ..." with no colon at all.

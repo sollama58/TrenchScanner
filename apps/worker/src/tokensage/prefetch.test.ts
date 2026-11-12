@@ -715,6 +715,8 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
         failReason: "not_pumpfun: no bonding curve",
       });
       expect(await prisma.tokenNarrative.count({ where: { mintAddress: s1 } })).toBe(0);
+      // Both failures show on the cycle's counters, the transient one too (2026-11-11 check-in).
+      expect(takeTokenSageStats()).toMatchObject({ failed: 1, readsFailed: 2 });
 
       // Within the window: not asked again.
       vi.setSystemTime(Date.now() + 5 * 60_000);
