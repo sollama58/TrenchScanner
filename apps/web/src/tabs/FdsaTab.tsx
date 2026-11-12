@@ -31,7 +31,8 @@ import {
  * the funnel from every alert to a buy, its live and closed trades, and how its adaptive exits
  * played out against the default ladder.
  *
- * It opens at #fdsa for any reader with access, with no header link, nav entry or warm-up. It
+ * It opens at #fdsa for any reader with access, with no header link, nav entry or warm-up; the
+ * Models tab links it from its preview panel (ModelsFdsaPreview.tsx, user ask 2026-11-12). It
  * reads GET /fdsa (apps/api/src/routes/fdsaPublic.ts), which carries no spend, models, reasoning
  * or controls: those are Admin > FDSA (AdminFdsa.tsx). Every figure is paper money, and the page
  * says so wherever a number could read as real.
