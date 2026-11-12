@@ -81,6 +81,9 @@ const PERSIST = new Set([
   "/curated/insights?days=7",
   "/filters",
   "/config",
+  // Read by every card (scoreWeights.ts, narrativeNote.ts).
+  "/config/score",
+  "/config/narrative-note",
   "/curated/lighthouse/history?days=30&bucket=day&dimension=category",
   "/guest/lighthouse/history?days=30&bucket=day&dimension=category",
 ]);

@@ -94,7 +94,7 @@ const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.Fil
 const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.SettingsTab })));
 const LazyAdminTab = lazy(() => loadAdminTab().then((m) => ({ default: m.AdminTab })));
 const LazyFdsaTab = lazy(() => loadFdsaTab().then((m) => ({ default: m.FdsaTab })));
-const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
+const LazySignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 // The burn button (and its transaction builder) only matters to someone without access.
 // The TokenSage view (and its charts) loads the first time a card or a Telegram link opens one.
 const SageHost = lazy(() => import("./components/SageView").then((m) => ({ default: m.SageHost })));
@@ -466,6 +466,7 @@ export function App() {
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
   const FdsaTab = loaded.fdsa?.FdsaTab ?? LazyFdsaTab;
+  const SignIn = loaded.signin?.SignIn ?? LazySignIn;
   const isAdmin = signedIn && session.user.isAdmin;
   // Every render, like setProState: panels deep in a tab read the user from here (me.ts).
   useEffect(() => setMe(signedIn ? session.user : null));

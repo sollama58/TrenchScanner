@@ -416,6 +416,11 @@ const CHECK_EVERY_MS = 30_000;
  * was raised meanwhile); this bounds how long such an alert goes unannounced.
  */
 const STREAM_BACKSTOP_TICKS = 10;
+/**
+ * A feed answer younger than this stands in for a look when the notifier starts or a stream comes
+ * up or drops. Short, so a stream that dropped and came back still catches up on what it missed.
+ */
+const LOOK_REUSE_MS = 5_000;
 /** More new alerts than this at once become one summary notification. */
 const MAX_NOTIFICATIONS = 3;
 const NOTIFIED_KEY = "ts-notified-v1";
@@ -603,7 +608,10 @@ export function AlertNotifier() {
       seen.current = null;
       return;
     }
-    if (!busy.current) lookAt(0);
+    // This runs again each time a stream comes up or drops. A feed answer this young (the Live
+    // tab's, or the last look) is enough: on every page load both streams come up a moment after
+    // the feed's first read, and asking again for each sent the whole first page twice more.
+    if (!busy.current) lookAt(LOOK_REUSE_MS);
     let ticks = 0;
     const timer = window.setInterval(() => {
       // Streams up: they say when to look, with a slow look anyway in case one went quiet while

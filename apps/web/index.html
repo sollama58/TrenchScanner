@@ -143,6 +143,28 @@
         // Opened from a desktop's pairing QR (src/deviceLink.ts): this phone has no session yet,
         // so every call would come back 401. The app redeems the code first.
         if (h.indexOf("link=") === 0) return;
+        // Starts the code a screen loads lazily, by its name in the build's ts-boot-chunks list
+        // (vite.config.ts bootChunks), alongside the main bundle rather than after it has run.
+        var preloadCode = function (name) {
+          try {
+            var meta = document.querySelector('meta[name="ts-boot-chunks"]');
+            var lists = meta ? meta.getAttribute("content").split(";") : [];
+            var files = [];
+            for (var j = 0; j < lists.length; j++)
+              if (lists[j].indexOf(name + "=") === 0) files = lists[j].slice(name.length + 1).split(" ");
+            for (var i = 0; i < files.length; i++) {
+              if (!files[i]) continue;
+              var link = document.createElement("link");
+              link.rel = "modulepreload";
+              // Vite's module scripts load with crossorigin: a preload without it isn't reused.
+              link.crossOrigin = "";
+              link.href = files[i];
+              document.head.appendChild(link);
+            }
+          } catch (e) {}
+        };
+        // The tab a link opens (src/routes.ts tabFromHash; main.tsx loads the same code).
+        preloadCode(h === "top" ? "filters" : h.split("/")[0]);
         // The Lighthouse tab's Right now, as src/routes.ts lighthousePath builds it.
         var lighthouse = function (base) {
           var tz = "";
@@ -175,6 +197,14 @@
                           "/matches/stats?hours=24",
                           "/curated/stats",
                           "/curated/models?days=30",
+                          // The market bar over the feed (src/components/MarketBar.tsx), and what
+                          // every card reads: the score's weights (src/scoreWeights.ts) and
+                          // whether the Narrative note shows (src/narrativeNote.ts). Left to the
+                          // app, each waited on its code to download and run first.
+                          "/curated/market/prices",
+                          "/curated/market/trench",
+                          "/config/score",
+                          "/config/narrative-note",
                         ],
         );
         // Scope (the Live tab's board, src/components/LiveTab.tsx) also asks for its Graduated
@@ -208,7 +238,13 @@
                       lighthouse("/guest"),
                       "/guest/models?days=30",
                     ]
-                  : ["/guest/feed?page=1"],
+                  : [
+                      "/guest/feed?page=1",
+                      "/guest/market/prices",
+                      "/guest/market/trench",
+                      "/config/score",
+                      "/config/narrative-note",
+                    ],
             );
           // No session token, no saved session (src/cache.ts keeps /auth/me under ts-cache-v1) and
           // not a guest: most likely a first visit, which lands on sign-in. Only /auth/me asks
@@ -218,13 +254,19 @@
           // main.tsx then loads the sign-in code without waiting for /auth/me.
           // Its notices (free access, email sign-in) too, so they are in place for its first paint
           // rather than arriving after it and pushing the buttons down.
-          else if (!token && (localStorage.getItem("ts-cache-v1") || "").indexOf('"/auth/me"') < 0)
+          else if (!token && (localStorage.getItem("ts-cache-v1") || "").indexOf('"/auth/me"') < 0) {
+            // main.tsx loads the sign-in page's code at once in this case too.
+            preloadCode("signin");
             paths = ["/auth/me", "/health/worker", "/announcement"].concat(
               "/guest/best",
               "/guest/feed?page=1",
               "/config/free-access",
               "/auth/privy/config",
+              // What the showcase card reads (as on the Live tab, above).
+              "/config/score",
+              "/config/narrative-note",
             );
+          }
         } catch (e) {}
         paths.forEach(function (p) {
           boot[p] = fetch(api + p, { credentials: "include", headers: headers });

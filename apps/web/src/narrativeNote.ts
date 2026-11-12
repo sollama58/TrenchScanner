@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
-import { api, type NarrativeNoteReadiness } from "./api";
+import type { NarrativeNoteReadiness } from "./api";
+import { cachedGet, peek } from "./cache";
 import { useAppearance } from "./appearance";
 
 /**
@@ -12,14 +13,18 @@ import { useAppearance } from "./appearance";
  */
 const REFRESH_MS = 10 * 60_000;
 
-let current: NarrativeNoteReadiness | null = null;
+const PATH = "/config/narrative-note";
+// The last visit's answer (src/cache.ts keeps it): the pill is on the first cards painted, not
+// added a moment later, which moved every card's lower half.
+let current: NarrativeNoteReadiness | null = peek<NarrativeNoteReadiness>(PATH)?.data ?? null;
 let fetchedAt = 0;
 let inFlight: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 
 function load(): void {
   if (inFlight || Date.now() - fetchedAt < REFRESH_MS) return;
-  inFlight = api<NarrativeNoteReadiness>("/config/narrative-note")
+  // Through the cache: index.html starts this read before the app has loaded, and this adopts it.
+  inFlight = cachedGet<NarrativeNoteReadiness>(PATH)
     .then((info) => {
       current = info;
       fetchedAt = Date.now();
