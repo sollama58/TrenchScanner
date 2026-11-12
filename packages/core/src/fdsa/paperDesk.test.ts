@@ -268,7 +268,11 @@ describe.skipIf(!dbAvailable)("FDSA paper desk", () => {
     expect(p.triggersFired).toContain("crossed_2x");
     const plan = p.exitPlan as FdsaExitPlan;
     expect(plan.stopMultiple).toBeGreaterThanOrEqual(1.1 - 1e-9);
-    expect(plan.trail).toEqual([{ fromMultiple: 2, fraction: 0.2 }]);
+    // Held to the exit floor: its 20% trail from 1.2x joins the model's own tier.
+    expect(plan.trail).toEqual([
+      { fromMultiple: 1.2, fraction: 0.2 },
+      { fromMultiple: 2, fraction: 0.2 },
+    ]);
     expect(p.floorMultiple).toBeCloseTo(2.2 * 0.8, 2);
     expect(p.revisions.at(-1)).toMatchObject({ trigger: "crossed_2x", status: "applied", version: 2 });
 

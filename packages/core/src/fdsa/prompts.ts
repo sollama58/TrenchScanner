@@ -15,6 +15,7 @@ import {
 import type { FreshQuote, ScoredToken } from "../types.js";
 import {
   FDSA_DEFAULT_EXIT_PLAN,
+  FDSA_EXIT_PLAN_FLOOR,
   FDSA_PLAN_BOUNDS,
   FDSA_PLAN_MAX_STEPS,
   type FdsaExitPlan,
@@ -88,6 +89,9 @@ Give the odds and one short line naming the deciding reason.`;
 
 const B = FDSA_PLAN_BOUNDS;
 const EXAMPLE_PLAN = JSON.stringify(FDSA_DEFAULT_EXIT_PLAN);
+const F = FDSA_EXIT_PLAN_FLOOR;
+/** The floor every plan is held to (exitPlan.ts withFdsaExitFloor), written from the same numbers. */
+const FLOOR_TEXT = `Whatever you send, the desk holds every plan to a minimum: a stop no looser than ${F.stopMultiple} (-${Math.round((1 - F.stopMultiple) * 100)}%), from ${F.trail[0]!.fromMultiple}x a trail giving back at most ${Math.round(F.trail[0]!.fraction * 100)}% of the peak, and a stall exit ${F.stall.afterMinutes} minutes in while still under ${F.stall.belowMultiple}x. You can be tighter than these, never looser; partials and the hold time are yours.`;
 
 /**
  * The exit-plan rules, shared by the decide and revise prompts. The bounds are written in from
@@ -102,7 +106,8 @@ const EXIT_PLAN_RULES = `The exit plan is a set of numbers a rule engine runs on
 - maxHoldMinutes: close whatever is left after this many minutes (${B.maxHoldMinutes.min}-${B.maxHoldMinutes.max}).
 - stall: optional; afterMinutes past entry, sell everything while still under belowMultiple. Null for none.
 At most ${FDSA_PLAN_MAX_STEPS} entries per list. The floor only ever ratchets up: nothing you send can lower it, and the -${STOP_PCT}% stop always holds.
-The desk exists to keep more of the big runs than a fixed ladder does (the ladder sells 35% at 2x, 30% at 4x and 25% at 10x), so prefer protecting gains with lock-ins and a trail over selling most of the position early. An example plan: ${EXAMPLE_PLAN}`;
+${FLOOR_TEXT}
+The desk exists to keep more of the big runs than a fixed ladder does (the ladder sells 35% at 2x, 30% at 4x and 25% at 10x), so protect gains with lock-ins and a trail rather than selling most of the position early; looser exits have cost the desk most: replayed on recorded prices, stops at -50% filled near -56% and averaged -11% a trade, against -3% for the default plan. The default plan, and an example: ${EXAMPLE_PLAN}`;
 
 /**
  * Stage 2 (Opus, medium effort): trade or pass, with the entry exit plan. A function of the trade

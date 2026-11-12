@@ -23,9 +23,13 @@ import {
   applyFdsaRevision,
   clampFdsaExitPlan,
   FDSA_DEFAULT_EXIT_PLAN,
+  FDSA_EXIT_PLAN_FLOOR,
+  FDSA_PRE_LAB_EXIT_PLAN,
+  withFdsaExitFloor,
   FDSA_HARD_FLOOR_MULTIPLE,
   FDSA_MAX_HOLD_CAP_MINUTES,
   fdsaExitPlanSchema,
+  FDSA_PLAN_MAX_STEPS,
   fdsaFloorMultiple,
   fdsaPartialTarget,
   fdsaRevisionDue,
@@ -84,17 +88,17 @@ describe("decideAdaptiveExit", () => {
   };
 
   it("holds above the floor and inside the hold cap", () => {
-    const d = decideAdaptiveExit(state(), 0.9, at(5), FDSA_DEFAULT_EXIT_PLAN);
+    const d = decideAdaptiveExit(state(), 0.9, at(5), FDSA_PRE_LAB_EXIT_PLAN);
     expect(d).toEqual({ action: "hold", peakMultiple: 0.9, floorMultiple: 0.5 });
   });
 
   it("sells everything at the -50% stop", () => {
-    const d = decideAdaptiveExit(state(), 0.5, at(1), FDSA_DEFAULT_EXIT_PLAN);
+    const d = decideAdaptiveExit(state(), 0.5, at(1), FDSA_PRE_LAB_EXIT_PLAN);
     expect(d).toMatchObject({ action: "sell", all: true, fraction: 1, reason: "stop_loss" });
   });
 
   it("never runs a floor below -50%, whatever the stored floor or plan says", () => {
-    const loose: FdsaExitPlan = { ...FDSA_DEFAULT_EXIT_PLAN, stopMultiple: 0.1, lockIns: [], trail: [] };
+    const loose: FdsaExitPlan = { ...FDSA_PRE_LAB_EXIT_PLAN, stopMultiple: 0.1, lockIns: [], trail: [] };
     const d = decideAdaptiveExit(state({ floorMultiple: 0.05 }), 0.45, at(1), loose);
     expect(d).toMatchObject({ action: "sell", reason: "stop_loss", floorMultiple: 0.5 });
     expect(decideAdaptiveExit(state({ floorMultiple: Number.NaN }), 0.49, at(1), loose)).toMatchObject({
@@ -224,7 +228,7 @@ describe("decideAdaptiveExit", () => {
   });
 
   it("closes at the plan's hold cap, and at the absolute cap past a plan that says longer", () => {
-    expect(decideAdaptiveExit(state(), 1.4, at(180), FDSA_DEFAULT_EXIT_PLAN)).toMatchObject({
+    expect(decideAdaptiveExit(state(), 1.4, at(180), FDSA_PRE_LAB_EXIT_PLAN)).toMatchObject({
       action: "sell",
       reason: "max_hold",
     });
@@ -240,7 +244,7 @@ describe("decideAdaptiveExit", () => {
       peakMultiple: 2.5,
     });
     for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
-      expect(decideAdaptiveExit(state({ peakMultiple: 2 }), bad, at(3), FDSA_DEFAULT_EXIT_PLAN)).toEqual({
+      expect(decideAdaptiveExit(state({ peakMultiple: 2 }), bad, at(3), FDSA_PRE_LAB_EXIT_PLAN)).toEqual({
         action: "hold",
         peakMultiple: 2,
         floorMultiple: 0.5,
@@ -249,7 +253,7 @@ describe("decideAdaptiveExit", () => {
   });
 
   it("leaves dust handling to sellAmount: a sell-all takes everything held", () => {
-    const d = decideAdaptiveExit(state({ soldFraction: 0.9995 }), 0.4, at(1), FDSA_DEFAULT_EXIT_PLAN);
+    const d = decideAdaptiveExit(state({ soldFraction: 0.9995 }), 0.4, at(1), FDSA_PRE_LAB_EXIT_PLAN);
     expect(d.action).toBe("sell");
     if (d.action !== "sell") return;
     expect(sellAmount(d, 1_000_000n, 500n)).toBe(500n);
@@ -266,16 +270,16 @@ describe("decideAdaptiveExit", () => {
 
 describe("FDSA exit plan bounds", () => {
   it("accepts the default plan", () => {
-    expect(fdsaExitPlanSchema.safeParse(FDSA_DEFAULT_EXIT_PLAN).success).toBe(true);
+    expect(fdsaExitPlanSchema.safeParse(FDSA_PRE_LAB_EXIT_PLAN).success).toBe(true);
   });
 
   it("refuses a stop looser than -50%, partials over the whole position, and a lock-in at its arm", () => {
-    expect(fdsaExitPlanSchema.safeParse({ ...FDSA_DEFAULT_EXIT_PLAN, stopMultiple: 0.4 }).success).toBe(
+    expect(fdsaExitPlanSchema.safeParse({ ...FDSA_PRE_LAB_EXIT_PLAN, stopMultiple: 0.4 }).success).toBe(
       false,
     );
     expect(
       fdsaExitPlanSchema.safeParse({
-        ...FDSA_DEFAULT_EXIT_PLAN,
+        ...FDSA_PRE_LAB_EXIT_PLAN,
         partials: [
           { atMultiple: 2, sellFraction: 0.6 },
           { atMultiple: 3, sellFraction: 0.6 },
@@ -284,7 +288,7 @@ describe("FDSA exit plan bounds", () => {
     ).toBe(false);
     expect(
       fdsaExitPlanSchema.safeParse({
-        ...FDSA_DEFAULT_EXIT_PLAN,
+        ...FDSA_PRE_LAB_EXIT_PLAN,
         lockIns: [{ atMultiple: 2, floorMultiple: 2 }],
       }).success,
     ).toBe(false);
@@ -317,13 +321,13 @@ describe("FDSA exit plan bounds", () => {
 
   it("caps each list at six steps", () => {
     const many = Array.from({ length: 10 }, (_, i) => ({ fromMultiple: 2 + i, fraction: 0.3 }));
-    expect(clampFdsaExitPlan({ ...FDSA_DEFAULT_EXIT_PLAN, trail: many })!.trail).toHaveLength(6);
+    expect(clampFdsaExitPlan({ ...FDSA_PRE_LAB_EXIT_PLAN, trail: many })!.trail).toHaveLength(6);
   });
 
   it("returns null for something that isn't a plan", () => {
     expect(clampFdsaExitPlan(null)).toBeNull();
     expect(clampFdsaExitPlan("sell at 10x")).toBeNull();
-    expect(clampFdsaExitPlan({ ...FDSA_DEFAULT_EXIT_PLAN, stopMultiple: Number.NaN })).toBeNull();
+    expect(clampFdsaExitPlan({ ...FDSA_PRE_LAB_EXIT_PLAN, stopMultiple: Number.NaN })).toBeNull();
   });
 
   it("reads an unreadable stored plan as the hard floor and the default hold, never looser", () => {
@@ -332,7 +336,7 @@ describe("FDSA exit plan bounds", () => {
       lockIns: [],
       trail: [],
       partials: [],
-      maxHoldMinutes: FDSA_DEFAULT_EXIT_PLAN.maxHoldMinutes,
+      maxHoldMinutes: FDSA_PRE_LAB_EXIT_PLAN.maxHoldMinutes,
       stall: null,
     });
   });
@@ -340,7 +344,7 @@ describe("FDSA exit plan bounds", () => {
 
 describe("fdsaFloorMultiple", () => {
   it("ratchets with the peak and never goes down", () => {
-    const plan = FDSA_DEFAULT_EXIT_PLAN;
+    const plan = FDSA_PRE_LAB_EXIT_PLAN;
     expect(fdsaFloorMultiple(plan, null, 0.5)).toBe(0.5);
     expect(fdsaFloorMultiple(plan, 1.9, 0.5)).toBe(0.5);
     // 2x: break-even lock-in (1.0) vs the 40% trail (1.2) - the trail wins.
@@ -354,7 +358,7 @@ describe("fdsaFloorMultiple", () => {
 
   it("partial targets are cumulative and capped at the whole position", () => {
     const plan: FdsaExitPlan = {
-      ...FDSA_DEFAULT_EXIT_PLAN,
+      ...FDSA_PRE_LAB_EXIT_PLAN,
       partials: [
         { atMultiple: 2, sellFraction: 0.25 },
         { atMultiple: 4, sellFraction: 0.25 },
@@ -368,11 +372,66 @@ describe("fdsaFloorMultiple", () => {
 
 describe("applyFdsaRevision", () => {
   it("holds a revised stop at or above the position's floor", () => {
-    const loosen = { ...FDSA_DEFAULT_EXIT_PLAN, stopMultiple: 0.5 };
+    const loosen = { ...FDSA_PRE_LAB_EXIT_PLAN, stopMultiple: 0.5 };
     expect(applyFdsaRevision(loosen, { floorMultiple: 1.8 })!.stopMultiple).toBe(1.8);
-    const tighten = { ...FDSA_DEFAULT_EXIT_PLAN, stopMultiple: 2.5 };
+    const tighten = { ...FDSA_PRE_LAB_EXIT_PLAN, stopMultiple: 2.5 };
     expect(applyFdsaRevision(tighten, { floorMultiple: 1.8 })!.stopMultiple).toBe(2.5);
     expect(applyFdsaRevision({ nope: 1 }, { floorMultiple: 1 })).toBeNull();
+  });
+});
+
+describe("withFdsaExitFloor", () => {
+  const peaks = [1, 1.1, 1.2, 1.5, 2, 2.5, 3, 4, 6, 10, 20, 50];
+
+  it("is the default plan's own protection, so the default passes through unchanged", () => {
+    expect(withFdsaExitFloor(FDSA_DEFAULT_EXIT_PLAN)).toEqual(FDSA_DEFAULT_EXIT_PLAN);
+  });
+
+  it("holds a looser plan at least as tight as the floor and as its own at every peak", () => {
+    const floored = withFdsaExitFloor(FDSA_PRE_LAB_EXIT_PLAN);
+    expect(fdsaExitPlanSchema.safeParse(floored).success).toBe(true);
+    expect(floored.stopMultiple).toBe(0.8);
+    expect(floored.stall).toEqual(FDSA_EXIT_PLAN_FLOOR.stall);
+    // Partials, lock-ins and the hold cap stay the plan's own.
+    expect(floored.partials).toEqual(FDSA_PRE_LAB_EXIT_PLAN.partials);
+    expect(floored.lockIns).toEqual(FDSA_PRE_LAB_EXIT_PLAN.lockIns);
+    expect(floored.maxHoldMinutes).toBe(FDSA_PRE_LAB_EXIT_PLAN.maxHoldMinutes);
+    for (const peak of peaks) {
+      const f = fdsaFloorMultiple(floored, peak, 0);
+      expect(f).toBeGreaterThanOrEqual(fdsaFloorMultiple(FDSA_PRE_LAB_EXIT_PLAN, peak, 0) - 1e-9);
+      if (peak >= 1.2) expect(f).toBeGreaterThanOrEqual(peak * 0.8 - 1e-9);
+    }
+  });
+
+  it("keeps a tighter plan's own stop, trail and stall", () => {
+    const tight: FdsaExitPlan = {
+      ...FDSA_PRE_LAB_EXIT_PLAN,
+      stopMultiple: 0.9,
+      trail: [{ fromMultiple: 1.1, fraction: 0.1 }],
+      stall: { afterMinutes: 2, belowMultiple: 1.1 },
+    };
+    expect(withFdsaExitFloor(tight)).toEqual(tight);
+  });
+
+  it("stays inside the step limit when the two trails have many levels", () => {
+    const many: FdsaExitPlan = {
+      ...FDSA_PRE_LAB_EXIT_PLAN,
+      trail: [1.1, 1.3, 1.5, 2, 3, 5].map((fromMultiple, i) => ({ fromMultiple, fraction: 0.5 - i * 0.07 })),
+    };
+    const floored = withFdsaExitFloor(many);
+    expect(floored.trail.length).toBeLessThanOrEqual(FDSA_PLAN_MAX_STEPS);
+    expect(fdsaExitPlanSchema.safeParse(floored).success).toBe(true);
+    for (const peak of [...peaks, 1.3, 1.6, 3.5, 5.5])
+      expect(fdsaFloorMultiple(floored, peak, 0)).toBeGreaterThanOrEqual(
+        Math.max(fdsaFloorMultiple(many, peak, 0), peak >= 1.2 ? peak * 0.8 : 0) - 1e-9,
+      );
+  });
+
+  it("holds a revision to the floor too", () => {
+    const loose = { ...FDSA_PRE_LAB_EXIT_PLAN, trail: [{ fromMultiple: 3, fraction: 0.5 }] };
+    const r = applyFdsaRevision(loose, { floorMultiple: 0.5 })!;
+    expect(r.stopMultiple).toBe(0.8);
+    expect(fdsaFloorMultiple(r, 4, 0)).toBeCloseTo(3.2);
   });
 });
 
@@ -455,7 +514,8 @@ describe("FDSA verdicts", () => {
       probability4x: 0.6,
       conviction: 0.7,
     });
-    expect(r.verdict.exitPlan!.stopMultiple).toBe(0.5);
+    // Clamped to the -50% stop, then held to the floor's -20%.
+    expect(r.verdict.exitPlan!.stopMultiple).toBe(FDSA_EXIT_PLAN_FLOOR.stopMultiple);
     expect(r.verdict.reasoning).not.toMatch(/[<>]/);
     expect(r.verdict.risks).toHaveLength(2);
     expect(r.verdict.risks[1]!.length).toBeLessThanOrEqual(143);
@@ -510,12 +570,12 @@ describe("FDSA verdicts", () => {
     );
     expect(at.error).toBeNull();
     expect(at.verdict.decision).toBe("trade");
-    expect(at.verdict.exitPlan).toEqual(clampFdsaExitPlan(FDSA_DEFAULT_EXIT_PLAN));
+    expect(at.verdict.exitPlan).toEqual(FDSA_DEFAULT_EXIT_PLAN);
     // The model's own plan when it is usable.
     const own = readFdsaDecideAnswer({ ...trade, decision: "pass", probability2x: 0.3 }, ok, 0.2, {
       ranked: true,
     });
-    expect(own.verdict.exitPlan).toEqual(clampFdsaExitPlan(trade.exitPlan));
+    expect(own.verdict.exitPlan).toEqual(withFdsaExitFloor(clampFdsaExitPlan(trade.exitPlan)!));
     const under = readFdsaDecideAnswer({ ...trade, probability2x: 0.15 }, ok, 0.2, { ranked: true });
     expect(under.verdict).toMatchObject({ decision: "pass", exitPlan: null });
     expect(under.verdict.risks[0]).toBe(fdsaTradeBarRisk(0.2));

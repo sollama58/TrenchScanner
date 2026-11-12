@@ -2,6 +2,7 @@ import { z } from "zod";
 import { clampProbability, clip } from "../curation/aiReview.js";
 import {
   clampFdsaExitPlan,
+  withFdsaExitFloor,
   FDSA_DEFAULT_EXIT_PLAN,
   FdsaExitPlanAnswerSchema,
   type FdsaExitPlan,
@@ -54,11 +55,14 @@ export type FdsaStage = (typeof FDSA_STAGES)[number];
  *   shortlisted mid-spike coins (12.5% doubled against 19% dropped); both stages are asked for odds
  *   to the percent, since answers in 0.05 steps left the ranked lines whole blocks of ties; the
  *   ranked decide's goal is framed as ranking, not a 75% win rate no alert in the pool clears.
+ *   decide v7, revise v3 (2026-11-12, owner decision "Tuned plan as floor, then phase 2"): the
+ *   exit-plan rules name the floor every plan is held to (exitPlan.ts FDSA_EXIT_PLAN_FLOOR) and
+ *   the exit lab's result, and the example plan is the lab's tuned plan, now the default.
  */
 export const FDSA_PROMPT_VERSIONS: Readonly<Record<FdsaStage, string>> = {
   screen: "fdsa-screen-v5",
-  decide: "fdsa-decide-v6",
-  revise: "fdsa-revise-v2",
+  decide: "fdsa-decide-v7",
+  revise: "fdsa-revise-v3",
 };
 /**
  * The model-score screen (owner decision 2026-11-02, FDSA_SCREEN_SOURCE "model"): no call, so the
@@ -274,7 +278,8 @@ export function readFdsaDecideAnswer(
       refused: false,
     };
   }
-  const plan = clampFdsaExitPlan(a.exitPlan);
+  const clamped = clampFdsaExitPlan(a.exitPlan);
+  const plan = clamped && withFdsaExitFloor(clamped);
   if (!plan)
     return {
       verdict: { ...verdict, decision: "pass" },
@@ -305,7 +310,8 @@ function readRanked(verdict: FdsaDecideVerdict, rawPlan: unknown, line: number):
       refused: false,
     };
   }
-  const plan = clampFdsaExitPlan(rawPlan) ?? clampFdsaExitPlan(FDSA_DEFAULT_EXIT_PLAN);
+  const clamped = clampFdsaExitPlan(rawPlan) ?? clampFdsaExitPlan(FDSA_DEFAULT_EXIT_PLAN);
+  const plan = clamped && withFdsaExitFloor(clamped);
   if (!plan)
     return { verdict: { ...verdict, decision: "pass" }, error: "no usable exit plan", refused: false };
   return { verdict: { ...verdict, decision: "trade", exitPlan: plan }, error: null, refused: false };
