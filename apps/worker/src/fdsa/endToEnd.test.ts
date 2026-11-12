@@ -9,6 +9,7 @@ import {
   readAiBudget,
   DEFAULT_FDSA_DESK_CONFIG,
   FDSA_DESK_ID,
+  FDSA_EXIT_PLAN_FLOOR,
   FDSA_HARD_FLOOR_MULTIPLE,
   HIGH_CONVICTION_TIER,
   NoRouteError,
@@ -124,7 +125,8 @@ const reply = (model: string, answer: unknown) => ({
 });
 
 const ENTRY_PLAN: FdsaExitPlan = {
-  // Under the -50% stop: the decide stage's reader clamps it back up (decision 8).
+  // Under the -50% stop: the decide stage's reader clamps it back up (decision 8), then holds it
+  // to the exit floor's -20% (withFdsaExitFloor).
   stopMultiple: 0.2,
   lockIns: [],
   trail: [{ fromMultiple: 2, fraction: 0.5 }],
@@ -296,7 +298,7 @@ describe.skipIf(!dbAvailable)("FDSA end to end: alert to exit", () => {
       where: { tokenId: alert.tokenId, stage: "decide" },
     });
     expect(decide).toMatchObject({ decision: "trade", candidateOutcomeId: alert.candidateOutcomeId });
-    expect((decide.exitPlan as FdsaExitPlan).stopMultiple).toBe(FDSA_HARD_FLOOR_MULTIPLE);
+    expect((decide.exitPlan as FdsaExitPlan).stopMultiple).toBe(FDSA_EXIT_PLAN_FLOOR.stopMultiple);
 
     // 2. Twenty seconds later the scanner's desk job buys it at the fixed 0.5 SOL, on paper.
     later(20 / 60);
@@ -312,21 +314,21 @@ describe.skipIf(!dbAvailable)("FDSA end to end: alert to exit", () => {
       candidateOutcomeId: alert.candidateOutcomeId,
       swapInLamports: SOL / 2n,
       planVersion: 1,
-      floorMultiple: FDSA_HARD_FLOOR_MULTIPLE,
+      floorMultiple: FDSA_EXIT_PLAN_FLOOR.stopMultiple,
     });
     expect(p.signalAt).toEqual(alert.alertAt);
     expect(p.revisions).toMatchObject([{ trigger: "entry", status: "applied", reviewId: decide.id }]);
     // Bought once: the same verdict on the next pass is left alone.
     expect((await runDesk()).fdsaEntries).toBe(0);
 
-    // 3. 2.2x: the plan's own partial (no preset ladder), and the trail raises the floor.
+    // 3. 2.2x: the plan's own partial (no preset ladder), and the floor's 20% trail raises the floor.
     market.lamportsPerRaw.set(alert.mint, priceFor(2.2));
     later(1);
     meta = await runDesk();
     expect(meta.fdsaSells).toBe(1);
     p = await position(alert.mint);
     expect(p.fills.at(-1)).toMatchObject({ side: "sell", reason: "partial", planVersion: 1 });
-    expect(p.floorMultiple).toBeCloseTo(1.1, 2);
+    expect(p.floorMultiple).toBeCloseTo(2.2 * 0.8, 2);
 
     // 4. Held at 2.2x: crossing 2x asks the review pipeline's revise stage. The model tightens
     //    the trail, and sends a stop under the floor, which applies raised to the floor.

@@ -164,12 +164,15 @@ describe("runExitLab", () => {
     const report = await runExitLab(trades, { frictions: CLEAN, grid });
     expect(report.trades).toEqual({ train: 20, test: 10, shortlisted: 15 });
     expect(report.tuned!.plan).toEqual(grid[1]);
-    expect(report.tuned!.test.meanReturnPct!).toBeGreaterThan(report.baselines[0]!.test.meanReturnPct!);
+    // Against the plan FDSA ran before the lab, which waits for 2x under the -50% stop.
+    const preLab = report.baselines.find((b) => b.name === "pre-lab-default")!;
+    expect(report.tuned!.test.meanReturnPct!).toBeGreaterThan(preLab.test.meanReturnPct!);
     expect(report.testFrom).toBe(new Date(Date.UTC(2026, 10, 1, 20)).toISOString());
     expect(report.claudePlans!.trades).toBe(1);
     expect(report.shortlisted.map((s) => s.name)).toEqual([
       "tuned",
       "fdsa-default",
+      "pre-lab-default",
       "ladder",
       "audit-trail",
       "audit-take",
