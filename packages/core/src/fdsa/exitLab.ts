@@ -1,3 +1,4 @@
+import { scoreLearnedTrader, trainLearnedTrader } from "./learnedTrader.js";
 import { decideAdaptiveExit, type FdsaExitReason, type FdsaPositionState } from "./adaptiveExit.js";
 import {
   FDSA_DEFAULT_EXIT_PLAN,
@@ -35,6 +36,9 @@ export interface LabPoint {
   sec: number;
   /** Price as a multiple of the price at the alert second. */
   rel: number;
+  /** Net SOL into the curve over the second, and its price changes, when the recording has them. */
+  netSol?: number;
+  changes?: number;
 }
 
 export interface LabTrade {
@@ -72,7 +76,27 @@ export const FDSA_LAB_FRICTIONS: LabFrictions = {
 /** The same desk pricing every second, as it could off the curve tape's stream. */
 export const FDSA_LAB_STREAM_FRICTIONS: LabFrictions = { ...FDSA_LAB_FRICTIONS, tickSec: 1, sellDelaySec: 1 };
 
-export type LabExitReason = FdsaExitReason | "path_end";
+/** "learned": the learned trader's own sell-everything call (learnedTrader.ts). */
+export type LabExitReason = FdsaExitReason | "path_end" | "learned";
+
+/** What a tick hook sees: the moment the engine has decided to hold. */
+export interface LabTick {
+  /** Seconds after the alert. */
+  sec: number;
+  /** Seconds since the entry filled. */
+  heldSec: number;
+  multiple: number;
+  peakMultiple: number;
+  floorMultiple: number;
+  soldFraction: number;
+  /** The entry's price over the alert's, penalty included: a path price / this = a multiple. */
+  entryRel: number;
+  /**
+   * What the position would end with, per unit of SOL put in, if everything held were sold on
+   * this tick: proceeds so far plus the rest at the fill a sell delay later, after the penalty.
+   */
+  exitValue: number;
+}
 
 export interface LabResult {
   /** Return on the SOL put in, percent, after the fill penalty. */
@@ -113,7 +137,13 @@ const endSec = (t: LabTrade) => t.points[t.points.length - 1]?.sec ?? 0;
  * Replays `plan` on one trade as the paper desk would. Null when the path ends before the entry
  * would have filled, or starts after the alert (no price to enter at).
  */
-export function replayExitPlan(trade: LabTrade, plan: FdsaExitPlan, fr: LabFrictions): LabResult | null {
+export function replayExitPlan(
+  trade: LabTrade,
+  plan: FdsaExitPlan,
+  fr: LabFrictions,
+  /** Asked on every tick the plan holds; true sells everything held ("learned"). */
+  exitNow?: (tick: LabTick) => boolean,
+): LabResult | null {
   const pts = trade.points;
   if (pts.length === 0 || pts[0]!.sec > 0) return null;
   const last = endSec(trade);
@@ -158,6 +188,21 @@ export function replayExitPlan(trade: LabTrade, plan: FdsaExitPlan, fr: LabFrict
       if (decision.all || state.soldFraction >= 1 - 1e-6) {
         return finish(proceeds, decision.reason, fillAt - fr.entryDelaySec, pathPeak);
       }
+    } else if (exitNow) {
+      const fillAt = Math.min(t + fr.sellDelaySec, last);
+      const exitValue =
+        proceeds + Math.max(0, 1 - state.soldFraction) * (fill.at(fillAt) / entryRel) * (1 - pen);
+      const sell = exitNow({
+        sec: t,
+        heldSec: t - fr.entryDelaySec,
+        multiple,
+        peakMultiple: decision.peakMultiple ?? multiple,
+        floorMultiple: decision.floorMultiple,
+        soldFraction: state.soldFraction,
+        entryRel,
+        exitValue,
+      });
+      if (sell) return finish(exitValue, "learned", fillAt - fr.entryDelaySec, pathPeak);
     }
   }
 }
@@ -347,6 +392,20 @@ export interface ExitLabReport {
   shortlisted: { name: string; test: LabSummary }[];
   /** Claude's own entry plans, replayed on the coins it planned them for (all days). */
   claudePlans: { trades: number; claude: LabSummary; tunedOnSame: LabSummary | null } | null;
+  /**
+   * The learned trader (learnedTrader.ts) riding on the tuned plan: trained and its cut picked on
+   * the earlier coins, graded on the later ones. Null when it was off or had too little to learn.
+   */
+  learned: {
+    /** The odds at or over which it sells everything; null = never (the plan alone was best). */
+    cut: number | null;
+    trees: number;
+    rows: number;
+    sellShare: number;
+    train: LabSummary;
+    test: LabSummary;
+    shortlistedTest: LabSummary;
+  } | null;
 }
 
 export interface ExitLabOptions {
@@ -357,6 +416,8 @@ export interface ExitLabOptions {
   runnersUp?: number;
   /** Awaited after each grid plan, so a long search can hand the event loop back. */
   pause?: () => Promise<void>;
+  /** Train and grade the learned trader on the tuned plan (default true). */
+  learned?: boolean;
 }
 
 /**
@@ -434,6 +495,22 @@ export async function runExitLab(
     };
   }
 
+  let learned: ExitLabReport["learned"] = null;
+  if (tuned && opts.learned !== false) {
+    const trader = await trainLearnedTrader(train, tuned.plan, fr);
+    if (trader) {
+      learned = {
+        cut: Number.isFinite(trader.cut) ? trader.cut : null,
+        trees: trader.model.trees.length,
+        rows: trader.rows,
+        sellShare: Number(trader.sellShare.toFixed(3)),
+        train: trader.train,
+        test: summarizeLab(scoreLearnedTrader(trader, test, fr)),
+        shortlistedTest: summarizeLab(scoreLearnedTrader(trader, testShort, fr)),
+      };
+    }
+  }
+
   return {
     frictions: fr,
     testFrom: test[0]?.alertAt.toISOString() ?? null,
@@ -448,6 +525,7 @@ export async function runExitLab(
     baselines,
     shortlisted,
     claudePlans,
+    learned,
   };
 }
 
@@ -457,7 +535,7 @@ export async function runExitLab(
  * cover the alert (starts after it, or ends before it) or the alert's price isn't positive.
  */
 export function labPointsFromPath(
-  rows: readonly { sec: number; price: number }[],
+  rows: readonly { sec: number; price: number; netSol?: number; changes?: number }[],
   pathStartAt: Date,
   alertAt: Date,
 ): LabPoint[] | null {
@@ -472,7 +550,10 @@ export function labPointsFromPath(
   for (let j = i + 1; j < rows.length; j++) {
     const r = rows[j]!;
     if (!(r.price > 0) || !Number.isFinite(r.price)) continue;
-    out.push({ sec: r.sec - alertSec, rel: r.price / base });
+    const pt: LabPoint = { sec: r.sec - alertSec, rel: r.price / base };
+    if (r.netSol !== undefined) pt.netSol = r.netSol;
+    if (r.changes !== undefined) pt.changes = r.changes;
+    out.push(pt);
   }
   return out;
 }

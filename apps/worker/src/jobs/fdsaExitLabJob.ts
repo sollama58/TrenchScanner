@@ -19,8 +19,9 @@ const logger = createLogger("fdsa-exit-lab");
  * then learned"): every curated coin of the last LAB_DAYS with a recorded price path covering its
  * first alert, replayed under FDSA's default plan, the ladder and the tuned-rule grid. Database
  * reads only, no outside call and no write but the heartbeat: the report is the run's heartbeat
- * meta (Admin > Worker, /stats/ops/worker) and the log line. Nothing here changes what the desk
- * runs; handing the tuned plan to the desk is a later, separate change.
+ * meta (Admin > Worker, /stats/ops/worker, /fdsa/lab) and the log line. It also trains and grades
+ * the learned trader (core's fdsa/learnedTrader.ts) on the tuned plan, in shadow: nothing here
+ * changes what the desk runs.
  */
 
 /** Days of alerts replayed; price paths are kept PRICE_PATH_RETENTION_DAYS (21). */
@@ -144,6 +145,13 @@ export function exitLabMeta(report: ExitLabReport, alerts: number): JobRunMeta {
   });
   for (const s of report.shortlisted) {
     meta[`shortlisted_${keyOf(s.name)}Test`] = flat(s.test);
+  }
+  if (report.learned) {
+    const l = report.learned;
+    meta.learned = { cut: l.cut, trees: l.trees, rows: l.rows, sellShare: l.sellShare };
+    meta.learnedTrain = flat(l.train);
+    meta.learnedTest = flat(l.test);
+    meta.shortlisted_learnedTest = flat(l.shortlistedTest);
   }
   if (report.claudePlans) {
     meta.claudePlans = flat(report.claudePlans.claude);
