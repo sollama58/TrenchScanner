@@ -59,6 +59,7 @@ import {
 import { FOLLOWER_NOTE, MIN_GRADED_FOR_RATE, RULE_NOTE, intervalText, isEarly, wilsonOfRate } from "../rates";
 import { ModelDetailModal } from "./ModelDetail";
 import { ModelsVsKolsPanel } from "./ModelsVsKols";
+import { ModelsFdsaPreview } from "./ModelsFdsaPreview";
 import { renderWeekCard, type WeekCardData } from "./weekCard";
 import { DAY_MS, changePoints, dayStarts } from "../pricingChange";
 
@@ -157,12 +158,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         </div>
       </section>
 
-      <ModelsVsKolsPanel
-        api={api}
-        now={now}
-        targets={{ "2x": t.hitRate2xPct, "4x": t.hitRate4xPct, "10x": lb.scoring.tenXTargetPct ?? 25 }}
-      />
-
       <BaselinePanel
         board={lb}
         base={base ?? null}
@@ -174,6 +169,15 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         refreshing={board.stale}
         refreshKey={String(pick)}
       />
+
+      {/* Right under the leaderboard (user ask 2026-11-12): the models' rates, then the KOLs'. */}
+      <ModelsVsKolsPanel
+        api={api}
+        now={now}
+        targets={{ "2x": t.hitRate2xPct, "4x": t.hitRate4xPct, "10x": lb.scoring.tenXTargetPct ?? 25 }}
+      />
+
+      <ModelsFdsaPreview guest={guest} />
 
       <WeekPanel api={api} learning={data.learning} board={lb} now={now} />
 
