@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
-import { api, type ScoreWeightsInfo } from "./api";
+import type { ScoreWeightsInfo } from "./api";
+import { cachedGet, peek } from "./cache";
 
 /**
  * The composite score's current weights (GET /config/score), fetched once per page and shared by
@@ -15,14 +16,18 @@ const FALLBACK: ScoreWeightsInfo = {
   history: [],
 };
 
-let current: ScoreWeightsInfo = FALLBACK;
+const PATH = "/config/score";
+// The last visit's weights (src/cache.ts keeps them) paint the first cards, rather than the
+// fallback and then a second render once this visit's read lands.
+let current: ScoreWeightsInfo = peek<ScoreWeightsInfo>(PATH)?.data ?? FALLBACK;
 let fetchedAt = 0;
 let inFlight: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 
 function load(): void {
   if (inFlight || Date.now() - fetchedAt < REFRESH_MS) return;
-  inFlight = api<ScoreWeightsInfo>("/config/score")
+  // Through the cache: index.html starts this read before the app has loaded, and this adopts it.
+  inFlight = cachedGet<ScoreWeightsInfo>(PATH)
     .then((info) => {
       current = info;
       fetchedAt = Date.now();

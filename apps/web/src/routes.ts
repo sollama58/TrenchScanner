@@ -42,6 +42,7 @@ type FiltersTabModule = typeof import("./tabs/FiltersTab");
 type SettingsTabModule = typeof import("./tabs/SettingsTab");
 type AdminTabModule = typeof import("./tabs/AdminTab");
 type FdsaTabModule = typeof import("./tabs/FdsaTab");
+type SignInModule = typeof import("./components/SignIn");
 
 /**
  * Chunks already downloaded. React.lazy suspends on its first render even when the chunk is in
@@ -55,6 +56,12 @@ export const loaded: {
   settings?: SettingsTabModule;
   admin?: AdminTabModule;
   fdsa?: FdsaTabModule;
+  /**
+   * The sign-in page. index.html starts its code with the page's on a first visit, so it is
+   * usually here before the session check says "signed out"; rendered through React.lazy it still
+   * showed the loading logo first, and React holds a lazy reveal for its 300 ms throttle.
+   */
+  signin?: SignInModule;
 } = {};
 
 export const loadModelTab = () => import("./tabs/ModelTab").then((m) => (loaded.model = m));
@@ -64,7 +71,7 @@ export const loadSettingsTab = () => import("./tabs/SettingsTab").then((m) => (l
 export const loadAdminTab = () => import("./tabs/AdminTab").then((m) => (loaded.admin = m));
 /** Loaded only when someone opens #fdsa: never warmed, so its chunk stays off everyone else's wire. */
 export const loadFdsaTab = () => import("./tabs/FdsaTab").then((m) => (loaded.fdsa = m));
-export const loadSignIn = () => import("./components/SignIn");
+export const loadSignIn = () => import("./components/SignIn").then((m) => (loaded.signin = m));
 
 /**
  * The browser's IANA zone, for the reports that bucket by the reader's clock (the Lighthouse's
