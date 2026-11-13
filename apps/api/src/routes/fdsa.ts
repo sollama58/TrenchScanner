@@ -110,6 +110,11 @@ export const num = (v: bigint | number | null | undefined) => (v === null || v =
  * labelValue: a clean 2x inside the 15-minute win window before the -50% stop). Only rows whose
  * window has closed (finalizedAt) count as graded.
  */
+/** AiReplayRun.purpose of the decide replay (worker's fdsa/decideReplay.ts, FDSA_DECIDE_REPLAY_PURPOSE). */
+const FDSA_DECIDE_REPLAY_PURPOSE = "fdsa-decide";
+/** How many replay runs /replay lists: one per tag, and tags are rare. */
+const REPLAY_RUNS = 10;
+
 const GRADED = Prisma.sql`o."finalizedAt" IS NOT NULL AND o."labelValue" IS NOT NULL`;
 const WON = Prisma.sql`${GRADED} AND o."labelValue" > 0`;
 const WON_4X = Prisma.sql`${GRADED} AND o."labelValue" > 0 AND COALESCE(o."hit4xIn1h", false)`;
@@ -421,6 +426,56 @@ export async function registerFdsaRoutes(app: FastifyInstance, { env }: { env: E
     const row = await prisma.systemHeartbeat.findUnique({ where: { job: "fdsa-exit-lab" } });
     if (!row) return { ranAt: null, report: null };
     return { ranAt: row.lastRunAt, lastError: row.lastError, report: row.meta ?? null };
+  });
+
+  /**
+   * The decide replay's runs (worker's fdsa/decideReplay.ts, FDSA_DECIDE_REPLAY): each tag's run
+   * with its per-variant scorecard - the replayed decide at each effort against the scanner model
+   * on the same graded alerts - as the run row holds it. The worker report (/worker) keeps only a
+   * run's top-level numbers, so the scorecards are read here. Newest first, at most REPLAY_RUNS.
+   */
+  app.get("/replay", async () => {
+    const runs = await prisma.aiReplayRun.findMany({
+      where: { purpose: FDSA_DECIDE_REPLAY_PURPOSE },
+      orderBy: { createdAt: "desc" },
+      take: REPLAY_RUNS,
+      select: {
+        id: true,
+        status: true,
+        model: true,
+        playbookIds: true,
+        requestCount: true,
+        estimatedCostUsd: true,
+        costUsd: true,
+        createdAt: true,
+        scoredAt: true,
+        metrics: true,
+        error: true,
+      },
+    });
+    return {
+      runs: runs.map((r) => {
+        const metrics = (r.metrics ?? {}) as Record<string, Record<string, number | null>>;
+        return {
+          id: r.id,
+          // The variant ids are "<tag>:<effort>" (decideReplay.ts); the tag names the run.
+          tag: r.playbookIds[0]?.slice(0, r.playbookIds[0].lastIndexOf(":")) ?? null,
+          status: r.status,
+          model: r.model,
+          requests: r.requestCount,
+          estimatedCostUsd: r.estimatedCostUsd,
+          costUsd: r.costUsd,
+          submittedAt: r.createdAt,
+          scoredAt: r.scoredAt,
+          error: r.error,
+          variants: r.playbookIds.map((id) => ({
+            id,
+            effort: id.slice(id.lastIndexOf(":") + 1),
+            ...(metrics[id] ?? null),
+          })),
+        };
+      }),
+    };
   });
 
   /** The latest reviews, passes included, with the model's reasoning (stored text, shown as text). */
