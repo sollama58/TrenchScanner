@@ -188,6 +188,7 @@ describe.skipIf(!dbAvailable)("FDSA routes", () => {
       ["GET", "/admin/fdsa/record"],
       ["GET", "/admin/fdsa/reviews"],
       ["GET", "/admin/fdsa/lab"],
+      ["GET", "/admin/fdsa/replay"],
     ];
     for (const [method, url, body] of routes) {
       expect((await call(method, url, "other", body)).statusCode, `${method} ${url}`).toBe(403);
@@ -426,6 +427,60 @@ describe.skipIf(!dbAvailable)("FDSA routes", () => {
       expect(res.json().report).toEqual(meta);
     } finally {
       await prisma.systemHeartbeat.delete({ where: { job: "fdsa-exit-lab" } });
+    }
+  });
+
+  it("serves the decide replay's runs with each variant's scorecard, which the worker report drops", async () => {
+    const tag = `fdsa-route-test-${Date.now()}`;
+    const high = `${tag}:high`;
+    const medium = `${tag}:medium`;
+    const metrics = {
+      [high]: { answered: 380, errors: 6, auc: 0.61, rankedWinRatePct: 31.2, modelAuc: 0.57 },
+      [medium]: { answered: 384, errors: 2, auc: 0.6, rankedWinRatePct: 29.8, modelAuc: 0.57 },
+    };
+    const run = await prisma.aiReplayRun.create({
+      data: {
+        purpose: "fdsa-decide",
+        status: "scored",
+        model: "test-model",
+        playbookIds: [high, medium],
+        windowStart: new Date(Date.now() - 86_400_000),
+        windowEnd: new Date(),
+        requestCount: 772,
+        estimatedCostUsd: 15.39,
+        costUsd: 9.99,
+        scoredAt: new Date(),
+        metrics,
+      },
+    });
+    // Another purpose's run (the AI reviewer's playbook replays) is not FDSA's.
+    const other = await prisma.aiReplayRun.create({
+      data: {
+        purpose: "baseline",
+        status: "scored",
+        model: "test-model",
+        playbookIds: ["pb-1"],
+        windowStart: new Date(),
+        windowEnd: new Date(),
+        requestCount: 1,
+      },
+    });
+    try {
+      const res = await call("GET", "/admin/fdsa/replay", "admin");
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json() as { runs: { id: string; tag: string; costUsd: number; variants: object[] }[] };
+      const ids = body.runs.map((r) => r.id);
+      expect(ids).toContain(run.id);
+      expect(ids).not.toContain(other.id);
+      const ours = body.runs.find((r) => r.id === run.id)!;
+      expect(ours.tag).toBe(tag);
+      expect(ours.costUsd).toBe(9.99);
+      expect(ours.variants).toEqual([
+        { id: high, effort: "high", ...metrics[high] },
+        { id: medium, effort: "medium", ...metrics[medium] },
+      ]);
+    } finally {
+      await prisma.aiReplayRun.deleteMany({ where: { id: { in: [run.id, other.id] } } });
     }
   });
 

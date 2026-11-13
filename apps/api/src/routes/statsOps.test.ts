@@ -129,6 +129,7 @@ describe.skipIf(!dbAvailable)("/stats/ops", () => {
     "/stats/ops/fdsa",
     "/stats/ops/fdsa/reviews",
     "/stats/ops/fdsa/lab",
+    "/stats/ops/fdsa/replay",
     "/stats/ops/api-usage",
   ])("%s answers the token", async (url) => {
     const res = await get(url);
