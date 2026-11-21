@@ -319,6 +319,73 @@ export async function buildHeliusBreakdown(
   };
 }
 
+// ---------- The trade tape's Helius pages ----------
+
+/**
+ * The trade tape's reads per UTC day, by why the coin was read (reason), where (source) and how
+ * it ended (status), with the pages or calls each took, and the closing reads by the day they read
+ * through. The tape is 18% of Helius spend (161k credits a day on 11-14 to 11-16) and the meter
+ * files it as one feature, so its called coins, samples, and newest-first reads of traded, matched
+ * and busy coins could not be told apart (Helius efficiency audit 2026-11-21). Helius rows' calls
+ * are getTransactionsForAddress pages (10 credits); Pump.fun's are free.
+ */
+export interface TradeTapeSpend {
+  days: number;
+  columns: readonly string[];
+  /** [day, reason, source, status, tapes, calls, trades] */
+  reads: [string, string, string | null, string, number, number, number][];
+  /** [day, closeStatus, tapes, closeCalls, closeTrades]: closing reads, by the day of closedThrough. */
+  closing: [string, string, number, number, number][];
+}
+
+const tapeQuery = z.object({ days: z.coerce.number().int().min(1).max(30).default(9) });
+
+export async function buildTradeTapeSpend(days: number, now = Date.now()): Promise<TradeTapeSpend> {
+  const since = new Date(now - days * DAY_MS);
+  const [reads, closing] = await Promise.all([
+    prisma.$queryRaw<
+      {
+        d: Date;
+        reason: string;
+        source: string | null;
+        status: string;
+        n: bigint;
+        calls: bigint;
+        trades: bigint;
+      }[]
+    >`
+      SELECT date_trunc('day', "readAt") AS "d", "reason", "source", "status", COUNT(*) AS "n",
+        SUM("calls") AS "calls", SUM("trades") AS "trades"
+      FROM "TokenTradeTape" WHERE "readAt" >= ${since}
+      GROUP BY 1, 2, 3, 4 ORDER BY 1, SUM("calls") DESC`,
+    prisma.$queryRaw<{ d: Date; status: string; n: bigint; calls: bigint | null; trades: bigint | null }[]>`
+      SELECT date_trunc('day', "closedThrough") AS "d", "closeStatus" AS "status", COUNT(*) AS "n",
+        SUM("closeCalls") AS "calls", SUM("closeTrades") AS "trades"
+      FROM "TokenTradeTape" WHERE "closedThrough" >= ${since} AND "closeStatus" IS NOT NULL
+      GROUP BY 1, 2 ORDER BY 1`,
+  ]);
+  return {
+    days,
+    columns: ["day", "reason", "source", "status", "tapes", "calls", "trades"],
+    reads: reads.map((r) => [
+      new Date(r.d).toISOString().slice(0, 10),
+      r.reason,
+      r.source,
+      r.status,
+      num(r.n),
+      num(r.calls),
+      num(r.trades),
+    ]),
+    closing: closing.map((r) => [
+      new Date(r.d).toISOString().slice(0, 10),
+      r.status,
+      num(r.n),
+      num(r.calls),
+      num(r.trades),
+    ]),
+  };
+}
+
 // ---------- TokenSage's own outside calls ----------
 
 export interface TokenSageUsage {
@@ -422,6 +489,7 @@ export async function registerAdminUsageRoutes(app: FastifyInstance, opts: { env
   const reports = new SharedCacheMap<ApiUsageReport>(CACHE_MS, 3, 0, ADMIN_STALE_ON_ERROR_MS);
   const tokenSage = new SharedCacheMap<TokenSageUsage>(60_000, 3, 0, ADMIN_STALE_ON_ERROR_MS);
   const breakdowns = new SharedCacheMap<HeliusBreakdown>(CACHE_MS, 8, 0, ADMIN_STALE_ON_ERROR_MS);
+  const tapes = new SharedCacheMap<TradeTapeSpend>(5 * 60_000, 4, 0, ADMIN_STALE_ON_ERROR_MS);
 
   app.get("/api-usage", async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);
@@ -458,6 +526,13 @@ export async function registerAdminUsageRoutes(app: FastifyInstance, opts: { env
     }
     const key = `${grain}|${from?.toISOString() ?? ""}|${to?.toISOString() ?? ""}`;
     return breakdowns.for(key).get(() => buildHeliusBreakdown(grain, from, to));
+  });
+
+  app.get("/api-usage/trade-tape", async (request, reply) => {
+    const parsed = tapeQuery.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
+    const { days } = parsed.data;
+    return tapes.for(String(days)).get(() => buildTradeTapeSpend(days));
   });
 
   app.get("/api-usage/tokensage", async (request, reply) => {

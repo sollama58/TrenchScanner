@@ -13,7 +13,12 @@ import {
 } from "@trenchscanner/core";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { buildApiUsageReport, buildHeliusBreakdown, readTokenSageUsage } from "./adminUsage.js";
+import {
+  buildApiUsageReport,
+  buildHeliusBreakdown,
+  buildTradeTapeSpend,
+  readTokenSageUsage,
+} from "./adminUsage.js";
 
 const ADMIN_WALLET = "AdminUsage111111111111111111111111111111111";
 const OTHER_WALLET = "NotAdminUsage1111111111111111111111111111111";
@@ -197,6 +202,56 @@ describe.skipIf(!dbAvailable)("admin API usage", () => {
     const served = (await call("/admin/api-usage/helius", "admin")).json();
     expect(served.columns).toContain("method");
     expect(served.rows).toHaveLength(all.rows.length);
+  });
+
+  it("sums the trade tape's reads by day, reason, source and status, and its closing reads", async () => {
+    const mint = `TapeSpendMint${now}`;
+    const token = await prisma.token.create({ data: { mintAddress: mint, symbol: "TS" } });
+    const base = { anchorAt: new Date(now - 3_600_000), windowEnd: new Date(now - 1_800_000) };
+    const other = await prisma.token.create({ data: { mintAddress: `${mint}b`, symbol: "TS2" } });
+    try {
+      await prisma.tokenTradeTape.createMany({
+        data: [
+          {
+            ...base,
+            tokenId: token.id,
+            reason: "called",
+            source: "helius",
+            status: "done",
+            calls: 12,
+            trades: 1_100,
+            readAt: new Date(now - 60_000),
+            closeStatus: "done",
+            closedThrough: new Date(now - 30_000),
+            closeCalls: 9,
+            closeTrades: 4,
+          },
+          {
+            ...base,
+            tokenId: other.id,
+            reason: "traded",
+            source: "helius",
+            status: "partial",
+            calls: 30,
+            trades: 3_000,
+            readAt: new Date(now - 60_000),
+          },
+        ],
+      });
+      const spend = await buildTradeTapeSpend(2, now + 1);
+      const day = new Date(now - 60_000).toISOString().slice(0, 10);
+      expect(spend.reads).toEqual(
+        expect.arrayContaining([
+          [day, "traded", "helius", "partial", 1, 30, 3_000],
+          [day, "called", "helius", "done", 1, 12, 1_100],
+        ]),
+      );
+      expect(spend.closing).toEqual([[new Date(now - 30_000).toISOString().slice(0, 10), "done", 1, 9, 4]]);
+      expect((await call("/admin/api-usage/trade-tape?days=31", "admin")).statusCode).toBe(400);
+      expect((await call("/admin/api-usage/trade-tape", "admin")).json().days).toBe(9);
+    } finally {
+      await prisma.token.deleteMany({ where: { id: { in: [token.id, other.id] } } });
+    }
   });
 
   it("says when TokenSage isn't connected", async () => {

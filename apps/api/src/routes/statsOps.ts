@@ -67,6 +67,7 @@ export const OPS_READS: readonly string[] = [
   "/api-usage",
   "/api-usage/tokensage",
   "/api-usage/helius",
+  "/api-usage/trade-tape",
   // routes/adminEnv.ts: which vars are set, never their values
   "/env",
   // routes/adminJobRuns.ts and adminRetrain.ts: the queued requests, not the buttons
