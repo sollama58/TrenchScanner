@@ -21,6 +21,7 @@ import {
   type TapeTrade,
   type ChainTx,
 } from "@trenchscanner/core";
+import { createHash } from "node:crypto";
 import type { JobRunMeta } from "../scheduler.js";
 import { saveChainCandles, type TapeCandleSink } from "./chainCandles.js";
 import {
@@ -143,6 +144,56 @@ const SAMPLE_PAUSE_PENDING = 100;
  * wallet label conditioned on "a seat called it"). About 20 pages a coin, ~10k credits a day.
  */
 export const HELIUS_SAMPLES_PER_DAY = 50;
+/**
+ * Where a mint falls in [0, 1), fixed for good: the first four bytes of its SHA-256. The Helius
+ * lane reads the called coins under TradeTapeOptions.heliusCalledShare (see inHeliusShare), so the
+ * same coins are always in or out, whichever process or run picks them.
+ */
+export function mintShareSlot(mint: string): number {
+  return createHash("sha256").update(mint).digest().readUInt32BE(0) / 2 ** 32;
+}
+
+/**
+ * Whether the Helius lane reads a called coin (Helius efficiency audit 2026-11-21, owner decision
+ * "Closing cap and half the tapes"): one in its share, or one a user traded or a narrow filter
+ * matched (keep), whatever its slot. The rest wait on Pump.fun's lane, which is free.
+ */
+const inHeliusShare = (c: TapeCoin, share: number, keep: ReadonlySet<string>) =>
+  share >= 1 || keep.has(c.tokenId) || mintShareSlot(c.mint) < share;
+
+/**
+ * Of these called coins, the ones a user is trading or traded (TradingPosition) or a narrow filter
+ * matched over NARROW_SPAN_MS (as pendingMatchedCoins): kept on the Helius lane outside its share.
+ */
+export async function keptCalledCoins(tokenIds: string[], nowMs: number): Promise<Set<string>> {
+  if (tokenIds.length === 0) return new Set();
+  const since = new Date(nowMs - NARROW_SPAN_MS);
+  const rows = await prisma.$queryRaw<{ tokenId: string }[]>`
+    WITH events AS (
+      SELECT COUNT(DISTINCT co."tokenId") AS n FROM "CandidateOutcome" co
+      WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${since} AND co."anchorAt" <= ${new Date(nowMs)}
+    ), broad AS (
+      SELECT m."filterId" FROM "Match" m
+      WHERE m."matchedAt" >= ${since} AND m."matchedAt" <= ${new Date(nowMs)}
+      GROUP BY m."filterId"
+      HAVING COUNT(DISTINCT m."tokenId") >= ${NARROW_SHARE} * (SELECT n FROM events)
+    )
+    SELECT t.id AS "tokenId" FROM "Token" t
+    WHERE t.id IN (${Prisma.join(tokenIds)})
+      AND (
+        EXISTS (
+          SELECT 1 FROM "TradingPosition" p
+          WHERE p."mint" = t."mintAddress" AND p."openedAt" >= ${new Date(nowMs - LOOKBACK_MS)}
+        )
+        OR EXISTS (
+          SELECT 1 FROM "Match" m
+          WHERE m."tokenId" = t.id AND m."matchedAt" >= ${since}
+            AND m."filterId" NOT IN (SELECT "filterId" FROM broad)
+        )
+      )`;
+  return new Set(rows.map((r) => r.tokenId));
+}
+
 /** The TradeTapeProgress lane a busy coin's kept launch side is saved under (see keepHandoff). */
 const HANDOFF_LANE_PREFIX = "handoff:";
 const RETRY_FAILED_MS = 30 * 60_000;
@@ -666,6 +717,11 @@ export interface TradeTapeOptions {
   heliusPagesPerRun: number;
   /** Uncalled samples the Helius lane may start a day (HELIUS_SAMPLES_PER_DAY in production); 0 or absent: none. */
   heliusSamplesPerDay?: number;
+  /**
+   * The share of called coins the Helius lane reads, by mintShareSlot (TRADE_TAPE_HELIUS_CALLED_SHARE);
+   * traded and narrow-matched coins are read whatever their slot. 1 or absent: every called coin.
+   */
+  heliusCalledShare?: number;
   pumpFunCallsPerRun: number;
   /** Helius credits a run for closing reads (tradeTapeClosing.ts); 0 or absent: none. */
   closingCreditsPerRun?: number;
@@ -774,7 +830,12 @@ interface NewestPicks {
  * The next coin to read newest first, in the order of user decision 2026-10-20 (file header), taken
  * off its list at once (the Pump.fun lane picks from `called` alongside).
  */
-async function nextNewestCoin(called: TapeCoin[], picks: NewestPicks, nowMs: number) {
+async function nextNewestCoin(
+  called: TapeCoin[],
+  picks: NewestPicks,
+  nowMs: number,
+  ours: (c: TapeCoin) => boolean,
+) {
   const take = (list: TapeCoin[], coin: TapeCoin | undefined) => {
     if (coin) list.splice(list.indexOf(coin), 1);
     return coin;
@@ -785,7 +846,7 @@ async function nextNewestCoin(called: TapeCoin[], picks: NewestPicks, nowMs: num
   // Oldest first: Pump.fun takes the newest.
   const busy = take(
     called,
-    [...called].reverse().find((c) => c.failedSource === BUSY_SOURCE && free(c)),
+    [...called].reverse().find((c) => c.failedSource === BUSY_SOURCE && ours(c) && free(c)),
   );
   if (busy) return busy;
   picks.matched ??= await pendingMatchedCoins(nowMs);
@@ -866,6 +927,7 @@ async function runHeliusLane(
   picks: NewestPicks,
   pagesPerRun: number,
   samplesPerDay: number,
+  ours: (c: TapeCoin) => boolean,
   counts: RunCounts,
   now: () => number,
 ) {
@@ -874,7 +936,7 @@ async function runHeliusLane(
   // backlog with what's left of the budget.
   while (budget > 0 && deps.helius.gtfaUsable) {
     if (!state.helius) {
-      const coin = called.find((c) => heliusFromLaunch(c) && !heldElsewhere(c.tokenId, "helius"));
+      const coin = called.find((c) => heliusFromLaunch(c) && ours(c) && !heldElsewhere(c.tokenId, "helius"));
       if (!coin) break;
       called.splice(called.indexOf(coin), 1);
       const seeded = await seedFromLaunchBuyers(deps, coin, counts, now);
@@ -896,7 +958,7 @@ async function runHeliusLane(
   let newest = Math.min(budget, heliusNewestPagesPerRun(pagesPerRun));
   while (newest > 0 && deps.helius.gtfaUsable) {
     if (!state.heliusNewest) {
-      const coin = await nextNewestCoin(called, picks, now());
+      const coin = await nextNewestCoin(called, picks, now(), ours);
       if (!coin) break;
       state.heliusNewest = {
         coin,
@@ -1251,6 +1313,16 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     traded:
       heliusOn && heliusNewestPagesPerRun(opts.heliusPagesPerRun) > 0 ? await pendingTradedCoins(now()) : [],
   };
+  // The called coins the Helius lane may read (heliusCalledShare); the others wait on Pump.fun.
+  const share = opts.heliusCalledShare ?? 1;
+  const keep =
+    heliusOn && share < 1
+      ? await keptCalledCoins(
+          called.filter((c) => mintShareSlot(c.mint) >= share).map((c) => c.tokenId),
+          now(),
+        )
+      : new Set<string>();
+  const ours = (c: TapeCoin) => inHeliusShare(c, share, keep);
   const closing: ClosingCounts = {
     closingDone: 0,
     closingFailed: 0,
@@ -1260,7 +1332,16 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   };
   await Promise.all([
     opts.heliusPagesPerRun > 0
-      ? runHeliusLane(deps, called, picks, opts.heliusPagesPerRun, opts.heliusSamplesPerDay ?? 0, counts, now)
+      ? runHeliusLane(
+          deps,
+          called,
+          picks,
+          opts.heliusPagesPerRun,
+          opts.heliusSamplesPerDay ?? 0,
+          ours,
+          counts,
+          now,
+        )
       : Promise.resolve(),
     opts.pumpFunCallsPerRun > 0
       ? runPumpFunLane(
@@ -1294,6 +1375,8 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   const rpc = deps.helius.takeCallStats();
   const meta: JobRunMeta = {
     pendingCalledCoins: pending,
+    // Called coins waiting outside the Helius lane's share (heliusCalledShare): Pump.fun's to read.
+    outsideHeliusShare: called.filter((c) => !ours(c)).length,
     // False means Helius can't serve the read here (no key, or the method stood down): the tape
     // then runs on Pump.fun alone, a few coins an hour.
     heliusUsable: deps.helius.gtfaUsable,

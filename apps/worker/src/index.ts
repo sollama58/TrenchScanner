@@ -1165,6 +1165,7 @@ async function main() {
           runTradeTapeJob(tapeDeps, {
             heliusPagesPerRun: env.TRADE_TAPE_HELIUS_PAGES_PER_RUN,
             heliusSamplesPerDay: HELIUS_SAMPLES_PER_DAY,
+            heliusCalledShare: env.TRADE_TAPE_HELIUS_CALLED_SHARE,
             pumpFunCallsPerRun: env.TRADE_TAPE_PUMPFUN_CALLS_PER_RUN,
             closingCreditsPerRun: env.TRADE_TAPE_CLOSING_CREDITS_PER_RUN,
             lowCapMcapUsd: env.LOW_CAP_MCAP_USD,
