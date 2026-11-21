@@ -13,7 +13,7 @@ import {
 } from "@trenchscanner/core";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { buildApiUsageReport, readTokenSageUsage } from "./adminUsage.js";
+import { buildApiUsageReport, buildHeliusBreakdown, readTokenSageUsage } from "./adminUsage.js";
 
 const ADMIN_WALLET = "AdminUsage111111111111111111111111111111111";
 const OTHER_WALLET = "NotAdminUsage1111111111111111111111111111111";
@@ -169,6 +169,34 @@ describe.skipIf(!dbAvailable)("admin API usage", () => {
     expect(week.callsByProvider.find((s) => s.provider === "helius")!.values.reduce((a, b) => a + b, 0)).toBe(
       100,
     );
+  });
+
+  it("splits Helius by day, process, feature and method over every kept row", async () => {
+    const all = await buildHeliusBreakdown("day", undefined, undefined, now + 1);
+    const key = (r: (string | number)[]) => `${r[2]}|${r[3]}`;
+    const sums = new Map<string, number>();
+    for (const r of all.rows) sums.set(key(r), (sums.get(key(r)) ?? 0) + (r[8] as number));
+    // Helius only (not DexScreener), and the 3-day-old row the 1h and 24h windows leave out.
+    expect(Object.fromEntries(sums)).toEqual({
+      "scan/linkedWallets|getTransactionsForAddress": 30,
+      "scan/wallets|getMultipleAccounts": 80,
+      "trade-tape|getTransactionsForAddress": 100,
+      "scan/wallets|getSignaturesForAddress": 7,
+    });
+    expect(all.rows.every((r) => r[1] === PROCESS && /T00:00:00\.000Z$/.test(r[0] as string))).toBe(true);
+
+    const hours = await buildHeliusBreakdown("hour", new Date(now - 2 * 3_600_000), new Date(now + 1));
+    expect(hours.rows.map((r) => [r[2], r[8]])).toEqual([
+      ["scan/wallets", 80],
+      ["scan/linkedWallets", 30],
+    ]);
+    expect(hours.rows[0]![0]).toMatch(/T\d\d:00:00\.000Z$/);
+
+    expect((await call("/admin/api-usage/helius?grain=hour&from=2020-01-01", "admin")).statusCode).toBe(400);
+    expect((await call("/admin/api-usage/helius?grain=week", "admin")).statusCode).toBe(400);
+    const served = (await call("/admin/api-usage/helius", "admin")).json();
+    expect(served.columns).toContain("method");
+    expect(served.rows).toHaveLength(all.rows.length);
   });
 
   it("says when TokenSage isn't connected", async () => {
