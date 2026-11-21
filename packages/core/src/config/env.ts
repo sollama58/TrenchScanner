@@ -262,8 +262,10 @@ const envSchema = z.object({
   // immutable, so every resolved wallet is cached forever and the steady-state cost is only the
   // genuinely-new wallets each cycle; this cap bounds the worst case (a cold cache, a sudden
   // flood of new tokens) so the pass can never blow through the Helius Dev tier. Wallets over
-  // the cap simply stay unknown for a cycle and retry on the next.
-  WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(50),
+  // the cap simply stay unknown for a cycle and retry on the next. 35 in render.yaml from
+  // 2026-11-02 (Helius audit); 15 since 2026-11-21 (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml): ~25k
+  // credits a day, non-contenders' Fresh readings fill in later. Contenders are read first.
+  WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(15),
   // Cap on UNCACHED wallet first-transaction lookups per scan cycle for the launch-buyer
   // fresh-wallet share (the worker's launchBuyerFreshness.ts): the first ten buyers of each
   // launch already read, on the same cache as the top-10 check, so repeat bot wallets cost
@@ -278,8 +280,10 @@ const envSchema = z.object({
   // coins only (user decision 2026-10-24); every other band coin reads from the funders stored.
   // 30 until 2026-11-02, 10 since (audit, Helius cut D, owner decision): decisions wait only on
   // the contenders' readings, which have their own budget below, and the Linked and CEX cuts
-  // keep applying once a coin's funders are read.
-  LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(10),
+  // keep applying once a coin's funders are read. 5 since 2026-11-21 (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml),
+  // with LINKED_HOLDER_READS_PER_CYCLE: ~30k credits a day together; the contender budget below
+  // is unchanged.
+  LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
   // The same for contenders (the coins about to be decided on, read first), on top of the above
   // (user decision 2026-10-14, audit D1 "bigger budget"): a cold coin's top 25 needs about that
   // many new funders, so the shared 30 covered about one a cycle. Spent only on the pass the cycle
@@ -292,8 +296,9 @@ const envSchema = z.object({
   // (the worker's linkedWallets.ts), contenders first. Only coins that passed the safety screen are
   // read. 10 since 2026-10-14 (user decision): about 10 credits a cycle (it was 4 coins at 40 credits
   // on the unpaged 10-credit method). The new holders these lists add go to the funder read, which
-  // LINKED_WALLET_LOOKUPS_PER_CYCLE still caps. 0 keeps RugCheck's list.
-  LINKED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(10),
+  // LINKED_WALLET_LOOKUPS_PER_CYCLE still caps. 0 keeps RugCheck's list. 5 since 2026-11-21
+  // (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml), contenders still first.
+  LINKED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
   // Holder-to-holder transfers among the top 25 (worker's holderTransfers.ts, user ask 2026-10-16):
   // signature reads of the holders' token accounts per cycle (1 credit each, a whole coin's 25 or
   // so at a time, contenders only; a re-read after 10 minutes asks only for newer ones), and full
@@ -454,8 +459,11 @@ const envSchema = z.object({
   // again once it is LIVE_TAPE_REFRESH_SECONDS old.
   // A coin still on its bonding curve takes its page off the PumpPortal trade stream instead, for
   // nothing (user decision 2026-10-24); these pages are for the coins past graduation. 0 turns
-  // it off.
-  LIVE_TAPE_PAGES_PER_CYCLE: z.coerce.number().int().nonnegative().default(4),
+  // it off. History (set in render.yaml until 2026-11-21): 8 (2026-10-23), 15 (2026-10-27, model
+  // audit §18), 10 (2026-11-02, Helius audit). 5 since 2026-11-21 (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml):
+  // ~40k credits a day; pages for coins off the logs feed (LIVE_TAPE_LOGS_MAX_COINS) age from
+  // about 35 s to about 70 s.
+  LIVE_TAPE_PAGES_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
   LIVE_TAPE_REFRESH_SECONDS: z.coerce.number().int().positive().default(180),
   // Which coins queue for a live-tape page: by default only those close to a call (a contender
   // past the event pre-gate, or an alert held for a wallet figure), the rest of the scored coins
@@ -518,13 +526,18 @@ const envSchema = z.object({
   // Uncached wallets priced per scan cycle on the balances route (WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
   // is the DAS route's). About 2 credits a wallet plus a little for mint decimals. 80 a cycle
   // (~160 credits, ~230k a day; was 40, user decision 2026-10-27) with the 10-minute holdings TTL
-  // below, so about twice as many coins keep a fresh empty-wallet reading.
-  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(80),
+  // below, so about twice as many coins keep a fresh empty-wallet reading. 40 since 2026-11-21
+  // (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml): ~70k credits a day; contenders, alerts awaiting a reading and the
+  // alert feeds' coins keep first claim (walletPriority.ts), the rest of the band is read about
+  // half as often.
+  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(40),
   // The snipers figure (first 25 buyers still holding), read from the chain - see the worker's
   // launchSnipers.ts. Who the first buyers were costs one 10-credit getTransactionsForAddress per
   // token, read once and cached; this many new tokens are read per scan cycle, contenders first.
   // 0 turns the chain read off (the figure then only comes from the trade stream, when it runs).
-  SNIPER_LAUNCH_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
+  // 2 since 2026-11-21 (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml): ~25k credits a day; contenders keep their own
+  // budget below, so non-contenders' Block 0 and Snipers readings arrive later.
+  SNIPER_LAUNCH_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(2),
   // The same for contenders (tokens about to be decided on), on top of the above: with
   // CURATED_REQUIRE_WALLET_CHECKS on, a curated decision waits for this read's Block 0 figure (the
   // safety screen's Block 0 cut). Contenders are a handful a cycle; this caps a burst.

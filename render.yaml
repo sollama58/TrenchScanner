@@ -475,42 +475,10 @@ services:
       # credits: each lookup costs 10 credits and the old budget filled every cycle (~88% of all
       # Helius spend). 10 is the floor - a top-10 holder group is all-or-nothing, so a smaller
       # budget could never complete a contender whose wallets are all uncached.
-      # 35 since 2026-11-02 (user decision, Helius audit: "Pages 15 to 10, freshness 50 to 35"), to
-      # bring Helius under 30M credits a month: new wallets' ages are looked up a little later.
-      # 15 since 2026-11-21 (user decision, Helius efficiency audit: the coverage trims, ~25k
-      # credits a day): non-contenders' Fresh readings fill in later; answers are permanent.
-      - key: WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE
-        value: "15"
+      # Freshness (WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE) and live-tape pages (LIVE_TAPE_PAGES_PER_CYCLE)
+      # are set in env.ts since 2026-11-21 (owner: hardwire the Helius coverage trims).
       - key: WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
         value: "10"
-      # The live tape (worker's liveTape.ts): newest-trade pages of the coins close to a call, the
-      # source of every winner-wallet and flagged-wallet input. The cap is per cycle, so the one-minute
-      # cycle (#953) cut it from 8 pages a minute to 4. User decision 2026-10-23 (thread "Winners model
-      # signal"): back to 8 a minute, about 58k more Helius credits a day than 4. User decision
-      # 2026-10-27 (model audit, §18): 15. Since #1118 the page is also every coin's 5m order flow
-      # and launch bags (the PumpPortal free tier carries no trades), and at 8 the queue was about
-      # saturated: ~40 coins held a page, re-read every 3 minutes, against 9-14 pages read a cycle
-      # (the entry fast path reads under the same cap). 15 is at most ~150k more credits a day.
-      # User decision 2026-11-02 (Helius audit, 30M credits a month): 10. The cap now also pays for
-      # the logs feed (LIVE_TAPE_LOGS_MAX_COINS), whose 10 coins keep every trade without pages.
-      # User decision 2026-11-21 (Helius efficiency audit, coverage trims): 5, ~40k credits a day.
-      # Pages for coins off the logs feed age from about 35 s to about 70 s.
-      - key: LIVE_TAPE_PAGES_PER_CYCLE
-        value: "5"
-      # The rest of the coverage trims (user decision 2026-11-21, Helius efficiency audit, ~125k
-      # credits a day together). Each budget is per one-minute cycle and leaves contenders first:
-      # Empty readings (80 to 40, walletPriority.ts), linked-wallet and holder reads off the
-      # contenders (10 to 5 each; LINKED_CONTENDER budget unchanged), and sniper launch reads off
-      # the contenders (5 to 2; the contender budget unchanged). Removing a key restores the
-      # env.ts default, which is the value before these trims.
-      - key: WALLET_BALANCE_LOOKUPS_PER_CYCLE
-        value: "40"
-      - key: LINKED_WALLET_LOOKUPS_PER_CYCLE
-        value: "5"
-      - key: LINKED_HOLDER_READS_PER_CYCLE
-        value: "5"
-      - key: SNIPER_LAUNCH_LOOKUPS_PER_CYCLE
-        value: "2"
       - key: RUGCHECK_CACHE_TTL_MINUTES
         value: "5"
       # Wall-clock span holderGrowthPct is measured over, deliberately independent of the scan
