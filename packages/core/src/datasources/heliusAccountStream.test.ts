@@ -148,6 +148,47 @@ describe("HeliusAccountStream metering", () => {
   });
 });
 
+describe("HeliusAccountStream metering by stream", () => {
+  it("files each message under what it was and the key it came for, with the same credits", () => {
+    apiUsageMeter.take();
+    const stream = new HeliusAccountStream(
+      "wss://example",
+      vi.fn(),
+      FakeSocket as unknown as new (url: string) => WebSocket,
+      vi.fn(),
+      vi.fn(),
+    ).metered("stream/x", (kind, key) => `${kind}:${key ?? "-"}`);
+    stream.start();
+    const socket = FakeSocket.last!;
+    socket.open(); // 1 credit, control
+    stream.watch("curve:m", ["acc"], Date.now(), "account");
+    const sub = socket.sent.filter((m) => m.method === "accountSubscribe").at(-1)!;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: sub.id, result: 9 }));
+    const pad = "x".repeat(50_000);
+    const update = JSON.stringify({
+      method: "accountNotification",
+      params: { subscription: 9, result: { context: { slot: 1 }, value: { data: ["AAAA", "base64"], pad } } },
+    });
+    // Two 50 KB updates: 2 credits, under the curve's key.
+    stream.handleMessage(update);
+    stream.handleMessage(update);
+    const slot = JSON.stringify({ method: "slotNotification", params: { result: { slot: 5 }, pad } });
+    stream.handleMessage(slot);
+    stream.handleMessage(slot);
+    stream.handleMessage("not json");
+    const byFeature = new Map<string, number>();
+    for (const r of apiUsageMeter.take()) {
+      if (r.feature.startsWith("stream/x"))
+        byFeature.set(r.feature, (byFeature.get(r.feature) ?? 0) + r.counter.credits);
+    }
+    expect(byFeature.get("stream/x/account:curve:m")).toBe(2);
+    expect(byFeature.get("stream/x/slot:-")).toBe(2);
+    expect(byFeature.get("stream/x/control:-")).toBe(1);
+    expect([...byFeature.keys()].every((f) => f.startsWith("stream/x/"))).toBe(true);
+    stream.stop();
+  });
+});
+
 describe("HeliusAccountStream stalls and resubscribes (the chart's live tail)", () => {
   function confirmed(
     stream: HeliusAccountStream,

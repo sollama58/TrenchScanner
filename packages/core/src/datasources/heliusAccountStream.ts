@@ -109,6 +109,12 @@ type WebSocketCtor = new (url: string) => WebSocket;
  */
 export type StreamKind = "tx" | "account" | "logs";
 
+/**
+ * What a message on the socket was, for the meter's split (metered's `labelOf`): one of the three
+ * kinds of key, the slot feed, or "control" (subscription answers, connections, anything unread).
+ */
+export type StreamMessageKind = StreamKind | "slot" | "control";
+
 interface Subscription {
   kind: StreamKind;
   accounts: ReadonlySet<string>;
@@ -199,8 +205,10 @@ export class HeliusAccountStream {
   private readonly slotSeenAt = new Map<number, number>();
   /** The feature this socket's credits go under in ApiUsage (metered); null leaves them out. */
   private meterFeature: string | null = null;
-  /** Credits counted but not yet a whole one: ApiUsage keeps whole credits. */
-  private meterPending = 0;
+  /** Names each message's share of the feature (metered); null files it all under the feature. */
+  private meterLabelOf: ((kind: StreamMessageKind, key: string | undefined) => string) | null = null;
+  /** Credits counted but not yet a whole one, per feature: ApiUsage keeps whole credits. */
+  private readonly meterPending = new Map<string, number>();
 
   constructor(
     private readonly url: string,
@@ -230,9 +238,15 @@ export class HeliusAccountStream {
    * Counts this socket's bytes and connections as Helius credits in Admin > API usage, under
    * `feature` (endpoint "websocket"): the meter only sees fetch, so a socket's spend was missing
    * there and showed only in a since-boot estimate a deploy resets (audit 2026-10-19).
+   *
+   * With `labelOf`, each message goes under `feature/<label>` for what it was and the key it came
+   * for, so one socket's streams read apart: the scanner's carried holders, curves, pools, burns
+   * and the live tape's logs as one 12% row (Helius efficiency audit 2026-11-21). Bytes and
+   * credits are the same either way.
    */
-  metered(feature: string): this {
+  metered(feature: string, labelOf?: (kind: StreamMessageKind, key: string | undefined) => string): this {
     this.meterFeature = feature;
+    this.meterLabelOf = labelOf ?? null;
     return this;
   }
 
@@ -276,14 +290,17 @@ export class HeliusAccountStream {
     return silent >= this.coverStallMs ? silent : 0;
   }
 
-  private meter(bytes: number, connections: number): void {
+  private meter(bytes: number, connections: number, kind: StreamMessageKind = "control", key?: string): void {
     if (this.meterFeature === null) return;
-    this.meterPending += (bytes / 100_000) * 2 + connections;
-    const credits = Math.floor(this.meterPending);
-    this.meterPending -= credits;
+    const feature = this.meterLabelOf
+      ? `${this.meterFeature}/${this.meterLabelOf(kind, key)}`
+      : this.meterFeature;
+    const pending = (this.meterPending.get(feature) ?? 0) + (bytes / 100_000) * 2 + connections;
+    const credits = Math.floor(pending);
+    this.meterPending.set(feature, pending - credits);
     apiUsageMeter.add(
       Date.now(),
-      this.meterFeature,
+      feature,
       { provider: "helius", endpoint: "websocket", calls: bytes > 0 ? 1 : 0, credits },
       { requests: 0, ok: true, rateLimited: false, ms: 0 },
     );
@@ -482,7 +499,6 @@ export class HeliusAccountStream {
   /** Visible for tests: what one message from Helius does. */
   handleMessage(raw: string, at: number = Date.now()): void {
     this.stats.bytes += raw.length;
-    this.meter(raw.length, 0);
     let msg: {
       id?: unknown;
       result?: unknown;
@@ -493,9 +509,14 @@ export class HeliusAccountStream {
     try {
       msg = JSON.parse(raw);
     } catch {
+      this.meter(raw.length, 0);
       return;
     }
-    if (typeof msg !== "object" || msg === null) return;
+    if (typeof msg !== "object" || msg === null) {
+      this.meter(raw.length, 0);
+      return;
+    }
+    this.meterMessage(msg, raw.length);
     if (typeof msg.id === "number") {
       const undo = this.abandonedRequests.get(msg.id);
       if (undo !== undefined) {
@@ -589,6 +610,27 @@ export class HeliusAccountStream {
     } catch (err) {
       logger.warn("stream transaction handler failed", { key, error: String(err) });
     }
+  }
+
+  /** Bills one parsed message under what it was and the key it came for. */
+  private meterMessage(msg: { method?: unknown; params?: { subscription?: unknown } }, bytes: number): void {
+    if (this.meterFeature === null) return;
+    const kind: StreamMessageKind =
+      msg.method === "accountNotification"
+        ? "account"
+        : msg.method === "logsNotification"
+          ? "logs"
+          : msg.method === "transactionNotification"
+            ? "tx"
+            : msg.method === "slotNotification"
+              ? "slot"
+              : "control";
+    const subId = msg.params?.subscription;
+    const key =
+      kind !== "slot" && kind !== "control" && typeof subId === "number"
+        ? this.keyOfSub.get(subId)
+        : undefined;
+    this.meter(bytes, 0, kind, key);
   }
 
   /** Replaces a connection that has gone quiet. Visible for tests. */
