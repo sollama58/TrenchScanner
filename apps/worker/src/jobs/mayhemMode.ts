@@ -25,6 +25,43 @@ export function resetMayhemFailureBackoff(): void {
   failureBackoff.clear();
 }
 
+/**
+ * Pump.fun's Mayhem flag as PumpPortal relays it on each launch (MAYHEM_FROM_PUMPPORTAL, Helius
+ * efficiency audit 2026-11-21). Shadow: every chain answer is compared with it and counted. On: a
+ * launch PumpPortal flagged takes that answer instead of the 1-credit PDA read, except one in
+ * RELAY_CHECK_EVERY, which is still read and compared; the chain wins a disagreement. Pump.fun's
+ * own API flag was used the same way at discovery until 2026-10-14 and matched the chain on all
+ * 1,191 coins compared (ignoreMayhemMints below).
+ */
+export interface MayhemRelay {
+  mode: "shadow" | "on";
+  flagOf: (mint: string) => boolean | undefined;
+}
+let relay: MayhemRelay | null = null;
+export const RELAY_CHECK_EVERY = 20;
+let relayed = 0;
+const emptyRelayStats = () => ({ agree: 0, disagree: 0, unrelayed: 0, taken: 0, checked: 0 });
+let relayStats = emptyRelayStats();
+
+export function setMayhemRelay(r: MayhemRelay | null): void {
+  relay = r;
+  relayed = 0;
+  relayStats = emptyRelayStats();
+}
+
+/**
+ * Since the last take: chain answers that agreed with the relayed flag, disagreed, or had none to
+ * compare (a launch PumpPortal did not announce), and in "on" mode the answers taken from the
+ * relay and the relayed launches still checked on the chain (the mode is the env's). Null without a
+ * relay.
+ */
+export function takeMayhemRelayStats(): ReturnType<typeof emptyRelayStats> | null {
+  if (!relay) return null;
+  const out = relayStats;
+  relayStats = emptyRelayStats();
+  return out;
+}
+
 /** MayhemModeCache's answers, held in memory too - a mint's Mayhem flag never changes. */
 export const settledMayhem = new SettledAnswers<boolean>(20_000);
 
@@ -103,8 +140,40 @@ export async function resolveMayhemMode(
     return result;
   }
 
-  const fetched =
-    uncached.length > 0 ? await helius.getMayhemModeBatch(uncached) : new Map<string, MayhemModeResult>();
+  // With the relay on, PumpPortal's flag answers its launches, but one in RELAY_CHECK_EVERY.
+  const fromRelay = new Map<string, boolean>();
+  let ask = uncached;
+  if (relay?.mode === "on") {
+    ask = [];
+    for (const mint of uncached) {
+      const flag = relay.flagOf(mint);
+      if (flag === undefined) ask.push(mint);
+      else if ((relayed += 1) % RELAY_CHECK_EVERY === 0) {
+        ask.push(mint);
+        relayStats.checked += 1;
+      } else fromRelay.set(mint, flag);
+    }
+    relayStats.taken += fromRelay.size;
+  }
+  const fetched = ask.length > 0 ? await helius.getMayhemModeBatch(ask) : new Map<string, MayhemModeResult>();
+  if (relay) {
+    for (const mint of ask) {
+      const r = fetched.get(mint);
+      if (r?.status !== "found") continue;
+      const flag = relay.flagOf(mint);
+      if (flag === undefined) relayStats.unrelayed += 1;
+      else if (flag === r.isMayhemMode) relayStats.agree += 1;
+      else {
+        relayStats.disagree += 1;
+        logger.warn("PumpPortal's Mayhem flag disagrees with the chain - the chain's answer stands", {
+          mint,
+          relayed: flag,
+          chain: r.isMayhemMode,
+        });
+      }
+    }
+  }
+  for (const [mint, isMayhemMode] of fromRelay) fetched.set(mint, { status: "found", isMayhemMode });
   // Helius gave no answer (a 429, credits out, a timeout): the same read on other providers. A mint
   // the RPC doesn't see yet isn't asked: the backups lag the same way.
   const unanswered = [
@@ -155,7 +224,8 @@ export async function resolveMayhemMode(
   logger.info("resolved mayhem mode", {
     requested: unique.length,
     cached: unique.length - uncached.length - backedOffMints.length,
-    fetched: uncached.length,
+    fetched: ask.length,
+    fromRelay: fromRelay.size,
     backedOff,
     mayhemFound: toCache.filter((r) => r.isMayhemMode).length,
     failedWillRetryLater: failed,
@@ -169,7 +239,7 @@ export async function resolveMayhemMode(
  * Sets aside the Mayhem coins among Pump.fun launches just discovered, before any scan reads them
  * (user ask 2026-10-20: Mayhem coins are never wanted). Pump.fun's own flag used to do this at
  * discovery, but its API has been blocked since 2026-10-14 and Jupiter's and PumpPortal's lists
- * carry no flag, so about half of all scanned coins were Mayhem caught only at the scan (632 of
+ * carried no flag then (PumpPortal's `is_mayhem_mode` since, MAYHEM_FROM_PUMPPORTAL), so about half of all scanned coins were Mayhem caught only at the scan (632 of
  * 1,237 over 3 hours on 2026-10-20). One batched on-chain lookup per cycle answers it here.
  *
  * A failed lookup is not backed off: a launch seconds old is often not visible to the RPC yet,

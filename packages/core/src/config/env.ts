@@ -163,6 +163,14 @@ const envSchema = z.object({
   // started a whole cycle early instead and ran the scan's per-cycle Helius budgets three or four
   // times a minute. "false" leaves every coin to the cycle, and stops the watch's Jupiter checks
   // too. Needs JUPITER_API_KEY, as the watch did.
+  // Pump.fun's Mayhem flag as PumpPortal relays it on each launch (`is_mayhem_mode`, the create
+  // instruction's own argument), against the on-chain PDA read that answers it today: 1 credit a
+  // launch, ~36k a day, most of the scanner's unlabelled Helius spend (Helius efficiency audit
+  // 2026-11-21). "shadow" (the default) reads the chain as before and only counts how often the two
+  // agree (the scan heartbeat's `mayhemRelay`). "on" takes the relayed flag for PumpPortal's
+  // launches and still checks one in 20 of them on the chain, so a relay that drifts shows; the
+  // chain wins any disagreement. "off" ignores the field.
+  MAYHEM_FROM_PUMPPORTAL: z.enum(["off", "shadow", "on"]).default("shadow"),
   ENTRY_FAST_PATH_ENABLED: z
     .enum(["true", "false"])
     .default("true")

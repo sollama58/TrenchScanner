@@ -40,11 +40,15 @@ export interface StreamEvent {
   launchpad?: string;
   /** A launch's creator: the create transaction's signer (`traderPublicKey`). */
   creator?: string;
+  /** Pump.fun's Mayhem Mode flag on the create (`is_mayhem_mode`), when PumpPortal sent one. */
+  isMayhemMode?: boolean;
   at: Date;
 }
 
 /** Enough to cover a burst between two scan cycles without letting a stalled scan grow it forever. */
 const MAX_BUFFERED = 5_000;
+/** Launches whose relayed Mayhem flag is kept (relayedMayhem): hours of launches at ~45 a minute. */
+const MAX_MAYHEM_FLAGS = 20_000;
 const MIN_BACKOFF_MS = 2_000;
 const MAX_BACKOFF_MS = 5 * 60_000;
 
@@ -58,6 +62,7 @@ interface PumpPortalMessage {
   solAmount?: unknown;
   tokenAmount?: unknown;
   initialBuy?: unknown;
+  is_mayhem_mode?: unknown;
   newTokenBalance?: unknown;
   marketCapSol?: unknown;
   uri?: unknown;
@@ -157,6 +162,9 @@ export function parsePumpPortalMessage(raw: string, at: Date = new Date()): Stre
     looksLikeSolanaAddress(msg.traderPublicKey)
       ? { creator: msg.traderPublicKey }
       : {}),
+    ...(kind === "create" && typeof msg.is_mayhem_mode === "boolean"
+      ? { isMayhemMode: msg.is_mayhem_mode }
+      : {}),
     at,
   };
 }
@@ -166,6 +174,8 @@ type WebSocketCtor = new (url: string) => WebSocket;
 
 export class PumpPortalStream {
   private readonly buffer = new Map<string, StreamEvent>();
+  /** Each recent launch's relayed Mayhem flag, kept past the buffer's drain (relayedMayhem). */
+  private readonly mayhemFlags = new Map<string, boolean>();
   private socket: WebSocket | null = null;
   private backoffMs = MIN_BACKOFF_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -289,6 +299,14 @@ export class PumpPortalStream {
       .reverse();
   }
 
+  /**
+   * Pump.fun's Mayhem flag for a recent launch as PumpPortal relayed it, or undefined when it
+   * announced none (mayhemMode.ts setMayhemRelay, MAYHEM_FROM_PUMPPORTAL).
+   */
+  relayedMayhem(mint: string): boolean | undefined {
+    return this.mayhemFlags.get(mint);
+  }
+
   /** One launch created since the last drain, left buffered: what the entry fast path records it from. */
   pendingLaunch(mint: string): StreamEvent | undefined {
     const event = this.buffer.get(mint);
@@ -328,6 +346,14 @@ export class PumpPortalStream {
     }
     const event = parsePumpPortalMessage(raw, new Date(at));
     if (!event) return;
+    if (event.isMayhemMode !== undefined && !this.mayhemFlags.has(event.mintAddress)) {
+      this.mayhemFlags.set(event.mintAddress, event.isMayhemMode);
+      // Insertion order: the oldest launches go first.
+      for (const old of this.mayhemFlags.keys()) {
+        if (this.mayhemFlags.size <= MAX_MAYHEM_FLAGS) break;
+        this.mayhemFlags.delete(old);
+      }
+    }
     // The book's live-tape page ends with the curve: from here the coin's trades are the pool's.
     if (event.kind === "migrate") this.book?.migrated(event.mintAddress, at);
     // A graduation outranks a creation for the same mint - it's the newer, stronger signal.

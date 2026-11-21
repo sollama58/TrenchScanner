@@ -15,6 +15,15 @@ describe("parsePumpPortalMessage", () => {
     expect(parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "migrate" }))?.kind).toBe("migrate");
   });
 
+  it("reads Pump.fun's Mayhem flag on a launch only, and only as a boolean", () => {
+    const parse = (extra: object) => parsePumpPortalMessage(JSON.stringify({ mint: MINT, ...extra }));
+    expect(parse({ txType: "create", is_mayhem_mode: true })?.isMayhemMode).toBe(true);
+    expect(parse({ txType: "create", is_mayhem_mode: false })?.isMayhemMode).toBe(false);
+    expect(parse({ txType: "create", is_mayhem_mode: "true" })?.isMayhemMode).toBeUndefined();
+    expect(parse({ txType: "create" })?.isMayhemMode).toBeUndefined();
+    expect(parse({ txType: "migrate", is_mayhem_mode: true })?.isMayhemMode).toBeUndefined();
+  });
+
   it("names the launchpad PumpPortal says the coin came from", () => {
     expect(
       parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "create", pool: "pump" }))?.launchpad,
@@ -86,6 +95,17 @@ describe("parsePumpPortalMessage", () => {
 });
 
 describe("PumpPortalStream buffer", () => {
+  it("keeps a launch's relayed Mayhem flag after the buffer drains, first answer kept", () => {
+    const stream = new PumpPortalStream("wss://example.invalid", null);
+    const OTHER = "9GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
+    stream.handleMessage(JSON.stringify({ mint: MINT, txType: "create", is_mayhem_mode: true }));
+    stream.handleMessage(JSON.stringify({ mint: MINT, txType: "create", is_mayhem_mode: false }));
+    stream.handleMessage(JSON.stringify({ mint: OTHER, txType: "create" }));
+    stream.drain();
+    expect(stream.relayedMayhem(MINT)).toBe(true);
+    expect(stream.relayedMayhem(OTHER)).toBeUndefined();
+  });
+
   it("drains each mint once, keeping a graduation over a launch", () => {
     const stream = new PumpPortalStream("wss://example.invalid", null);
     stream.handleMessage(JSON.stringify({ mint: MINT, txType: "migrate" }));

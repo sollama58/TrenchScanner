@@ -169,6 +169,7 @@ import {
   knownNotMayhem,
   resolveMayhemMode,
   setAsideMayhemLaunches,
+  takeMayhemRelayStats,
 } from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
 import { fillBandMetadata, fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
@@ -1618,6 +1619,8 @@ async function scanCycle(
   const launchPoller = deps.launchPoller?.takeStats?.();
   // The new launches' Mayhem verdicts between cycles: asked, cleared, set aside, how fast.
   const launchScreen = deps.launchScreen?.takeStats();
+  // PumpPortal's relayed Mayhem flag against the chain's answers (MAYHEM_FROM_PUMPPORTAL).
+  const mayhemRelay = takeMayhemRelayStats();
   const holds = takeDecisionHolds();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
@@ -1652,6 +1655,7 @@ async function scanCycle(
     ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
     ...(entryFastPath ? { entryFastPath } : {}),
     ...(launchScreen ? { launchScreen } : {}),
+    ...(mayhemRelay ? { mayhemRelay } : {}),
     ...(launchPoller ? { launchPoller: { ...launchPoller } } : {}),
     tracked: tracked.length,
     inBand: candidates.length,

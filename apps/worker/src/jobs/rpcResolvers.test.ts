@@ -8,8 +8,11 @@ import {
   ignoreMayhemMints,
   knownMayhem,
   resolveMayhemMode,
+  RELAY_CHECK_EVERY,
   resetMayhemFailureBackoff,
   setAsideMayhemLaunches,
+  setMayhemRelay,
+  takeMayhemRelayStats,
 } from "./mayhemMode.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -270,9 +273,65 @@ describe.skipIf(!dbAvailable)("resolveMintAuthorities", () => {
 
 describe.skipIf(!dbAvailable)("resolveMayhemMode", () => {
   beforeEach(() => resetMayhemFailureBackoff());
+  afterEach(() => setMayhemRelay(null));
   afterEach(async () => {
     if (!dbAvailable) return;
     await prisma.mayhemModeCache.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  it("in shadow, still reads the chain and counts how PumpPortal's flag compares", async () => {
+    const agrees = `${TAG}-shadow-agree`;
+    const differs = `${TAG}-shadow-differ`;
+    const silent = `${TAG}-shadow-silent`;
+    const flags = new Map([
+      [agrees, false],
+      [differs, true],
+    ]);
+    setMayhemRelay({ mode: "shadow", flagOf: (m) => flags.get(m) });
+    const { client, asked } = stubHelius();
+
+    const result = await resolveMayhemMode([agrees, differs, silent], client);
+    expect(asked.mints).toEqual([[agrees, differs, silent]]);
+    // The chain's answer stands, the relay's disagreement only counted.
+    expect(result.get(differs)).toEqual({ status: "found", isMayhemMode: false });
+    expect(takeMayhemRelayStats()).toEqual({
+      agree: 1,
+      disagree: 1,
+      unrelayed: 1,
+      taken: 0,
+      checked: 0,
+    });
+    expect(takeMayhemRelayStats()).toMatchObject({ agree: 0, disagree: 0, unrelayed: 0 });
+  });
+
+  it("on, takes PumpPortal's flag for its launches but checks one in RELAY_CHECK_EVERY on the chain", async () => {
+    const relayedMints = Array.from({ length: RELAY_CHECK_EVERY }, (_, i) => `${TAG}-on-${i}`);
+    const silent = `${TAG}-on-silent`;
+    setMayhemRelay({
+      mode: "on",
+      flagOf: (m) => (m.startsWith(`${TAG}-on-`) && m !== silent ? false : undefined),
+    });
+    const { client, asked } = stubHelius();
+
+    const result = await resolveMayhemMode([...relayedMints, silent], client);
+    // Only the unrelayed launch and the one check go to Helius.
+    expect(asked.mints).toEqual([[relayedMints[RELAY_CHECK_EVERY - 1], silent]]);
+    for (const m of relayedMints) expect(result.get(m)).toEqual({ status: "found", isMayhemMode: false });
+    expect(takeMayhemRelayStats()).toEqual({
+      agree: 1,
+      disagree: 0,
+      unrelayed: 1,
+      taken: RELAY_CHECK_EVERY - 1,
+      checked: 1,
+    });
+    // A relayed answer is cached like a chain answer: the next cycle asks nothing.
+    const again = stubHelius();
+    await resolveMayhemMode(relayedMints.slice(0, 3), again.client);
+    expect(again.asked.mints).toEqual([]);
+  });
+
+  it("reports no relay stats with the relay off", async () => {
+    expect(takeMayhemRelayStats()).toBeNull();
   });
 
   it("backs a failed mint off rather than re-checking it every cycle", async () => {
