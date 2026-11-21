@@ -41,6 +41,30 @@ describe.skipIf(!dbAvailable)("resolveWalletHoldings cache coverage", () => {
     await prisma.walletHoldingsCache.deleteMany({ where: { address: { startsWith: TAG } } });
   });
 
+  it("reads a coin no decision is near only as far as its Empty reading can settle (early stop)", async () => {
+    const top10 = Array.from({ length: 10 }, (_, i) => wallet(`early-${i}`));
+    const { helius, calls } = fakeHelius();
+    const group = { mintAddress: NEW_LAUNCH, addresses: top10 };
+
+    await resolveWalletHoldings([group], helius, env, {
+      earlyStop: { fullMints: new Set(), thresholds: [] },
+    });
+    // Three real wallets would settle the screen's cut: the first three, in rank order.
+    expect(calls).toEqual([top10.slice(0, 3)]);
+
+    // All three read empty (the fake's $7): three more could still settle it either way.
+    await resolveWalletHoldings([group], helius, env, {
+      earlyStop: { fullMints: new Set(), thresholds: [] },
+    });
+    expect(calls[1]).toEqual(top10.slice(3, 6));
+
+    // A contender's top 10 is read whole.
+    await resolveWalletHoldings([group], helius, env, {
+      earlyStop: { fullMints: new Set([NEW_LAUNCH]), thresholds: [] },
+    });
+    expect(calls[2]).toEqual(top10.slice(6));
+  });
+
   it("answers a new launch from a complete reading, and re-fetches only a partial one", async () => {
     const [full, partial] = [wallet("full"), wallet("partial")];
     await prisma.walletHoldingsCache.createMany({

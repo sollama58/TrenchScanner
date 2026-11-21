@@ -2,6 +2,7 @@ import {
   prisma,
   Prisma,
   createLogger,
+  SAFETY_REJECT_EMPTY_WALLET_PCT,
   tallyHeliusCredits,
   type Env,
   type HeliusClient,
@@ -62,6 +63,93 @@ export interface WalletHoldingsOptions {
    * wallet also on a coin outside the set keeps the TTL (Helius cut E, owner decision 2026-11-02).
    */
   quietMints?: ReadonlySet<string>;
+  /**
+   * The early stop (Helius efficiency audit 2026-11-21, owner decision "Early stop, budget 40 to
+   * 20"): a group whose mint is not in `fullMints` is read only as far as its Empty reading can
+   * settle every threshold (see emptyWalletReading), a few holders at a time in rank order, the
+   * rest on later cycles only while it is still open. `thresholds` are the active filters'
+   * Empty ceilings; the screen's cut is always one. Absent: every group is read whole.
+   */
+  earlyStop?: { fullMints: ReadonlySet<string>; thresholds: readonly number[] };
+}
+
+/** One group's holders as far as they are read: empty, real, read but unknown, and unread. */
+interface EmptyCounts {
+  n: number;
+  empty: number;
+  real: number;
+}
+
+function emptyCounts(
+  addresses: readonly string[],
+  holdingsByAddress: ReadonlyMap<string, WalletHoldings>,
+  minUsd: number,
+  mintAddress: string,
+): EmptyCounts {
+  let empty = 0;
+  let real = 0;
+  for (const address of addresses) {
+    const holdings = holdingsByAddress.get(address);
+    const thisLaunch = holdings?.perMintUsd[mintAddress];
+    if (!holdings || thisLaunch === undefined) continue;
+    if (holdings.otherHoldingsUsd - thisLaunch >= minUsd) real += 1;
+    // Under the bar with a holding nobody priced: neither (computeEmptyPct reads it as unknown).
+    else if (!holdings.unpriced) empty += 1;
+  }
+  return { n: addresses.length, empty, real };
+}
+
+/**
+ * Whether these counts settle every threshold: the screen's cut (rejects at
+ * SAFETY_REJECT_EMPTY_WALLET_PCT or more) and each filter ceiling (passes at or under it), with the
+ * unread and unknown holders free to fall either way.
+ */
+function settles(c: EmptyCounts, thresholds: readonly number[]): boolean {
+  const lo = (c.empty / c.n) * 100;
+  const hi = ((c.n - c.real) / c.n) * 100;
+  if (!(hi < SAFETY_REJECT_EMPTY_WALLET_PCT || lo >= SAFETY_REJECT_EMPTY_WALLET_PCT)) return false;
+  return thresholds.every((t) => hi <= t || lo > t);
+}
+
+/**
+ * Fewest more holders read that could settle the group (all of them real, or all empty), or 0
+ * when it already is. Never more than the holders left to read.
+ */
+export function emptyReadsToSettle(c: EmptyCounts, unread: number, thresholds: readonly number[]): number {
+  if (settles(c, thresholds)) return 0;
+  for (let k = 1; k <= unread; k += 1) {
+    if (
+      settles({ ...c, real: c.real + k }, thresholds) ||
+      settles({ ...c, empty: c.empty + k }, thresholds)
+    ) {
+      return k;
+    }
+  }
+  return unread;
+}
+
+/**
+ * The coin's Empty reading from what is read of its top 10: the exact share once every holder is
+ * known (computeEmptyPct), or, once the reads so far settle every threshold, a bound that decides
+ * each of them as the exact share would: the most the share can be when that is under the
+ * screen's cut, else the least. Null while neither.
+ */
+export function emptyWalletReading(
+  addresses: string[],
+  holdingsByAddress: Map<string, WalletHoldings>,
+  minUsd: number,
+  mintAddress: string,
+  thresholds: readonly number[],
+): { pct: number; bound?: "atMost" | "atLeast" } | null {
+  const exact = computeEmptyPct(addresses, holdingsByAddress, minUsd, mintAddress);
+  if (exact !== null) return { pct: exact };
+  if (addresses.length === 0) return null;
+  const c = emptyCounts(addresses, holdingsByAddress, minUsd, mintAddress);
+  if (!settles(c, thresholds)) return null;
+  const hi = ((c.n - c.real) / c.n) * 100;
+  return hi < SAFETY_REJECT_EMPTY_WALLET_PCT
+    ? { pct: hi, bound: "atMost" }
+    : { pct: (c.empty / c.n) * 100, bound: "atLeast" };
 }
 
 /**
@@ -240,9 +328,21 @@ export async function resolveWalletHoldings(
   const queued = new Set<string>();
   let reads = 0;
   let skippedGroups = 0;
+  const earlyStop = opts.earlyStop;
+  let stoppedEarly = 0;
   for (const [index, group] of groups.entries()) {
     if (index >= lookupGroups) break;
-    const needed = [...new Set(group.addresses)].filter((a) => !result.has(a) && !queued.has(a));
+    let needed = [...new Set(group.addresses)].filter((a) => !result.has(a) && !queued.has(a));
+    if (earlyStop && !earlyStop.fullMints.has(group.mintAddress) && needed.length > 0) {
+      // Only the next few holders, in rank order, that could settle the group; holders another
+      // group already queued this call are read anyway, so they count toward those few.
+      const c = emptyCounts(group.addresses, result, env.WALLET_HOLDINGS_MIN_USD, group.mintAddress);
+      const pending = [...new Set(group.addresses)].filter((a) => !result.has(a) && queued.has(a)).length;
+      const k = Math.max(0, emptyReadsToSettle(c, needed.length + pending, earlyStop.thresholds) - pending);
+      if (k < needed.length) stoppedEarly += 1;
+      needed = needed.slice(0, k);
+      if (needed.length === 0) continue;
+    }
     if (needed.some((a) => failureBackoff.blocked(a, now))) {
       skippedGroups += 1;
       continue;
@@ -267,6 +367,7 @@ export async function resolveWalletHoldings(
       cached: cacheHits,
       fetched: 0,
       skippedGroups,
+      stoppedEarly,
     });
     return result;
   }
@@ -401,6 +502,7 @@ export async function resolveWalletHoldings(
     deferred,
     source,
     skippedGroups,
+    stoppedEarly,
   });
 
   return result;
