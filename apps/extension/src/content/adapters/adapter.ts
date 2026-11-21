@@ -61,6 +61,14 @@ export interface Mark {
   column?: boolean;
 }
 
+/**
+ * A box that is a whole list or menu rather than one coin's row: one holding a search box, or a
+ * layer by its role. A marked row's box never grows into one of these.
+ */
+const NOT_A_ROW = "input, textarea, [role='dialog'], [role='listbox'], [role='menu'], [aria-modal='true']";
+/** How far above its mark a row's box is looked for, when the site gives no sized slot. */
+const MAX_CLIMB = 8;
+
 /** Attributes read for an address after the links: image URLs and data attributes. */
 const SCANNED_ATTRIBUTES = ["src", "data-address", "data-mint", "data-token", "data-ca"];
 
@@ -112,11 +120,47 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
     const href = link.getAttribute("href") ?? "";
     return mintInHref(href, spec.tokenLink) ?? (spec.coinLinks ? mintInUrl(href, spec.coinLinks) : null);
   };
+  /** The distinct coins the marks in a box name (another chain's address names none), stopping at two. */
+  const coinsIn = (box: Element): number => {
+    const found = new Set<string>();
+    for (const mark of marks) {
+      const els = box.matches(mark.selector) ? [box] : [];
+      for (const el of [...els, ...box.querySelectorAll(mark.selector)]) {
+        const mint = mintsIn(el.getAttribute(mark.attr) ?? "")[0];
+        if (mint) found.add(mint);
+        if (found.size > 1) return found.size;
+      }
+    }
+    return found.size;
+  };
+  /** A box is one coin's row: it names one coin and holds no search box or menu. */
+  const oneCoin = (box: Element): boolean =>
+    coinsIn(box) <= 1 && !box.matches(NOT_A_ROW) && !box.querySelector(NOT_A_ROW);
+  /**
+   * The row a marked element stands for: the mark's sized slot when that holds this coin alone,
+   * else the widest box around the mark that still holds only this coin. A search menu that sits
+   * in one absolutely placed box with every result's copy button (Terminal, user ask 2026-11-21)
+   * was read as one row and its whole panel marked unsafe; now each result is its own row.
+   */
+  const markedRow = (el: Element, mark: (typeof marks)[number]): Element => {
+    if (!mark.box) return el;
+    const box = el.closest(mark.box);
+    if (box && oneCoin(box)) return box;
+    let row = el;
+    for (let i = 0, up = el.parentElement; i < MAX_CLIMB && up && up !== box; i++, up = up.parentElement) {
+      if (up === up.ownerDocument.body || !oneCoin(up)) break;
+      row = up;
+    }
+    return row;
+  };
+  /** The rows found from marks this scan, which stand for every link inside them. */
+  let markedRows = new Set<Element>();
   /** The link sits in a marked row (or is around one): the mark speaks for the row. */
   const inMarkedRow = (el: Element): boolean => {
     if (!anyMark) return false;
     if (el.closest(anyMark) || el.querySelector(anyMark)) return true;
-    return marks.some((m) => m.box && el.closest(m.box)?.querySelector(m.selector));
+    for (let a: Element | null = el; a; a = a.parentElement) if (markedRows.has(a)) return true;
+    return false;
   };
 
   return {
@@ -131,9 +175,12 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
           rows.push(row);
         }
       };
+      markedRows = new Set();
       for (const mark of marks) {
         for (const el of root.querySelectorAll(mark.selector)) {
-          add((mark.box ? el.closest(mark.box) : null) ?? el);
+          const row = markedRow(el, mark);
+          markedRows.add(row);
+          add(row);
         }
       }
       for (const link of root.querySelectorAll("a[href]")) {
