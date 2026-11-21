@@ -22,7 +22,16 @@ import type {
 import type { PillSegment } from "../shared/pill";
 import { isMintAddress } from "../shared/mint";
 import { devReading, firstAlert, type RowVerdict } from "../shared/verdict";
-import { findSpot, obstaclesIn, stillFits, type Box } from "./placement";
+import {
+  findSpot,
+  obstaclesIn,
+  ON_PICTURES,
+  ROOMY,
+  stillFits,
+  TIGHT,
+  type Box,
+  type Room,
+} from "./placement";
 
 /**
  * What the overlay draws: a ring and a badge inside each tracked row, and one shared tooltip.
@@ -71,6 +80,9 @@ const RING_CSS = `
 .badge.more { border-style: dashed; }
 .badge.more i { display: none; }
 .badge.gone { display: none; }
+.badge.tight { font-size: 9px; line-height: 1.3; padding: 0 5px 0 4px; gap: 3px; }
+.badge.tight i { width: 5px; height: 5px; }
+.badge.unplaced { visibility: hidden; }
 .fx { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; }
 .fx.pulse { box-shadow: inset 0 0 0 1px var(--a), inset 0 0 6px -2px var(--a); }
 .fx.pulse::after { content: ""; position: absolute; inset: 0; border-radius: inherit; opacity: 0;
@@ -195,7 +207,6 @@ function staticRow(row: HTMLElement): boolean {
 interface Placing {
   row: { w: number; h: number };
   obstacles: Box[];
-  seen: { left: number; right: number };
   /** The pills' sizes, whole (step 3). */
   badge?: { w: number; h: number };
   more?: { w: number; h: number };
@@ -251,6 +262,10 @@ export class Decoration {
   /** What placing decided, kept apart from what each redraw paints, so a redraw can't undo it. */
   private shown = Infinity;
   private moreFits = false;
+  /** The pill went small to fit a packed row. */
+  private compact = false;
+  /** No free patch was found for the pill (or it hasn't been placed yet): it isn't shown. */
+  private unplaced = true;
   private mainSegs: readonly PillSegment[] = [];
   private pillsKey = "";
   /** Where each pill sits now (row coordinates), kept while it still fits so it doesn't jump. */
@@ -326,7 +341,7 @@ export class Decoration {
 
   /** The pills' classes from the ring and what placing decided. */
   private paint(): void {
-    this.badge.className = `badge ${this.kind}${this.hasMain ? "" : " dot"}`;
+    this.badge.className = `badge ${this.kind}${this.hasMain ? "" : " dot"}${this.compact ? " tight" : ""}${this.unplaced ? " unplaced" : ""}`;
     this.more.className = `badge more ${this.kind}${this.hasMore && this.moreFits ? "" : " gone"}`;
   }
 
@@ -344,10 +359,13 @@ export class Decoration {
 
   /**
    * Moves the badge into the row's first empty space; when the whole label fits nowhere, it
-   * drops parts from the end until it does, and when even the first part fits nowhere it goes in
-   * the row's visible top-right corner, over the row's content: never shrunk to a dot, which said
-   * nothing and read as a pill cut off (user ask 2026-10-26). Re-measured when the row's size
-   * changes, and at most once a second otherwise.
+   * drops parts from the end until it does. When even the first part fits nowhere it is tried
+   * closer to the row's edges and its neighbours, then in a smaller type, then over a picture or
+   * icon; never over the row's text or buttons (user ask 2026-11-21: the old last resort, the
+   * top-right corner, sat on Terminal's market cap). With no room at all the pill isn't shown and
+   * the ring alone marks the coin. Never shrunk to a dot, which said nothing and read as a pill cut
+   * off (user ask 2026-10-26). Re-measured when the row's size changes, and at most once a second
+   * otherwise.
    *
    * Every ring due is placed in one frame (placeAll), in steps: all of them read the rows, then
    * all write their pills' full text, then all read the pills' sizes and place them. Placed one
@@ -368,12 +386,13 @@ export class Decoration {
     if (seen.left > 0) obstacles.push({ x: -4, y: 0, w: seen.left + 4, h: rect.height });
     if (seen.right < rect.width)
       obstacles.push({ x: seen.right, y: 0, w: rect.width - seen.right + 4, h: rect.height });
-    return { row: { w: rect.width, h: rect.height }, obstacles, seen };
+    return { row: { w: rect.width, h: rect.height }, obstacles };
   }
 
   /** Step 2, writes only: the pills whole, to be measured. */
   prepare(): void {
     this.shown = Infinity;
+    this.compact = false;
     fill(this.badgeText, this.mainSegs);
     this.moreFits = this.hasMore;
     this.paint();
@@ -386,34 +405,40 @@ export class Decoration {
   }
 
   /** Step 4: where the pills go, decided and written. */
-  place({ row, obstacles, seen, badge: whole, more }: Placing): void {
+  place({ row, obstacles, badge: whole, more }: Placing): void {
     // Measured whole, then with fewer parts, the first ones kept, if it fits nowhere whole.
-    let first = this.spotFor(whole!, row, obstacles, this.badgeAt);
+    let first = this.spotFor(whole!, row, obstacles, this.badgeAt, ROOMY);
     let size = whole!;
     for (let n = this.mainSegs.length - 1; !first && n >= 1; n--) {
       this.shown = n;
       fill(this.badgeText, this.mainSegs.slice(0, n));
       size = { w: this.badge.offsetWidth, h: this.badge.offsetHeight };
-      first = this.spotFor(size, row, obstacles, null);
+      first = this.spotFor(size, row, obstacles, null, ROOMY);
+    }
+    // A packed row: the first part closer in, then smaller, then over a picture.
+    const lastResorts: [boolean, Room][] = [
+      [false, TIGHT],
+      [true, TIGHT],
+      [true, ON_PICTURES],
+    ];
+    for (const [compact, room] of lastResorts) {
+      if (first) break;
+      if (compact && !this.compact) {
+        this.compact = true;
+        this.paint();
+        size = { w: this.badge.offsetWidth, h: this.badge.offsetHeight };
+      }
+      first = this.spotFor(size, row, obstacles, this.badgeAt, room);
     }
     this.badgeAt = first;
-    // The visible top-right corner, over the content, when even the first part fits nowhere.
-    const badgeW = size.w;
-    const badgeH = size.h;
-    const badge = first ?? {
-      x: Math.max(seen.left + 4, seen.right - badgeW - 4),
-      y: 4,
-      w: 0,
-      h: 0,
-    };
+    this.unplaced = first === null;
 
     // The second pill takes the next free patch, clear of the first; left out when none fits.
     let next: Box | null = null;
-    if (this.hasMore) {
-      const taken = { x: badge.x, y: badge.y, w: badgeW, h: badgeH };
-      next = this.spotFor(more!, row, [...obstacles, taken], this.moreAt);
+    if (this.hasMore && first) {
+      next = this.spotFor(more!, row, [...obstacles, first], this.moreAt, ROOMY);
     }
-    this.put(this.badge, badge);
+    if (first) this.put(this.badge, first);
     this.moreAt = next;
     this.moreFits = next !== null;
     this.paint();
@@ -426,9 +451,10 @@ export class Decoration {
     row: { w: number; h: number },
     obstacles: Box[],
     at: Box | null,
+    room: Room,
   ): Box | null {
-    if (at && stillFits(row, obstacles, { x: at.x, y: at.y, w, h })) return { x: at.x, y: at.y, w, h };
-    const spot = findSpot(row, obstacles, w, h);
+    if (at && stillFits(row, obstacles, { x: at.x, y: at.y, w, h }, room)) return { x: at.x, y: at.y, w, h };
+    const spot = findSpot(row, obstacles, w, h, room);
     return spot ? { ...spot, w, h } : null;
   }
 

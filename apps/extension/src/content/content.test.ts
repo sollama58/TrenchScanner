@@ -79,6 +79,57 @@ describe("Trending boards", () => {
   });
 });
 
+describe("Terminal's search (user ask 2026-11-21)", () => {
+  const C = "9UXR8prgiAEkaLecZuGZ4e4EwJYzcGB36A2XSbeBpump";
+  /** A search menu in one absolutely placed box: a search box and each result's copy button. */
+  const menu = (mints: string[]) =>
+    `<div id="menu" style="position: absolute; top: 80px; left: 200px; width: 640px;">
+      <div><input placeholder="Search by name or CA"></div>
+      <div id="results">${mints
+        .map(
+          (m, i) => `<div id="r${i}"><div><img alt=""><span>COIN${i}</span></div>
+            <div><span>MC $12K</span><button id="button-copy-address-context-${m}">copy</button></div></div>`,
+        )
+        .join("")}</div></div>`;
+
+  it("makes each result its own row, never the whole menu", () => {
+    board(menu([A, B, C]));
+    const rows = terminal.findRows(document);
+    expect(rows.map((r) => r.id)).toEqual(["r0", "r1", "r2"]);
+    expect(rows.map((r) => terminal.mintOf(r))).toEqual([A, B, C]);
+  });
+
+  it("with one result, still leaves the search box out of the row", () => {
+    board(menu([A]));
+    const rows = terminal.findRows(document);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.querySelector("input")).toBeNull();
+    expect(rows[0]!.id).not.toBe("menu");
+    expect(terminal.mintOf(rows[0]!)).toBe(A);
+  });
+
+  it("marks only the failing result unsafe, not the search", () => {
+    board(menu([A, B]));
+    const menuEl = document.getElementById("menu")!;
+    menuEl.getBoundingClientRect = () => ({ width: 640, height: 560 }) as DOMRect;
+    const e = new OverlayEngine(terminal, DEFAULT_SETTINGS, {
+      lookup: async () => ({ tokens: {}, problem: null }),
+      safety: async () => ({ verdicts: {}, problem: null }),
+    });
+    e.applyTooltip(cleanTooltip({ safety: { mode: "mark", columns: {} } }));
+    e.start();
+    e.scan();
+    const failed = { passed: false, reasons: ["mint authority on"], at: new Date().toISOString() };
+    const passed = { passed: true, reasons: [], at: new Date().toISOString() };
+    e.receiveSafety([A, B], { verdicts: { [A]: failed, [B]: passed }, problem: null });
+    expect(menuEl.querySelector(":scope > trench-overlay-x")).toBeNull();
+    expect(document.getElementById("results")!.querySelector(":scope > trench-overlay-x")).toBeNull();
+    expect(document.getElementById("r0")!.querySelector(":scope > trench-overlay-x")).not.toBeNull();
+    expect(document.getElementById("r1")!.querySelector("trench-overlay-x")).toBeNull();
+    e.stop();
+  });
+});
+
 describe("Terminal's Trenches board", () => {
   it("reads the address its rows are marked with, and rings the sized slot", () => {
     board(`<div style="position: absolute; left: 0px; top: 0px; height: 142px; width: 100%;">
