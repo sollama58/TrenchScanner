@@ -573,9 +573,18 @@ const envSchema = z.object({
   // its 24-hour tracking window and still under LOW_CAP_MCAP_USD, the tape's wallets that sold since
   // the window are found from the coin's holders now, and their trades after it read from their own
   // token accounts (times and amounts) and folded into their rows. Helius credits a one-minute run
-  // (1-credit calls, about 150 for the busiest coin, a few for most): 30 caps it at ~43k a day.
-  // 0 turns it off.
-  TRADE_TAPE_CLOSING_CREDITS_PER_RUN: z.coerce.number().int().nonnegative().default(30),
+  // (1-credit calls, about 150 for the busiest coin, a few for most): 30 capped it at ~43k a day
+  // (43,300 calls a day 11-14 to 11-16: the cap bound). 15 since 2026-11-21 (Helius efficiency
+  // audit, owner decision "Closing cap and half the tapes"): ~21k a day; the later sells fold in
+  // more slowly. 0 turns it off.
+  TRADE_TAPE_CLOSING_CREDITS_PER_RUN: z.coerce.number().int().nonnegative().default(15),
+  // The share of called coins the trade tape's Helius lane reads from the launch (tradeTapeJob.ts
+  // mintShareSlot: a fixed half by mint hash), from 0 to 1. Coins a user traded or a narrow filter
+  // matched are read whatever their slot; the rest wait on Pump.fun's free lane. 0.5 since
+  // 2026-11-21 (Helius efficiency audit, owner decision "Closing cap and half the tapes"): ~45k
+  // credits a day of the called coins' ~91k. The wallet book, stop causes and scorecards gain
+  // about half as many Helius-read tapes. 1 reads every called coin, as before.
+  TRADE_TAPE_HELIUS_CALLED_SHARE: z.coerce.number().min(0).max(1).default(0.5),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
   // every 15 minutes for the band (5 until 2026-11-02; audit, Helius cut F, owner decision: the
   // Block 0 held share is read at the decision for contenders every minute as before), every

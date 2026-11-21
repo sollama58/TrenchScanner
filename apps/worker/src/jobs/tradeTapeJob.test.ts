@@ -13,6 +13,7 @@ import {
 import {
   heliusNewestPagesPerRun,
   heliusPagesLeft,
+  mintShareSlot,
   pendingCalledCoins,
   resetTradeTapeState,
   runTradeTapeJob,
@@ -121,6 +122,18 @@ describe("stoppedAtOf", () => {
   });
 });
 
+describe("mintShareSlot", () => {
+  it("puts each mint at a fixed place in [0, 1), about half under a half", () => {
+    const mints = Array.from({ length: 2_000 }, (_, i) => `mint-${i}`);
+    const slots = mints.map(mintShareSlot);
+    expect(slots.every((x) => x >= 0 && x < 1)).toBe(true);
+    expect(mints.map(mintShareSlot)).toEqual(slots);
+    const under = slots.filter((x) => x < 0.5).length / slots.length;
+    expect(under).toBeGreaterThan(0.45);
+    expect(under).toBeLessThan(0.55);
+  });
+});
+
 describe("heliusPagesLeft", () => {
   it("estimates the pages left at the pace of the last five", () => {
     expect(heliusPagesLeft([0, 1_000, 2_000, 3_000, 4_000], 60_000)).toBeNull(); // too few pages yet
@@ -137,6 +150,44 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
   afterAll(async () => {
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+  });
+
+  it("leaves a called coin outside the Helius share to Pump.fun, unless a user traded it", async () => {
+    const { token: out } = await seedCalled("share-out", null);
+    const { token: traded } = await seedCalled("share-traded", null);
+    await prisma.tradingPosition.create({
+      data: {
+        userId: `${TAG}-share-trader`,
+        mint: traded.mintAddress,
+        sourceKind: "model",
+        sourceRef: "rules",
+        sourceLabel: "Model: Rules",
+        signalAt: new Date(ANCHOR),
+        status: "closed",
+        exitPlan: {},
+        openedAt: new Date(ANCHOR),
+      },
+    });
+    const asked: string[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m) => {
+        asked.push(m);
+        return { status: "failed" };
+      },
+    };
+    // A share of 0: no called coin is in it, so only the traded one is read.
+    const meta = await runTradeTapeJob(
+      { helius, pumpFun: pumpFunStub("none", []).stub },
+      { heliusPagesPerRun: 20, heliusCalledShare: 0, pumpFunCallsPerRun: 0, now: () => NOW },
+    );
+    expect(asked).toContain(traded.mintAddress);
+    expect(asked).not.toContain(out.mintAddress);
+    expect(meta.outsideHeliusShare).toBeGreaterThanOrEqual(1);
+    // Gone again, so the later tests' lanes don't find these coins.
+    await prisma.tradingPosition.deleteMany({ where: { userId: `${TAG}-share-trader` } });
+    await prisma.token.deleteMany({ where: { id: { in: [out.id, traded.id] } } });
   });
 
   it("reads a called coin from Pump.fun and stores its wallets and stop cause", async () => {
