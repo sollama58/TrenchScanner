@@ -390,7 +390,25 @@ async function main() {
           },
           (key, signature, logs, bytes) => void tapeLogs?.onLogs(key, signature, logs, bytes),
         )
-          .metered("stream/holders-curves-burns")
+          // Filed by stream, so each reads apart in Admin > API usage (Helius efficiency audit
+          // 2026-11-21): the feature stays the prefix, so its old total is the sum of these.
+          .metered("stream/holders-curves-burns", (kind, key) =>
+            kind === "account"
+              ? key?.startsWith(POOL_STREAM_KEY_PREFIX)
+                ? "pools"
+                : key?.startsWith(CURVE_STREAM_KEY_PREFIX)
+                  ? "curves"
+                  : "accounts"
+              : kind === "tx"
+                ? key === BURN_STREAM_KEY
+                  ? "burns"
+                  : "holders"
+                : kind === "logs"
+                  ? "tape-logs"
+                  : kind === "slot"
+                    ? "slots"
+                    : "control",
+          )
           .maxTxKeys(env.HELIUS_HOLDER_STREAM_MAX_KEYS)
           // Two keys a coin: its curve and its pool.
           .maxLogsKeys(Math.max(1, env.LIVE_TAPE_LOGS_MAX_COINS * 2))
