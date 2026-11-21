@@ -154,6 +154,7 @@ import {
   knownNotMayhem,
   screenLaunchVerdicts,
   screenOutMayhem,
+  setMayhemRelay,
   settledMayhem,
 } from "./jobs/mayhemMode.js";
 import {
@@ -364,6 +365,10 @@ async function main() {
       ? new PumpPortalStream(env.PUMPPORTAL_WS_URL, undefined, { tradeFlow: env.PUMPPORTAL_TRADE_FLOW })
       : undefined;
   stream?.start();
+  // PumpPortal's relayed Mayhem flag beside the chain's (MAYHEM_FROM_PUMPPORTAL, mayhemMode.ts).
+  if (stream && env.MAYHEM_FROM_PUMPPORTAL !== "off") {
+    setMayhemRelay({ mode: env.MAYHEM_FROM_PUMPPORTAL, flagOf: (mint) => stream.relayedMayhem(mint) });
+  }
   // One Helius websocket, only in the process that scans and reconciles burns: it keeps contenders'
   // holder accounts fresh instead of re-reading them (holderTransfers.ts, HELIUS_HOLDER_STREAM), and
   // wakes the burn reconciler when the subscription mint moves (BurnStreamWake, HELIUS_BURN_STREAM).
