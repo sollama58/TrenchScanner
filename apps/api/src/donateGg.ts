@@ -7,10 +7,15 @@ import type { ParsedFeeRecipient } from "./feeRecipients.js";
  * on that config and its weight, with no API key. Pump.fun's own coin endpoint was the only
  * name source before, and it refuses this server (403 since 2026-10-22), so the cards showed
  * the donation PDA's address. Configs are permanent, so a loaded config is kept for a day.
+ *
+ * donate.gg retired the www.donate.gg/api host on 2026-11-20: it answers every config 410 Gone,
+ * naming api.donate.gg/api as the successor (docs.donate.gg/developer/api-host-migration). Every
+ * charity coin's card fell back to the PDA's address and each feed poll re-asked (~1,160 refused
+ * calls a day) until the base moved.
  */
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const DEFAULT_BASE = "https://www.donate.gg/api/v1";
+const DEFAULT_BASE = "https://api.donate.gg/api/v1";
 const MAX_NAME_CHARS = 80;
 /** A config does not change once created. */
 const CONFIG_OK_MS = 24 * 60 * 60_000;
