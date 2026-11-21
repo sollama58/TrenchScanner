@@ -253,6 +253,72 @@ export async function buildApiUsageReport(
   };
 }
 
+// ---------- Helius by day, feature and method ----------
+
+/**
+ * Helius's calls and credits per UTC hour or day, process, feature and method, over every row
+ * ApiUsage still keeps (8 days) or a narrower from/to. The report above sums features and methods
+ * apart, so "which method does scan/wallets spend on" had no answer, and the 7-day window starts a
+ * rolling 7 days back while the rows reach 8: the clean days before the 2026-11-17 run-out fell out
+ * of every read a day before they were deleted (Helius efficiency audit 2026-11-21).
+ */
+export interface HeliusBreakdown {
+  grain: "hour" | "day";
+  from: string;
+  to: string;
+  countingSince: string | null;
+  /** [period start (ISO), process, feature, method, calls, requests, errors, rateLimited, credits] */
+  columns: readonly string[];
+  rows: [string, string, string, string, number, number, number, number, number][];
+}
+
+const breakdownQuery = z.object({
+  grain: z.enum(["hour", "day"]).default("day"),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+});
+/** Hourly rows over 8 days run to tens of thousands; an hourly read is held to 2 days. */
+const HOURLY_SPAN_MS = 2 * DAY_MS;
+
+export async function buildHeliusBreakdown(
+  grain: "hour" | "day",
+  from: Date | undefined,
+  to: Date | undefined,
+  now = Date.now(),
+): Promise<HeliusBreakdown> {
+  const end = to ?? new Date(now);
+  const start =
+    from ?? new Date(grain === "hour" ? end.getTime() - HOURLY_SPAN_MS : end.getTime() - 9 * DAY_MS);
+  const rows = await prisma.$queryRaw<
+    ({ t: Date; process: string; feature: string; endpoint: string } & RawTotals)[]
+  >`
+    SELECT date_trunc(${grain}, "bucket") AS "t", "process", "feature", "endpoint", ${SUMS}
+    FROM "ApiUsage" WHERE "provider" = 'helius' AND "bucket" >= ${start} AND "bucket" < ${end}
+    GROUP BY 1, 2, 3, 4 ORDER BY 1, SUM("credits") DESC`;
+  const oldest = await prisma.$queryRaw<
+    { oldest: Date | null }[]
+  >`SELECT MIN("bucket") AS "oldest" FROM "ApiUsage"`;
+  return {
+    grain,
+    from: start.toISOString(),
+    to: end.toISOString(),
+    countingSince: oldest[0]?.oldest ? new Date(oldest[0].oldest).toISOString() : null,
+    columns: ["t", "process", "feature", "method", "calls", "requests", "errors", "rateLimited", "credits"],
+    rows: rows.map((r) => [
+      // "bucket" is a timestamp without a zone holding UTC, as Prisma writes it.
+      new Date(r.t).toISOString(),
+      r.process,
+      r.feature,
+      r.endpoint,
+      num(r.calls),
+      num(r.requests),
+      num(r.errors),
+      num(r.rateLimited),
+      num(r.credits),
+    ]),
+  };
+}
+
 // ---------- TokenSage's own outside calls ----------
 
 export interface TokenSageUsage {
@@ -355,6 +421,7 @@ export async function readTokenSageUsage(
 export async function registerAdminUsageRoutes(app: FastifyInstance, opts: { env: Env }) {
   const reports = new SharedCacheMap<ApiUsageReport>(CACHE_MS, 3, 0, ADMIN_STALE_ON_ERROR_MS);
   const tokenSage = new SharedCacheMap<TokenSageUsage>(60_000, 3, 0, ADMIN_STALE_ON_ERROR_MS);
+  const breakdowns = new SharedCacheMap<HeliusBreakdown>(CACHE_MS, 8, 0, ADMIN_STALE_ON_ERROR_MS);
 
   app.get("/api-usage", async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);
@@ -379,6 +446,18 @@ export async function registerAdminUsageRoutes(app: FastifyInstance, opts: { env
       return reply.code(503).send({ error: "the stand-down ended here, but not for the other processes" });
     }
     return { ended: true, wasOut };
+  });
+
+  app.get("/api-usage/helius", async (request, reply) => {
+    const parsed = breakdownQuery.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
+    const { grain, from, to } = parsed.data;
+    if (from && to && from >= to) return reply.code(400).send({ error: "invalid_query" });
+    if (grain === "hour" && from && (to?.getTime() ?? Date.now()) - from.getTime() > HOURLY_SPAN_MS) {
+      return reply.code(400).send({ error: "hourly reads cover at most 2 days" });
+    }
+    const key = `${grain}|${from?.toISOString() ?? ""}|${to?.toISOString() ?? ""}`;
+    return breakdowns.for(key).get(() => buildHeliusBreakdown(grain, from, to));
   });
 
   app.get("/api-usage/tokensage", async (request, reply) => {
