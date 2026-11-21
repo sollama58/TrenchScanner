@@ -221,6 +221,8 @@ import {
   freshGraduatesOverCut,
   pumpVenue,
   withWalletSignals,
+  setEmptyWalletThresholds,
+  getEmptyWalletThresholds,
   freshnessGroupsOf,
   withFreshTopHolders,
   withHolderTransfers,
@@ -483,6 +485,22 @@ export function quietCoinMints(groups: readonly QuietCoinGroup[], called: Readon
   return new Set(groups.filter((g) => isQuietCoin(g, called)).map((g) => g.mintAddress));
 }
 
+/**
+ * The empty-wallet early stop for a cycle's groups (walletHoldings.ts earlyStop; Helius efficiency
+ * audit 2026-11-21, owner decision "Early stop, budget 40 to 20"): contenders, held alerts and watched coins are read whole, every
+ * other coin only until its Empty reading settles the screen's cut and the active filters' ceilings.
+ */
+function emptyEarlyStop(
+  groups: readonly { mintAddress: string; contender?: boolean; alerted?: boolean; watched?: boolean }[],
+) {
+  return {
+    // Held alerts too (a model seat's gate may cap Empty at a ceiling no filter has), and coins
+    // whose bubble map is open, whose holder list shows each wallet's Empty tag.
+    fullMints: new Set(groups.filter((g) => g.contender || g.alerted || g.watched).map((g) => g.mintAddress)),
+    thresholds: getEmptyWalletThresholds(),
+  };
+}
+
 /** The wallet lookups for non-contenders running behind a cycle, if any - see startWalletBackfill. */
 let walletBackfillInFlight: Promise<void> | null = null;
 
@@ -506,6 +524,7 @@ function startWalletBackfill(
   budget: { freshness: number; holdings: number },
   valuation?: WalletHoldingsOptions["valuation"],
   quietMints?: WalletHoldingsOptions["quietMints"],
+  earlyStop?: WalletHoldingsOptions["earlyStop"],
 ): void {
   if (walletBackfillInFlight || (groups.length === 0 && freshnessGroups.length === 0)) return;
   const work: Promise<unknown>[] = [];
@@ -514,7 +533,12 @@ function startWalletBackfill(
   }
   if (budget.holdings > 0 && groups.length > 0) {
     work.push(
-      resolveWalletHoldings(groups, helius, env, { maxNewLookups: budget.holdings, valuation, quietMints }),
+      resolveWalletHoldings(groups, helius, env, {
+        maxNewLookups: budget.holdings,
+        valuation,
+        quietMints,
+        earlyStop,
+      }),
     );
   }
   if (work.length === 0) return;
@@ -2007,6 +2031,10 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
   // do. Only filters whose owner has access: see loadMatchableFilters.
   const activeFilters: FilterWithUser[] = await loadMatchableFilters(env);
+  // The Empty ceilings an early-stopped reading has to settle (walletHoldings.ts earlyStop).
+  setEmptyWalletThresholds(
+    activeFilters.flatMap((f) => (f.maxEmptyTop10WalletPct != null ? [f.maxEmptyTop10WalletPct] : [])),
+  );
 
   // Batched fallback for mints RugCheck has no report for - resolved up front for the whole cycle
   // rather than one un-batched call at a time from inside the candidate loop.
@@ -2942,6 +2970,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
           onLookups: (n) => (holdingsUsed = n),
           valuation,
           quietMints,
+          earlyStop: emptyEarlyStop(walletGroups),
         }),
       ]),
     );
@@ -2981,6 +3010,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
           },
           valuation,
           quietMints,
+          emptyEarlyStop(walletGroups),
         ),
       );
     }
@@ -3363,6 +3393,7 @@ interface TokenScanFields {
   websiteUrl?: string;
   firstInBandAt?: Date;
   narrativeTags: string[];
+  /** Exact readings only: a bound (emptyTop10WalletBound) is never stored as the last reading. */
   emptyTop10WalletPct?: number;
   freshTop10WalletPct?: number;
   /** Pair info block seen this reading. Sticky true; never cleared by a reading that has none. */
@@ -3734,7 +3765,7 @@ async function processCandidate(
     websiteUrl: candidate.websiteUrl,
     firstInBandAt,
     narrativeTags: scored.narrativeTags,
-    emptyTop10WalletPct: scored.emptyTop10WalletPct,
+    emptyTop10WalletPct: scored.emptyTop10WalletBound ? undefined : scored.emptyTop10WalletPct,
     freshTop10WalletPct: scored.freshTop10WalletPct,
     ...(dexInfo ? { dexInfo: true } : {}),
   });
@@ -3759,7 +3790,7 @@ async function processCandidate(
             websiteUrl: candidate.websiteUrl,
             firstInBandAt,
             narrativeTags: scored.narrativeTags,
-            lastEmptyTop10WalletPct: scored.emptyTop10WalletPct,
+            lastEmptyTop10WalletPct: scored.emptyTop10WalletBound ? undefined : scored.emptyTop10WalletPct,
             lastFreshTop10WalletPct: scored.freshTop10WalletPct,
             ...(dexInfo ? { dexInfo: true } : {}),
           },

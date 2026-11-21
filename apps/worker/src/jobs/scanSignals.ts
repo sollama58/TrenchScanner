@@ -38,7 +38,7 @@ import { walletRiskLookup, walletRiskScale } from "./walletRiskBook.js";
 import { kolLookup } from "./kolWalletBook.js";
 import { type KolBundledReading } from "./kolBundled.js";
 import { cachedHolderSolLamports, linkedHoldersOf } from "./linkedWallets.js";
-import { computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
+import { emptyWalletReading, type WalletHoldings } from "./walletHoldings.js";
 import { blockZeroWalletsFromCache } from "./launchSnipers.js";
 import type { CandidatePrior } from "./scanJob.js";
 
@@ -308,6 +308,20 @@ export function pumpVenue(dexId: string | undefined): boolean {
  * own: it compares the list against the first buyers launchSnipers.ts already read. Unknown until
  * that read has landed. Exported for tests.
  */
+/**
+ * The active filters' Empty ceilings this cycle (scanJob.ts sets them as it loads the filters): the
+ * thresholds a coin's early-stopped Empty reading must settle (walletHoldings.ts emptyWalletReading).
+ */
+let emptyWalletThresholds: readonly number[] = [];
+
+export function setEmptyWalletThresholds(thresholds: readonly number[]): void {
+  emptyWalletThresholds = [...new Set(thresholds)];
+}
+
+export function getEmptyWalletThresholds(): readonly number[] {
+  return emptyWalletThresholds;
+}
+
 export function withWalletSignals(
   onChain: OnChainProfile | null,
   earliestActivityByAddress: Map<string, Date | null>,
@@ -319,16 +333,18 @@ export function withWalletSignals(
 ): OnChainProfile | null {
   if (!onChain?.top10HolderAddresses?.length) return onChain;
   const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
-  const emptyTop10WalletPct = computeEmptyPct(
+  const empty = emptyWalletReading(
     onChain.top10HolderAddresses,
     holdingsByAddress,
     env.WALLET_HOLDINGS_MIN_USD,
     onChain.mintAddress,
+    emptyWalletThresholds,
   );
   return {
     ...onChain,
     freshTop10WalletPct: freshTop10WalletPct ?? undefined,
-    emptyTop10WalletPct: emptyTop10WalletPct ?? undefined,
+    emptyTop10WalletPct: empty?.pct,
+    emptyTop10WalletBound: empty?.bound,
     sniperTop10WalletPct: sniperWallets
       ? (sniperShareOfTop10(onChain.top10HolderAddresses, sniperWallets) ?? undefined)
       : undefined,

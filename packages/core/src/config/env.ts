@@ -529,8 +529,12 @@ const envSchema = z.object({
   // below, so about twice as many coins keep a fresh empty-wallet reading. 40 since 2026-11-21
   // (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml): ~70k credits a day; contenders, alerts awaiting a reading and the
   // alert feeds' coins keep first claim (walletPriority.ts), the rest of the band is read about
-  // half as often.
-  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(40),
+  // half as often. 20 since the same day (owner decision "Early stop, budget 40 to 20"): coins no
+  // decision is near have their holders read only until the Empty reading settles the screen's cut
+  // and the filters' ceilings (walletHoldings.ts earlyStop), 4.9 of 10 reads on average against
+  // the screen's cut alone (6.4 with a filter at 60%), so 20 covers about as many coins as 40 did,
+  // or about 80% of them while a filter caps Empty at 60%.
+  WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(20),
   // The snipers figure (first 25 buyers still holding), read from the chain - see the worker's
   // launchSnipers.ts. Who the first buyers were costs one 10-credit getTransactionsForAddress per
   // token, read once and cached; this many new tokens are read per scan cycle, contenders first.

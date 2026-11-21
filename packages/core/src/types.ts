@@ -215,6 +215,15 @@ export interface OnChainProfile {
    */
   emptyTop10WalletPct?: number;
   /**
+   * Set when emptyTop10WalletPct is a bound, not a count of all ten (the worker's walletHoldings.ts
+   * emptyWalletReading, Helius efficiency audit 2026-11-21, owner decision "Early stop"): a coin no
+   * decision is near has its holders read only until every threshold (the screen's Empty cut and
+   * each active filter's ceiling) is settled. "atMost": the share is at most the figure;
+   * "atLeast": at least. Either way the figure decides those thresholds as the exact share would.
+   * Not a model input, and not stored as the token's last reading.
+   */
+  emptyTop10WalletBound?: "atMost" | "atLeast";
+  /**
    * % of top10HolderAddresses that were among the launch's first 25 buyers (the dev aside) - the
    * snipers still sitting in the top ten. Pool and LP addresses are already out of the list. From
    * the worker's launchSnipers.ts read, so undefined until the launch's first buyers have been read

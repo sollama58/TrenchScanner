@@ -1,7 +1,13 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
-import { compactPerMint, computeEmptyPct, type WalletHoldings } from "./walletHoldings.js";
+import {
+  compactPerMint,
+  computeEmptyPct,
+  emptyReadsToSettle,
+  emptyWalletReading,
+  type WalletHoldings,
+} from "./walletHoldings.js";
 
 const MIN_USD = 25;
 const LAUNCH = "LaunchMint1111111111111111111111111111111111";
@@ -143,6 +149,54 @@ describe("computeEmptyPct", () => {
       ["a", { otherHoldingsUsd: 10, perMintUsd: { [LAUNCH]: 50 } }],
     ]);
     expect(computeEmptyPct(["a"], odd, MIN_USD, LAUNCH)).toBe(100);
+  });
+});
+
+describe("emptyWalletReading (the early stop)", () => {
+  const top10 = Array.from({ length: 10 }, (_, i) => `w${i}`);
+  const read = (real: number, empty: number) =>
+    holdings(
+      Object.fromEntries([
+        ...top10.slice(0, real).map((a) => [a, { total: 3_500, ofLaunch: 3_000 }] as const),
+        ...top10.slice(real, real + empty).map((a) => [a, { total: 3_000, ofLaunch: 3_000 }] as const),
+      ]),
+    );
+
+  it("gives the exact share once every holder is read", () => {
+    expect(emptyWalletReading(top10, read(4, 6), MIN_USD, LAUNCH, [])).toEqual({ pct: 60 });
+  });
+
+  it("settles the screen's cut with three real wallets: at most 70% empty", () => {
+    expect(emptyWalletReading(top10, read(3, 0), MIN_USD, LAUNCH, [])).toEqual({ pct: 70, bound: "atMost" });
+    expect(emptyWalletReading(top10, read(2, 0), MIN_USD, LAUNCH, [])).toBeNull();
+  });
+
+  it("settles a rejection with eight empty wallets: at least 80%", () => {
+    expect(emptyWalletReading(top10, read(0, 8), MIN_USD, LAUNCH, [])).toEqual({ pct: 80, bound: "atLeast" });
+    expect(emptyWalletReading(top10, read(0, 7), MIN_USD, LAUNCH, [])).toBeNull();
+  });
+
+  it("waits until a filter's ceiling is settled too", () => {
+    // Under a 60% ceiling, three real wallets leave the share between 0 and 70%: open.
+    expect(emptyWalletReading(top10, read(3, 0), MIN_USD, LAUNCH, [60])).toBeNull();
+    expect(emptyWalletReading(top10, read(4, 0), MIN_USD, LAUNCH, [60])).toEqual({
+      pct: 60,
+      bound: "atMost",
+    });
+    // Seven empty: over 60% for sure, but the three unread decide the cut: open.
+    expect(emptyWalletReading(top10, read(0, 7), MIN_USD, LAUNCH, [60])).toBeNull();
+    // Eight empty: over the ceiling and at the cut, whatever the last two hold.
+    expect(emptyWalletReading(top10, read(0, 8), MIN_USD, LAUNCH, [60])).toEqual({
+      pct: 80,
+      bound: "atLeast",
+    });
+  });
+
+  it("counts the fewest more reads that could settle a group", () => {
+    expect(emptyReadsToSettle({ n: 10, empty: 0, real: 0 }, 10, [])).toBe(3);
+    expect(emptyReadsToSettle({ n: 10, empty: 0, real: 0 }, 10, [60])).toBe(4);
+    expect(emptyReadsToSettle({ n: 10, empty: 6, real: 1 }, 3, [])).toBe(2);
+    expect(emptyReadsToSettle({ n: 10, empty: 0, real: 3 }, 7, [])).toBe(0);
   });
 });
 

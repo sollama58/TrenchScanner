@@ -2310,7 +2310,11 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     devWalletPct: scored.devWalletPct ?? null,
     riskScore: rugReading(scored.riskScore),
     freshTop10WalletPct: scored.freshTop10WalletPct ?? null,
-    emptyTop10WalletPct: scored.emptyTop10WalletPct ?? null,
+    // An early-stopped reading under the screen's cut is only a ceiling (emptyTop10WalletBound),
+    // not the share the model learned from: unknown here. One at the cut or over stays, as its
+    // coin is rejected on it and the screen's replay reads it.
+    emptyTop10WalletPct:
+      scored.emptyTop10WalletBound === "atMost" ? null : (scored.emptyTop10WalletPct ?? null),
     sniperTop10WalletPct: scored.sniperTop10WalletPct ?? null,
     walletRiskTop10Max: scored.walletRiskTop10Max ?? null,
     walletRiskScoredTop10: scored.walletRiskScoredTop10 ?? null,
