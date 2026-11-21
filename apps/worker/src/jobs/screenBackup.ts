@@ -17,6 +17,13 @@ const logger = createLogger("screen-backup");
  * of each backup endpoint in turn (chainBackupUrls), and the screen fails closed only when every
  * one fails. Trading stays on Helius.
  *
+ * The holder read skips the free public nodes (`noHolders`): neither answers
+ * getTokenLargestAccounts to us. publicnode.com refuses it as an "indexed request" without a
+ * personal token and mainnet-beta.solana.com answers it 429 "too many requests for a specific
+ * RPC call"; through the 2026-11-17..21 Helius credits outage that was ~30,000 refused calls a
+ * day and not one holder list (api-usage 2026-11-21). The Mayhem read (getMultipleAccounts) still
+ * asks them: they do answer that.
+ *
  * Paced for public nodes, which is what they usually are: small batches, one at a time, at most
  * MAX_MINTS_PER_CALL a call, and an endpoint that could not answer a batch at all (its own 429, or
  * down) rests for REST_MS while the next one is asked. Its failures
@@ -62,27 +69,46 @@ export function chainBackupUrls(
   return [...new Set(urls.filter((u) => /^https:\/\//.test(u) && !/helius/i.test(u)))];
 }
 
+/**
+ * The screen's backup over every chainBackupUrls endpoint, with the public nodes left out of the
+ * holder read (see above).
+ */
+export function screenBackupFor(
+  env: Pick<Env, "CHAIN_BACKUP_RPC_URLS" | "SOLANA_RPC_URL" | "TRADING_BACKUP_RPC_URL">,
+  client: (rpcUrl: string) => Reader,
+): ScreenBackup {
+  const endpoints = chainBackupUrls(env).map((url) => ({ url, reader: client(url) }));
+  return new ScreenBackup(
+    endpoints.map((e) => e.reader),
+    Date.now,
+    new Set(endpoints.filter((e) => PUBLIC_CHAIN_RPCS.includes(e.url)).map((e) => e.reader)),
+  );
+}
+
 /** One chunk's read: the answers, and whether the endpoint answered at all (a mint not on-chain yet is an answer). */
 type ChunkRead<V> = { values: Map<string, V>; answered: boolean };
 
 export class ScreenBackup {
   private tail: Promise<unknown> = Promise.resolve();
-  private readonly readers: { reader: Reader; restingUntil: number }[];
+  private readonly readers: { reader: Reader; restingUntil: number; holders: boolean }[];
   private stats = { asked: 0, found: 0, rested: 0 };
 
   constructor(
     readers: Reader | readonly Reader[],
     private readonly now: () => number = Date.now,
+    /** Readers never asked for holders (the public nodes, which refuse that read). */
+    noHolders: ReadonlySet<Reader> = new Set(),
   ) {
     this.readers = (Array.isArray(readers) ? readers : [readers as Reader]).map((reader) => ({
       reader,
       restingUntil: 0,
+      holders: !noHolders.has(reader),
     }));
   }
 
   /** The Mayhem flags of the mints it could read; a mint left out is still unverified. */
   mayhem(mints: readonly string[]): Promise<Map<string, boolean>> {
-    return this.run(mints, async (reader, chunk) => {
+    return this.run(mints, "mayhem", async (reader, chunk) => {
       const values = new Map<string, boolean>();
       let answered = false;
       for (const [mint, r] of await reader.getMayhemModeBatch(chunk)) {
@@ -95,7 +121,7 @@ export class ScreenBackup {
 
   /** The top holders of the mints it could read. */
   holders(mints: readonly string[]): Promise<Map<string, OnChainHolders>> {
-    return this.run(mints, async (reader, chunk) => {
+    return this.run(mints, "holders", async (reader, chunk) => {
       const values = new Map<string, OnChainHolders>();
       for (const [mint, r] of await reader.getLargestHoldersBatch(chunk)) {
         if (r.status === "found") values.set(mint, r.holders);
@@ -117,13 +143,16 @@ export class ScreenBackup {
    */
   private run<V>(
     mints: readonly string[],
+    kind: "mayhem" | "holders",
     read: (reader: Reader, chunk: string[]) => Promise<ChunkRead<V>>,
   ): Promise<Map<string, V>> {
+    const slots = this.readers.filter((slot) => kind !== "holders" || slot.holders);
+    if (slots.length === 0) return Promise.resolve(new Map());
     const next = this.tail.then(async () => {
       const out = new Map<string, V>();
       const todo = [...new Set(mints)].slice(0, MAX_MINTS_PER_CALL);
       const counted = new Set<string>();
-      for (const slot of this.readers) {
+      for (const slot of slots) {
         const left = todo.filter((m) => !out.has(m));
         for (let i = 0; i < left.length && this.now() >= slot.restingUntil; i += CHUNK) {
           const chunk = left.slice(i, i + CHUNK);
