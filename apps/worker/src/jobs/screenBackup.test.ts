@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HeliusClient, MayhemModeResult } from "@trenchscanner/core";
-import { chainBackupUrl, chainBackupUrls, REST_MS, ScreenBackup } from "./screenBackup.js";
+import { chainBackupUrl, chainBackupUrls, REST_MS, ScreenBackup, screenBackupFor } from "./screenBackup.js";
 
 function reader(answer: (mint: string) => MayhemModeResult) {
   let inFlight = 0;
@@ -67,6 +67,56 @@ describe("ScreenBackup", () => {
     expect((await backup.mayhem(["fresh"])).size).toBe(0);
     await backup.mayhem(["fresh"]);
     expect(r.getMayhemModeBatch).toHaveBeenCalledTimes(2);
+  });
+
+  // 2026-11-21: neither public node answers getTokenLargestAccounts (publicnode wants a personal
+  // token, mainnet-beta 429s that method), ~30,000 refused calls a day through the Helius outage.
+  it("asks the public nodes for Mayhem flags but never for holders", async () => {
+    const holders = { holders: [], top10Pct: 10 } as never;
+    const built: {
+      url: string;
+      getMayhemModeBatch: ReturnType<typeof vi.fn>;
+      getLargestHoldersBatch: ReturnType<typeof vi.fn>;
+    }[] = [];
+    const backup = screenBackupFor(
+      { CHAIN_BACKUP_RPC_URLS: "https://paid.example/k", SOLANA_RPC_URL: "", TRADING_BACKUP_RPC_URL: "" },
+      (url) => {
+        const r = {
+          url,
+          getMayhemModeBatch: vi.fn(
+            async (mints: string[]) =>
+              new Map(
+                mints.map((m) => [m, { status: "failed", mintPending: true } as MayhemModeResult] as const),
+              ),
+          ),
+          getLargestHoldersBatch: vi.fn(async () => new Map()),
+        };
+        built.push(r);
+        return r as unknown as HeliusClient;
+      },
+    );
+    expect(built.map((b) => b.url)).toEqual([
+      "https://paid.example/k",
+      "https://solana-rpc.publicnode.com",
+      "https://api.mainnet-beta.solana.com",
+    ]);
+    await backup.mayhem(["a"]);
+    expect(built.map((b) => b.getMayhemModeBatch.mock.calls.length)).toEqual([1, 1, 1]);
+    built[0]!.getLargestHoldersBatch.mockResolvedValueOnce(new Map([["b", { status: "found", holders }]]));
+    expect((await backup.holders(["b"])).get("b")).toBe(holders);
+    await backup.holders(["c"]);
+    expect(built.map((b) => b.getLargestHoldersBatch.mock.calls.length)).toEqual([2, 0, 0]);
+  });
+
+  it("answers no holders, without asking, when only public nodes are configured", async () => {
+    const getLargestHoldersBatch = vi.fn();
+    const backup = screenBackupFor(
+      { CHAIN_BACKUP_RPC_URLS: "", SOLANA_RPC_URL: "", TRADING_BACKUP_RPC_URL: "" },
+      () => ({ getMayhemModeBatch: vi.fn(), getLargestHoldersBatch }) as unknown as HeliusClient,
+    );
+    expect((await backup.holders(["a"])).size).toBe(0);
+    expect(getLargestHoldersBatch).not.toHaveBeenCalled();
+    expect(backup.takeStats()).toEqual({ asked: 0, found: 0, rested: 0 });
   });
 
   it("lists every configured endpoint, then the public nodes, without Helius", () => {
