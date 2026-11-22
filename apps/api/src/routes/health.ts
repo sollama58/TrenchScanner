@@ -616,6 +616,10 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     // coin's time from the cycle's start (scanJob.ts decideEarly; post-fix eval 2026-10-28).
     "earlyDecisions",
     "launchScreen",
+    // PumpPortal's relayed Mayhem flag against the chain's answers: agree, disagree, unrelayed, and
+    // in "on" mode taken and checked (worker mayhemMode.ts, MAYHEM_FROM_PUMPPORTAL; Helius
+    // efficiency audit 2026-11-21: the shadow day's evidence for switching it on).
+    "mayhemRelay",
     "rugCheckLookups",
     "linkedWalletCalls",
     "holderTransferCalls",

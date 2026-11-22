@@ -284,6 +284,22 @@ describe("public worker health: Pump.fun list and launch details", () => {
   });
 });
 
+/** PumpPortal's relayed Mayhem flag against the chain's answers reaches it (MAYHEM_FROM_PUMPPORTAL). */
+describe("public worker health: Mayhem relay", () => {
+  it("carries mayhemRelay", () => {
+    const mayhemRelay = { agree: 40, disagree: 0, unrelayed: 3, taken: 0, checked: 0 };
+    const row = {
+      job: "scan",
+      lastRunAt: new Date(1_000),
+      lastSuccessAt: null,
+      lastError: null,
+      meta: { durationMs: 900, mayhemRelay },
+    };
+    const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
+    expect(s.lastRun).toMatchObject({ mayhemRelay });
+  });
+});
+
 /** The chart's candle store writers reach it: the curve tape's rows, the backfill and the chain fill. */
 describe("public worker health: candle store", () => {
   it("carries curveCandles, candleBackfill and candleChainFill", () => {
