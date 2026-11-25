@@ -166,11 +166,14 @@ const envSchema = z.object({
   // Pump.fun's Mayhem flag as PumpPortal relays it on each launch (`is_mayhem_mode`, the create
   // instruction's own argument), against the on-chain PDA read that answers it today: 1 credit a
   // launch, ~36k a day, most of the scanner's unlabelled Helius spend (Helius efficiency audit
-  // 2026-11-21). "shadow" (the default) reads the chain as before and only counts how often the two
-  // agree (the scan heartbeat's `mayhemRelay`). "on" takes the relayed flag for PumpPortal's
-  // launches and still checks one in 20 of them on the chain, so a relay that drifts shows; the
-  // chain wins any disagreement. "off" ignores the field.
-  MAYHEM_FROM_PUMPPORTAL: z.enum(["off", "shadow", "on"]).default("shadow"),
+  // 2026-11-21). "shadow" reads the chain as before and only counts how often the two agree (the
+  // scan heartbeat's `mayhemRelay`). "on" (the default since 2026-11-25, owner decision "Shadow a
+  // day, then switch": the shadow day's sampled cycles agreed on 181 of 181 relayed launches, none
+  // disagreed) takes the relayed flag for PumpPortal's launches and still checks one in 20 of them
+  // on the chain, so a relay that drifts shows; the chain wins any disagreement. Launches the relay
+  // never announced (~4 in 5 of the chain reads in that sample) are read on the chain as before.
+  // "off" ignores the field.
+  MAYHEM_FROM_PUMPPORTAL: z.enum(["off", "shadow", "on"]).default("on"),
   ENTRY_FAST_PATH_ENABLED: z
     .enum(["true", "false"])
     .default("true")
