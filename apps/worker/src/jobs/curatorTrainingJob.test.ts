@@ -5,6 +5,8 @@ import {
   prisma,
   loadEnv,
   CURATOR_MODEL_KIND,
+  DATA_OUTAGE_SOURCE,
+  resetDataOutageCache,
   CANDIDATE_FEATURE_NAMES,
   HOURLY_ROWS_WAIT_SINCE,
   AGE_FROM_LAUNCH_SINCE,
@@ -374,6 +376,52 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     expect(budget).toMatchObject({ rows: 5, eventRows: 3, hourlyRows: 2, capped: true });
     expect(budget.historyDays).toBeGreaterThanOrEqual(budget.hourlyDays);
     expect(describeRowBudget(all, windowStart, 100).capped).toBe(false);
+  });
+
+  it("leaves out the rows a Helius data gap touched", async () => {
+    const windowStart = new Date("2098-06-01T00:00:00Z");
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-outage` } });
+    const at = (m: number) => new Date(windowStart.getTime() + m * 60_000);
+    // Helius out from 03:00 to 04:00, so not trusted until 04:15.
+    const outage = await prisma.dataOutage.create({
+      data: { source: DATA_OUTAGE_SOURCE, cause: "credits-out", startedAt: at(180), endedAt: at(240) },
+    });
+    resetDataOutageCache();
+    try {
+      const row = (m: number, ageMinutes?: number) => ({
+        tokenId: token.id,
+        anchorAt: at(m),
+        finalizedAt: at(m),
+        sampleKind: "hourly",
+        anchorPriceUsd: 1 + m / 1_000,
+        anchorMcapUsd: 50_000,
+        features: ageMinutes === undefined ? {} : { ageMinutes },
+        score: 50,
+        nextCheckAt: windowStart,
+        labelRule: 4,
+        labelValue: 0,
+        peak1hPriceUsd: 1,
+        low1hPriceUsd: 1,
+        lowBefore2xPriceUsd: 1,
+        peak24hPriceUsd: 1,
+      });
+      await prisma.candidateOutcome.createMany({
+        data: [
+          row(60, 30), // well before: kept
+          row(150, 10), // its label hour runs into the outage
+          row(200, 10), // banked inside it
+          row(250, 10), // inside the recovery
+          row(300, 30), // after it, a coin born after it: kept
+          row(301, 120), // after it, a coin that lived through it
+          row(302), // after it, age unknown: the full lookback reaches it
+        ],
+      });
+      const rows = (await loadTrainingRows(windowStart, 5_000, 500)).filter((r) => r.tokenId === token.id);
+      expect(rows.map((r) => (r.anchorAt.getTime() - windowStart.getTime()) / 60_000)).toEqual([300, 60]);
+    } finally {
+      await prisma.dataOutage.delete({ where: { id: outage.id } });
+      resetDataOutageCache();
+    }
   });
 
   it("keeps only rows inside the alert band, on the current label rule, no older than the age cap and not frozen", async () => {

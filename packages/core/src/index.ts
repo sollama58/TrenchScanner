@@ -8,6 +8,7 @@ export * from "./db.js";
 export * from "./heartbeat.js";
 export * from "./manualRuns.js";
 export * from "./apiUsage.js";
+export * from "./dataOutages.js";
 export * from "./concurrency.js";
 export * from "./solana.js";
 export * from "./launchpads.js";

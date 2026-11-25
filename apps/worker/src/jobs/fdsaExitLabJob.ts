@@ -2,6 +2,7 @@ import { setImmediate as yieldLoop } from "node:timers/promises";
 import {
   createLogger,
   labPointsFromPath,
+  loadDataOutages,
   prisma,
   readFdsaExitPlan,
   runExitLab,
@@ -42,8 +43,14 @@ interface AlertRow {
   alertAt: Date;
 }
 
-export async function loadLabTrades(now = new Date()): Promise<{ trades: LabTrade[]; alerts: number }> {
+export async function loadLabTrades(
+  now = new Date(),
+): Promise<{ trades: LabTrade[]; alerts: number; outageAlerts: number }> {
   const since = new Date(now.getTime() - LAB_DAYS * 86_400_000);
+  // An alert whose replayed half hour a Helius data gap touched (core's dataOutages.ts): the
+  // path recorder's tape went quiet or thin through it, so the replay would trade on holes.
+  const outages = await loadDataOutages(now.getTime());
+  let outageAlerts = 0;
   // Each coin's first curated alert in the window: the moment FDSA would have first seen it.
   const alerts = await prisma.$queryRaw<AlertRow[]>`
     SELECT * FROM (
@@ -74,6 +81,10 @@ export async function loadLabTrades(now = new Date()): Promise<{ trades: LabTrad
     for (const p of paths) byMint.set(p.mint, [...(byMint.get(p.mint) ?? []), p]);
     for (const a of batch) {
       if (trades.length >= LAB_MAX_TRADES) break;
+      if (outages.overlaps(a.alertAt, a.alertAt.getTime() + MAX_SEC_AFTER_ALERT * 1_000)) {
+        outageAlerts += 1;
+        continue;
+      }
       const covering = (byMint.get(a.mint) ?? []).find((p) => p.startAt <= a.alertAt && p.endAt > a.alertAt);
       if (!covering) continue;
       let rows;
@@ -97,7 +108,7 @@ export async function loadLabTrades(now = new Date()): Promise<{ trades: LabTrad
       });
     }
   }
-  return { trades, alerts: alerts.length };
+  return { trades, alerts: alerts.length, outageAlerts };
 }
 
 /** A summary as one flat heartbeat value. */
@@ -161,11 +172,11 @@ export function exitLabMeta(report: ExitLabReport, alerts: number): JobRunMeta {
 }
 
 export async function runFdsaExitLabJob(now = new Date()): Promise<JobRunMeta> {
-  const { trades, alerts } = await loadLabTrades(now);
+  const { trades, alerts, outageAlerts } = await loadLabTrades(now);
   if (trades.length < 30) {
-    return { alerts, trades: trades.length, skipped: "too few recorded paths cover an alert" };
+    return { alerts, outageAlerts, trades: trades.length, skipped: "too few recorded paths cover an alert" };
   }
   const report = await runExitLab(trades, { pause: () => yieldLoop() });
-  logger.info("exit lab run", { report: JSON.stringify(report) });
-  return exitLabMeta(report, alerts);
+  logger.info("exit lab run", { report: JSON.stringify(report), outageAlerts });
+  return { ...exitLabMeta(report, alerts), outageAlerts };
 }

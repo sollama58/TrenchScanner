@@ -3644,6 +3644,26 @@ model ApiUsage {
   @@id([bucket, process, provider, endpoint, feature])
 }
 
+/// A stretch the program ran without Helius's data (packages/core/src/dataOutages.ts), so the
+/// rows banked or graded through it are not trusted. Written by the scanner's pipeline-watch from
+/// two readings: the shared credits-out stand-down (cause "credits-out", apiUsage.ts) and a run of
+/// 5-minute buckets in which the scanner was billed no Helius credit at all (cause "no-billed-calls":
+/// credits out, the key refused, or the scanner down). Training, the live scales, the score weights,
+/// probation and the exit lab leave out what an outage touched; /health/worker and Admin > Worker
+/// list them. `endedAt` is null while one is still going on.
+model DataOutage {
+  id        String    @id @default(cuid())
+  source    String
+  cause     String
+  startedAt DateTime
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([source, cause, startedAt])
+  @@index([startedAt])
+}
+
 /// Solana Tracker's roster of known KOL wallets, read once a day by the worker's kol-wallets job
 /// (apps/worker/src/jobs/kolWalletsJob.ts). The dashboard labels these wallets as KOLs. A wallet
 /// that drops off the roster is removed once it has gone unseen for a week.

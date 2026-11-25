@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
+  dataOutagesBetween,
+  DATA_OUTAGE_LIST_DAYS,
   HEARTBEAT_JOB_ROLE,
   HELIUS_CREDITS_OUT_ROW,
   JOB_LOCKED_JOBS,
@@ -308,17 +310,21 @@ export async function registerHealthRoutes(
    * light defense-in-depth measure against dumping internal detail to an unauthenticated caller.
    */
   const readHeartbeats = async () => {
-    const [rows, aiBudget, lastAlert, lastRead, lastDecision, lastSecondLook, heldLocks] = await Promise.all([
-      prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
-      readAiBudget(budgetEnv),
-      // Newest row of each, each one a backward step down its own index.
-      prisma.curatedAlert.aggregate({ _max: { createdAt: true } }),
-      prisma.tokenNarrative.aggregate({ _max: { checkedAt: true } }),
-      prisma.candidateOutcome.aggregate({ where: { sampleKind: "event" }, _max: { anchorAt: true } }),
-      // The Narrative seat's second look is a model considering a token too.
-      prisma.candidateOutcome.aggregate({ where: { sampleKind: "second" }, _max: { anchorAt: true } }),
-      heldJobLocks(),
-    ]);
+    const [rows, aiBudget, lastAlert, lastRead, lastDecision, lastSecondLook, heldLocks, dataOutages] =
+      await Promise.all([
+        prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
+        readAiBudget(budgetEnv),
+        // Newest row of each, each one a backward step down its own index.
+        prisma.curatedAlert.aggregate({ _max: { createdAt: true } }),
+        prisma.tokenNarrative.aggregate({ _max: { checkedAt: true } }),
+        prisma.candidateOutcome.aggregate({ where: { sampleKind: "event" }, _max: { anchorAt: true } }),
+        // The Narrative seat's second look is a model considering a token too.
+        prisma.candidateOutcome.aggregate({ where: { sampleKind: "second" }, _max: { anchorAt: true } }),
+        heldJobLocks(),
+        // The Helius data gaps of the last two weeks (core's dataOutages.ts), so a daily check-in reads
+        // a quiet feed through one as the gap, not as the models going cold.
+        dataOutagesBetween(new Date(Date.now() - DATA_OUTAGE_LIST_DAYS * 86_400_000), new Date()),
+      ]);
     // The shared Helius stand-down (apiUsage.ts) lives in this table but is not a job.
     const heartbeats = rows.filter((h) => h.job !== HELIUS_CREDITS_OUT_ROW);
     const creditsOut = sharedCreditsOut(rows.find((h) => h.job === HELIUS_CREDITS_OUT_ROW)?.meta);
@@ -335,7 +341,7 @@ export async function registerHealthRoutes(
       lastTokenSageAt: lastRead._max.checkedAt,
       lastDecisionAt: latest(lastDecision._max.anchorAt, lastSecondLook._max.anchorAt),
     };
-    return { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan, watch };
+    return { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan, watch, dataOutages };
   };
   const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
 
@@ -343,7 +349,7 @@ export async function registerHealthRoutes(
   // a monitor that only reads status codes can alert on it. Without it the route always answers
   // 200 and the dashboard reads the flags from the body, as it always has.
   app.get<{ Querystring: { strict?: string } }>("/worker", async (request, reply) => {
-    const { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan, watch } =
+    const { heartbeats, aiBudget, pipeline, heldLocks, creditsOut, heliusPlan, watch, dataOutages } =
       await heartbeatCache.get(readHeartbeats);
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
@@ -358,6 +364,9 @@ export async function registerHealthRoutes(
       pipeline,
       // While Helius's credits are out, every process's stand-down (apiUsage.ts): since and until when.
       heliusCreditsOut: creditsOut && creditsOut.until > now ? creditsOut : null,
+      // Stretches without Helius's data, newest first: training, the live scales and the exit lab
+      // leave out what they touched. endedAt null while one is going on.
+      dataOutages,
       // The Helius plan against its billing cycle, as pipeline-watch last read it (HELIUS_MONTHLY_CREDITS;
       // null with that unset): credits so far, the last day's, and when that rate runs the plan out.
       heliusPlan,

@@ -9,6 +9,7 @@ import {
   JOB_LOCKED_JOBS,
   lockLostDuringRun,
   runningSinceFrom,
+  syncDataOutages,
   TELEGRAM_MAX_FAILURES,
   TelegramApi,
   type Env,
@@ -1503,6 +1504,14 @@ async function watchOnce(
   // Still out for a short while past the stand-down's end: it lifts at a fixed time and is only set
   // again by the next billed call refused, so a run in that gap read "flowing again" every cycle.
   const creditsOut = heliusCreditsOut(now - CREDITS_OUT_CLEAR_GRACE_MS);
+  // The record of Helius data gaps that training, the live scales and the exit lab leave out (core's
+  // dataOutages.ts, 2026-11-25): the stand-down as it stands, and the scanner's billed buckets.
+  let dataGapOpen: boolean | null = null;
+  try {
+    dataGapOpen = (await syncDataOutages(`worker-${env.WORKER_ROLE}`, now)).open;
+  } catch (err) {
+    logger.warn("data outages not recorded", { error: String(err) });
+  }
   const [
     flows,
     jobs,
@@ -1633,6 +1642,7 @@ async function watchOnce(
     lastRestartAt: lastRestartAt === null ? null : new Date(lastRestartAt).toISOString(),
     databaseMb: dbBytes === null ? null : Math.round(dbBytes / 1_048_576),
     heliusCreditsOutUntil: creditsOut ? creditsOut.until.toISOString() : null,
+    dataGapOpen,
     ...carriedMeta(carried),
     flows: Object.fromEntries(flows.map((f) => [f.key, f.recent])),
     tradeOutcomes: { ...trades },

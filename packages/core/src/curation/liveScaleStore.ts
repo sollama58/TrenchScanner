@@ -1,4 +1,5 @@
 import { Prisma, prisma } from "../db.js";
+import { loadDataOutages, type OutageSet } from "../dataOutages.js";
 import { LIVE_CONVICTION_MIN_SAMPLES } from "./convictionLine.js";
 import { loadCurrentLanes } from "./laneStore.js";
 import { LiveRescorer, type LiveSeatModel, type RescoreFeatures } from "./liveRescore.js";
@@ -44,8 +45,13 @@ export async function loadLiveScales(
   xReuseRestoredAt: Date | null,
   now = new Date(),
 ): Promise<LiveScales> {
-  const windowStart = new Date(now.getTime() - LIVE_SCORE_WINDOW_HOURS * 3_600_000);
-  const [allRows, lanes] = await Promise.all([
+  // A Helius data gap's moments are left out, and the window reaches back past the gap for the
+  // hours it lost (core's dataOutages.ts): through the 2026-11-22 outage the screen failed closed
+  // and the moments still banked had no Helius inputs, so a day of them set every cutoff on almost
+  // nothing. The cutoffs hold where they stood before the gap until fresh moments refill the window.
+  const outages = await loadDataOutages(now.getTime());
+  const windowStart = outages.windowStart(now, LIVE_SCORE_WINDOW_HOURS * 3_600_000);
+  const [readRows, lanes] = await Promise.all([
     prisma.candidateOutcome.findMany({
       where: {
         sampleKind: { in: ["event", "entry"] satisfies ScalePopulation[] },
@@ -56,6 +62,7 @@ export async function loadLiveScales(
     }),
     loadCurrentLanes(),
   ]);
+  const allRows = outages.empty ? readRows : readRows.filter((r) => !outages.covers(r.anchorAt));
   const rows = allRows.filter((r) => r.sampleKind === "event");
   const entryRows = allRows.filter((r) => r.sampleKind === "entry");
   const since = new Map(lanes.map((l) => [l.slot, l.bornAt]));
@@ -96,13 +103,13 @@ export async function loadLiveScales(
   }
   rescorer.prune(allRows, models);
   const scales = rescorer.build(rows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
-  const graded = await loadGradedRows(now, "event").catch(() => undefined);
+  const graded = await loadGradedRows(now, "event", outages).catch(() => undefined);
   const out: LiveScales = graded ? { ...scales, rankRates: buildRankRates(graded) } : scales;
   if (entryRows.length === 0) return out;
   const entry = rescorer.build(entryRows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
   // The same graded entry rows give the entry rank rates and the record a seat must clear to call
   // on the fast path at all (curation/entryProof.ts).
-  const entryGraded = await loadGradedRows(now, "entry").catch(() => undefined);
+  const entryGraded = await loadGradedRows(now, "entry", outages).catch(() => undefined);
   return {
     ...out,
     entry: entryGraded
@@ -117,16 +124,22 @@ export async function loadLiveScales(
  * rows, its fast-path record (curation/entryProof.ts) are drawn from. A clean 2x is hit2xIn1h on a
  * row that wasn't disqualified, as the live records count it.
  */
-async function loadGradedRows(now: Date, population: ScalePopulation): Promise<RankRateRow[]> {
-  const rows = await prisma.candidateOutcome.findMany({
+async function loadGradedRows(
+  now: Date,
+  population: ScalePopulation,
+  outages: OutageSet,
+): Promise<RankRateRow[]> {
+  const read = await prisma.candidateOutcome.findMany({
     where: {
       sampleKind: population,
-      anchorAt: { gt: new Date(now.getTime() - RANK_RATE_WINDOW_HOURS * 3_600_000) },
+      // Pushed back past a data gap's hours, whose rows (and those graded through one) are left out.
+      anchorAt: { gt: outages.windowStart(now, RANK_RATE_WINDOW_HOURS * 3_600_000) },
       hit2xIn1h: { not: null },
       seatScores: { not: Prisma.DbNull },
     },
-    select: { seatScores: true, hit2xIn1h: true, disqualified: true },
+    select: { anchorAt: true, seatScores: true, hit2xIn1h: true, disqualified: true },
   });
+  const rows = outages.empty ? read : read.filter((r) => !outages.taintsRow(r.anchorAt, 0));
   return rows.map((r) => ({
     seatScores: r.seatScores,
     won: r.hit2xIn1h === true && r.disqualified !== true,

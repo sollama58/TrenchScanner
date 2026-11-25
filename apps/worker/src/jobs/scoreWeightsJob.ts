@@ -3,6 +3,7 @@ import {
   fitScoreWeights,
   getScoreAnchor,
   getScoreWeights,
+  loadDataOutages,
   prisma,
   refreshScoreWeights,
   saveScoreWeightsRun,
@@ -68,6 +69,8 @@ async function loadFitRows(population: "event" | "match", since: Date): Promise<
   const events: ScoreFitRow[] = [];
   // Read newest first, so each later row for a token is an earlier match and replaces the last.
   const firstMatch = new Map<string, ScoreFitRow>();
+  // Rows a Helius data gap touched leave the fit, as they leave the curators' (core's dataOutages.ts).
+  const outages = await loadDataOutages();
   let cursor: string | undefined;
   let read = 0;
   while (read < MAX_ROWS_PER_POPULATION) {
@@ -100,6 +103,7 @@ async function loadFitRows(population: "event" | "match", since: Date): Promise<
       const features = r.features as Record<string, number | null>;
       const age = features.ageMinutes;
       if (population === "event" && typeof age === "number" && age > MAX_EVENT_AGE_MINUTES) continue;
+      if (outages.taintsRow(r.anchorAt, typeof age === "number" ? age : null)) continue;
       // A token the safety screen now rejects (mostly farm launches that pump, then rug).
       if (!passesWalletSafetyCuts(features)) continue;
       // A Stonks row banked while its holder features still counted the fee wallet.
