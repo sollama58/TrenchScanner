@@ -104,7 +104,8 @@ describe("tooltip lines", () => {
     expect(pillSegments(parts.main, t, v, DEFAULT_SETTINGS).map((s) => s.text)).toEqual(["Runner A", "+50%"]);
     expect(pillsNeedMap(prefs)).toBe(true);
     const second = pillSegments(parts.more!, t, v, DEFAULT_SETTINGS, totals);
-    expect(second.map((s) => s.text)).toEqual(["+50%", "61h", "BNDL 2%", "LINK 14%", "KOLB 12%"]);
+    // The change is on the first pill already, so the second leaves it out.
+    expect(second.map((s) => s.text)).toEqual(["61h", "BNDL 2%", "LINK 14%", "KOLB 12%"]);
     // Map parts wait for the totals rather than showing a blank.
     expect(pillSegments(parts.more!, t, v, DEFAULT_SETTINGS).map((s) => s.text)).not.toContain("KOLB");
   });

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { outermost } from "./adapters/adapter";
 import { axiom, gmgn, terminal } from "./adapters/sites";
 import { columnOf, findColumns } from "./columns";
 import { Scoper } from "./scope";
@@ -140,6 +141,55 @@ describe("Terminal's Trenches board", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]!.tagName).toBe("DIV");
     expect(rows.map((r) => terminal.mintOf(r))).toEqual([A, B]);
+  });
+});
+
+describe("Terminal's Trenches cards, ringed once (user report 2026-11-24)", () => {
+  /** A card as Terminal draws it: the marked card, an inner box with the copy button, a quick-buy field. */
+  const card = (m: string, top: number) =>
+    `<div class="slot" style="position: absolute; left: 0px; top: ${top}px; height: 142px; width: 100%;">
+      <div class="card" data-trenches-item="SOLANA:${m}-NEW">
+        <div class="pic"><img alt=""></div>
+        <div class="inner"><span>TIKTOK</span><div><button id="button-copy-address-context-${m}">copy</button></div></div>
+        <div class="buy"><input type="text" inputmode="decimal" value="0.35"><span>SOL</span></div>
+      </div></div>`;
+
+  it("takes the sized slot for both marks, so each coin is one row", () => {
+    board(card(A, 0) + card(B, 142));
+    const rows = terminal.findRows(document);
+    expect(rows.map((r) => r.className)).toEqual(["slot", "slot"]);
+    expect(rows.map((r) => terminal.mintOf(r))).toEqual([A, B]);
+  });
+
+  it("draws one ring and one pill per coin", () => {
+    // In a column, not straight under the body, where an absolute box reads as a portal (scope.ts).
+    board(`<div class="column">${card(A, 0)}</div>`);
+    const e = new OverlayEngine(terminal, DEFAULT_SETTINGS, {
+      lookup: async () => ({ tokens: {}, problem: null }),
+    });
+    e.start();
+    e.scan();
+    e.receive([A], { tokens: { [A]: token({ mint: A, modelCalls: [call] }) }, problem: null });
+    expect(document.querySelectorAll("trench-overlay")).toHaveLength(1);
+    e.stop();
+  });
+
+  it("with no slot, keeps the outer of two rows naming one coin", () => {
+    board(`<div class="list">${card(A, 0).replace(/style="[^"]*"/, "")}</div>`);
+    const rows = terminal.findRows(document);
+    expect(rows).toHaveLength(1);
+    expect(terminal.mintOf(rows[0]!)).toBe(A);
+    expect(rows[0]!.querySelector(".inner")).not.toBeNull();
+  });
+});
+
+describe("outermost", () => {
+  it("drops a row inside a row of the same coin, and keeps rows inside a list or another coin", () => {
+    board(`<div id="a"><div id="a2"></div></div><div id="list"><div id="b"></div><div id="c"></div></div>`);
+    const $ = (id: string) => document.getElementById(id)!;
+    const mints: Record<string, string | null> = { a: A, a2: A, list: null, b: B, c: A };
+    const rows = [$("a"), $("a2"), $("list"), $("b"), $("c")];
+    expect(outermost(rows, (r) => mints[r.id] ?? null).map((r) => r.id)).toEqual(["a", "list", "b", "c"]);
   });
 });
 

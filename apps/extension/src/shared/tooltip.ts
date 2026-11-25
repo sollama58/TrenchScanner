@@ -408,11 +408,19 @@ export function partOn(part: PillPart, prefs: ListPrefs<PillPart>, second: boole
   return prefs.on[part] ?? (second ? SECOND_ON : PILL_ON).has(part);
 }
 
-/** The parts each pill shows, in order; the second pill's is null while it is off. */
+/**
+ * The parts each pill shows, in order; the second pill's is null while it is off. A part on both
+ * pills shows on the first only: the second repeating the first's change or name read as the
+ * coin drawn twice (2026-11-24).
+ */
 export function pillParts(prefs: TooltipPrefs): { main: PillPart[]; more: PillPart[] | null } {
+  const main = prefs.pill.order.filter((p) => partOn(p, prefs.pill, false));
+  const shown = new Set(main);
   return {
-    main: prefs.pill.order.filter((p) => partOn(p, prefs.pill, false)),
-    more: prefs.second.enabled ? prefs.second.order.filter((p) => partOn(p, prefs.second, true)) : null,
+    main,
+    more: prefs.second.enabled
+      ? prefs.second.order.filter((p) => partOn(p, prefs.second, true) && !shown.has(p))
+      : null,
   };
 }
 
