@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activityStretch,
   HeliusClient,
+  SCAN_SIGNATURES_PAGE_REUSE_MS,
+  wholePageEarliest,
   type EarliestActivityResult,
   type WalletSignaturesPage,
 } from "./helius.js";
@@ -243,6 +245,63 @@ describe("shared reads: calls sent", () => {
     expect(calls.filter((c) => c.method === "getSignaturesForAddress")).toHaveLength(2);
   });
 
+  it("keeps a page for the scanner's longer window, across cycles", async () => {
+    const data = recorded();
+    const { url, calls } = await startServer(rpcHandler(data));
+    const client = new HeliusClient({ rpcUrl: url, signaturePageReuseMs: SCAN_SIGNATURES_PAGE_REUSE_MS });
+    let now = NOW_S * 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const first = await client.getEarliestActivityBatch(["mid"]);
+    // The funder read comes cycles later, on its own budget: the same page, not another credit.
+    now += SCAN_SIGNATURES_PAGE_REUSE_MS - 1_000;
+    const funders = await client.getFundersBatch(["mid"], { nowMs: now });
+    expect(funders.get("mid")).toMatchObject({ status: "found", funder: "M1" });
+    expect(calls.filter((c) => c.method === "getSignaturesForAddress")).toHaveLength(1);
+    now += 2_000;
+    expect(await client.getEarliestActivityBatch(["mid"])).toEqual(first);
+    expect(calls.filter((c) => c.method === "getSignaturesForAddress")).toHaveLength(2);
+  });
+
+  it("reads an empty page again after the short window, whatever the client's", async () => {
+    // A brand-new wallet the index has not caught up with: asked again shortly, it must be read.
+    const data = recorded();
+    const { url, calls } = await startServer(rpcHandler(data));
+    const client = new HeliusClient({ rpcUrl: url, signaturePageReuseMs: SCAN_SIGNATURES_PAGE_REUSE_MS });
+    let now = NOW_S * 1000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await client.getEarliestActivityBatch(["empty"]);
+    now += 29_000;
+    await client.getFundersBatch(["empty"], { nowMs: now });
+    expect(calls.filter((c) => c.method === "getSignaturesForAddress")).toHaveLength(1);
+    now += 2_000;
+    data.pages.empty = [{ signature: "empty-0", blockTime: NOW_S }];
+    expect((await client.getEarliestActivityBatch(["empty"])).get("empty")).toMatchObject({
+      status: "found",
+    });
+    expect(calls.filter((c) => c.method === "getSignaturesForAddress")).toHaveLength(2);
+  });
+
+  it("lets the oldest pages go once the rows kept pass their cap", async () => {
+    // 250 wallets of 1,000 rows each is past the 200,000 rows kept: the first read is gone, the last stays.
+    const data = recorded();
+    const wallets = Array.from({ length: 250 }, (_, i) => `big${i}`);
+    for (const w of wallets)
+      data.pages[w] = Array.from({ length: 1000 }, (_, i) => ({
+        signature: `${w}-${i}`,
+        blockTime: NOW_S - i,
+      }));
+    const { url, calls } = await startServer(rpcHandler(data));
+    const client = new HeliusClient({ rpcUrl: url, signaturePageReuseMs: SCAN_SIGNATURES_PAGE_REUSE_MS });
+    await client.getEarliestActivityBatch(["big0"]);
+    await client.getEarliestActivityBatch(wallets.slice(1, 249));
+    await client.getEarliestActivityBatch(["big249"]);
+    calls.length = 0;
+    await client.getEarliestActivityBatch(["big249", "big0"]);
+    expect(calls.filter((c) => c.method === "getSignaturesForAddress").map((c) => c.params[0])).toEqual([
+      "big0",
+    ]);
+  });
+
   it("doesn't keep a failed page", async () => {
     const data = recorded();
     const { url, calls } = await startServer(rpcHandler(data));
@@ -321,6 +380,46 @@ describe("shared reads on Helius: sorted lookups", () => {
     expect(calls.filter((c) => c.method === "getSignaturesForAddress")).toHaveLength(2);
   });
 
+  it("settles a wallet from the rest of its page before paying for the sorted lookup", async () => {
+    // "mid": 450 rows, 30 s apart, so its first 200 sit inside a 2-hour window and the page (the
+    // funder reads' 1,000) is its whole history. "deep": 1,000 rows, the last past the cutoff.
+    // "busy": 1,000 rows inside the window. Only "busy" needs the 10-credit lookup.
+    const data = recorded();
+    data.pages.deep = Array.from({ length: 1500 }, (_, i) => ({
+      signature: `deep-${i}`,
+      blockTime: NOW_S - 100 - i * 30,
+    }));
+    const base = rpcHandler(data);
+    const { url, calls } = await startServer((c) =>
+      c.method === "getTransactionsForAddress"
+        ? { result: { data: [{ signature: "first", blockTime: SECONDS }] } }
+        : base(c),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+    const windowStart = NOW_S - 2 * 3600;
+    const result = await client.getEarliestActivityBatch(["mid", "deep", "busy"], {
+      boundSufficientBefore: new Date(windowStart * 1000),
+    });
+    expect(result.get("mid")).toEqual({
+      status: "found",
+      earliestActivityAt: new Date((NOW_S - 100 - 449 * 30) * 1000),
+      lastActivityAt: new Date((NOW_S - 100) * 1000),
+    });
+    expect(result.get("deep")).toEqual({
+      status: "older-than",
+      boundAt: new Date((NOW_S - 100 - 999 * 30) * 1000),
+      lastActivityAt: new Date((NOW_S - 100) * 1000),
+    });
+    expect(result.get("busy")).toMatchObject({
+      status: "found",
+      earliestActivityAt: new Date(SECONDS * 1000),
+    });
+    expect(calls.filter((c) => c.method === "getTransactionsForAddress").map((c) => c.params[0])).toEqual([
+      "busy",
+    ]);
+    expect(calls.filter((c) => c.method === "getSignaturesForAddress")).toHaveLength(3);
+  });
+
   it("reads a launch once when a fast scan and the cycle ask for it at once", async () => {
     const { url, calls } = await startServer(heliusHandler(), 20);
     const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
@@ -341,5 +440,54 @@ describe("shared reads on Helius: sorted lookups", () => {
       client.getLaunchBuyersBatch(["mintA"], 10),
     ]);
     expect(calls.filter((c) => c.params[0] === "mintA")).toHaveLength(3);
+  });
+});
+
+describe("wholePageEarliest", () => {
+  const rows = (n: number, time: (i: number) => number | null) =>
+    Array.from({ length: n }, (_, i) => ({ signature: `s${i}`, blockTime: time(i) }));
+  const cutoffMs = (NOW_S - 86_400) * 1000;
+
+  it("reads a page short of the limit as the wallet's whole history", () => {
+    expect(
+      wholePageEarliest(
+        rows(999, (i) => NOW_S - i),
+        cutoffMs,
+      ),
+    ).toEqual({
+      status: "found",
+      earliestActivityAt: new Date((NOW_S - 998) * 1000),
+      lastActivityAt: new Date(NOW_S * 1000),
+    });
+  });
+
+  it("bounds a full page that reaches past the cutoff, and leaves one inside it unanswered", () => {
+    expect(
+      wholePageEarliest(
+        rows(1000, (i) => NOW_S - i * 100),
+        cutoffMs,
+      ),
+    ).toEqual({
+      status: "older-than",
+      boundAt: new Date((NOW_S - 99_900) * 1000),
+      lastActivityAt: new Date(NOW_S * 1000),
+    });
+    expect(
+      wholePageEarliest(
+        rows(1000, (i) => NOW_S - i),
+        cutoffMs,
+      ),
+    ).toBeNull();
+  });
+
+  it("answers nothing without a page, or when its oldest row has no block time", () => {
+    expect(wholePageEarliest(undefined, cutoffMs)).toBeNull();
+    expect(wholePageEarliest([], cutoffMs)).toBeNull();
+    expect(
+      wholePageEarliest(
+        rows(300, (i) => (i === 299 ? null : NOW_S - i)),
+        cutoffMs,
+      ),
+    ).toBeNull();
   });
 });

@@ -305,6 +305,12 @@ export interface HeliusClientOptions {
    * reads queued behind a pause the wallet modal, fee reads and supplies had run into.
    */
   pauseLane?: string;
+  /**
+   * How long a wallet's newest signatures page is reused by the readers of that page (default
+   * SIGNATURES_PAGE_REUSE_MS). The scanner asks for SCAN_SIGNATURES_PAGE_REUSE_MS: its freshness
+   * and funder reads of one wallet now run cycles apart.
+   */
+  signaturePageReuseMs?: number;
 }
 
 const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
@@ -438,6 +444,25 @@ const FUNDER_SIGNATURES_LIMIT = 1000;
  * 2026-10-23, N-1). Well under a cycle, so a reused page is never older than the stages that share it.
  */
 const SIGNATURES_PAGE_REUSE_MS = 30_000;
+/**
+ * The scanner's reuse window (HeliusClientOptions.signaturePageReuseMs). The 30 seconds above
+ * shared a page between readers running in the same cycle. Since the budgets of 2026-11-21
+ * (freshness 15 wallets a cycle, funders 5 and the contenders' 30) the two reads of a new holder
+ * mostly fall in different cycles, and each paid its own credit for the same page again: 27,078
+ * freshness pages beside 61,449 funder pages on 2026-11-24 (Helius deep dive 2026-11-25).
+ *
+ * What each reader takes from the page does not move in ten minutes: freshness and the funder walk
+ * read its oldest rows (a wallet's first transactions are what they were), the hot-funder check a
+ * full page's span. Only the newest transaction's time is up to ten minutes old, and it sets when
+ * an answer is read again, a week later. An empty page is the exception: it is a brand-new wallet
+ * the index has not caught up with, read again shortly, so it keeps the short window.
+ */
+export const SCAN_SIGNATURES_PAGE_REUSE_MS = 10 * 60_000;
+/**
+ * Most signature rows kept for reuse, across pages: a page runs to 1,000 rows of ~150 bytes, so
+ * the page cap alone could hold 150 MB over the longer window. Oldest pages go first.
+ */
+const MAX_REUSED_SIGNATURE_ROWS = 200_000;
 /** Pages kept at once; the oldest goes first. Each is up to 1,000 trimmed rows. */
 const MAX_REUSED_SIGNATURE_PAGES = 1_000;
 
@@ -691,6 +716,37 @@ export function parseTokenAccountSlice(entry: TokenAccountSlice): { mint: string
   return { mint: bs58.encode(bytes.subarray(0, 32)), amount: bytes.readBigUInt64LE(64) };
 }
 
+/**
+ * What a wallet's whole signatures page (FUNDER_SIGNATURES_LIMIT rows, newest first) says about its
+ * first transaction, for a wallet whose first SIGNATURES_PAGE_LIMIT rows all sit inside the
+ * freshness window, or null when the page cannot say:
+ *  - a page short of the limit is the wallet's whole history, so its oldest row is the first
+ *    transaction: the answer the sorted lookup gives ("found", with no stretch, as that lookup
+ *    answers);
+ *  - a full page whose oldest row is before `sufficientMs` bounds the first transaction outside
+ *    the window ("older-than"), which settles freshness as the exact time would;
+ *  - a full page inside the window is a wallet with 1,000 transactions since the cutoff: only the
+ *    sorted lookup knows.
+ * Until the Helius deep dive of 2026-11-25 every such wallet went to getTransactionsForAddress, 10
+ * credits (about 1,600 a day in the wallet stage on 2026-11-24), with these rows already in hand.
+ * Exported for tests.
+ */
+export function wholePageEarliest(
+  page: SignaturesResult | undefined,
+  sufficientMs: number,
+): EarliestActivityResult | null {
+  if (!Array.isArray(page) || page.length === 0) return null;
+  const oldest = page[page.length - 1]?.blockTime;
+  const newest = page.find((s) => typeof s.blockTime === "number")?.blockTime;
+  if (typeof oldest !== "number") return null;
+  const lastActivityAt = typeof newest === "number" ? new Date(newest * 1000) : undefined;
+  const oldestAt = new Date(oldest * 1000);
+  if (page.length < FUNDER_SIGNATURES_LIMIT)
+    return { status: "found", earliestActivityAt: oldestAt, lastActivityAt };
+  if (oldestAt.getTime() < sufficientMs) return { status: "older-than", boundAt: oldestAt, lastActivityAt };
+  return null;
+}
+
 export class HeliusClient {
   private readonly rpcUrl: string;
   readonly usingHelius: boolean;
@@ -759,10 +815,13 @@ export class HeliusClient {
   /** RPC method invocations issued since the last takeCallStats() - the number a plan bills on. */
   private readonly callCounts = new Map<string, number>();
   /**
-   * Newest signatures pages read in the last SIGNATURES_PAGE_REUSE_MS, by wallet, in read order,
+   * Newest signatures pages read within the reuse window (signaturePageReuseFor), by wallet, in read order,
    * and the reads still in flight (signaturePages). A failed read is not kept.
    */
   private readonly signaturePagesRead = new Map<string, { page: WalletSignaturesPage; atMs: number }>();
+  /** Rows held in signaturePagesRead (MAX_REUSED_SIGNATURE_ROWS). */
+  private signatureRowsKept = 0;
+  private readonly signaturePageReuseMs: number;
   private readonly signaturePagesInFlight = new Map<
     string,
     Promise<RpcResponse<SignaturesResult> | undefined>
@@ -788,6 +847,7 @@ export class HeliusClient {
       this.usingHelius = false;
     }
     this.pause = rpcPauseFor(this.rpcUrl, options.pauseLane);
+    this.signaturePageReuseMs = Math.max(0, options.signaturePageReuseMs ?? SIGNATURES_PAGE_REUSE_MS);
     // Only Helius serves getTransactionsForAddress - don't even try it elsewhere.
     this.gtfaUnavailable = !this.usingHelius;
     // Same for the DAS API, which is a Helius extension rather than standard Solana RPC.
@@ -951,7 +1011,7 @@ export class HeliusClient {
 
   /**
    * Each address's newest FUNDER_SIGNATURES_LIMIT signatures (finalized, the default), as
-   * sendBatched answers them: from a page read in the last SIGNATURES_PAGE_REUSE_MS, from a read
+   * sendBatched answers them: from a page read within the reuse window (signaturePageReuseFor), from a read
    * of it already in flight, or read now. One page answers every reader (Helius audit 2026-10-23,
    * N-1): freshness takes its first SIGNATURES_PAGE_LIMIT rows, which are exactly the page a
    * request for that many returns - the list is newest first from the same tip, failed
@@ -964,7 +1024,8 @@ export class HeliusClient {
     const toRead: string[] = [];
     for (const address of addresses) {
       const hit = this.signaturePagesRead.get(address);
-      if (hit && now - hit.atMs <= SIGNATURES_PAGE_REUSE_MS) out.set(address, { result: hit.page });
+      if (hit && now - hit.atMs <= this.signaturePageReuseFor(hit.page))
+        out.set(address, { result: hit.page });
       else toRead.push(address);
     }
     const read = await this.shareInFlight(
@@ -998,15 +1059,39 @@ export class HeliusClient {
     return out;
   }
 
+  /**
+   * How long `page` is reused: the client's window, but never past SIGNATURES_PAGE_REUSE_MS for an
+   * empty page (see SCAN_SIGNATURES_PAGE_REUSE_MS).
+   */
+  private signaturePageReuseFor(page: WalletSignaturesPage): number {
+    return page.length === 0
+      ? Math.min(this.signaturePageReuseMs, SIGNATURES_PAGE_REUSE_MS)
+      : this.signaturePageReuseMs;
+  }
+
   private keepSignaturePage(address: string, page: WalletSignaturesPage, atMs: number): void {
-    this.signaturePagesRead.delete(address);
+    this.dropSignaturePage(address);
     this.signaturePagesRead.set(address, { page, atMs });
-    // In read order: the expired go from the front, then the oldest past the cap.
+    this.signatureRowsKept += page.length;
+    // In read order: the expired go from the front, then the oldest past either cap. An empty
+    // page past its own shorter window is left for the lookup to skip: it holds no rows.
     for (const [key, entry] of this.signaturePagesRead) {
-      const expired = atMs - entry.atMs > SIGNATURES_PAGE_REUSE_MS;
-      if (!expired && this.signaturePagesRead.size <= MAX_REUSED_SIGNATURE_PAGES) break;
-      this.signaturePagesRead.delete(key);
+      const expired = atMs - entry.atMs > this.signaturePageReuseMs;
+      const over =
+        this.signaturePagesRead.size > MAX_REUSED_SIGNATURE_PAGES ||
+        this.signatureRowsKept > MAX_REUSED_SIGNATURE_ROWS;
+      if (!expired && !over) break;
+      // The page just kept is the last one standing, however large.
+      if (key === address) break;
+      this.dropSignaturePage(key);
     }
+  }
+
+  private dropSignaturePage(address: string): void {
+    const entry = this.signaturePagesRead.get(address);
+    if (!entry) return;
+    this.signatureRowsKept -= entry.page.length;
+    this.signaturePagesRead.delete(address);
   }
 
   /**
@@ -1102,28 +1187,32 @@ export class HeliusClient {
   /**
    * The ten largest wallets of each mint and their share of supply, straight from the chain: the
    * backup for a mint RugCheck has no report for. Per mint, getTokenLargestAccounts (its 20
-   * largest token accounts) and getTokenSupply in one batch, then one getMultipleAccounts over
-   * every account found for the wallets that own them. Any read without a usable answer makes
-   * that mint "failed", never a partial list read as complete.
+   * largest token accounts), then one getMultipleAccounts over every account found for the wallets
+   * that own them. Any read without a usable answer makes that mint "failed", never a partial
+   * list read as complete.
+   *
+   * The supply rides that getMultipleAccounts: the mint's own account is one more key in it, and
+   * its parsed supply is the figure getTokenSupply answers. Until the Helius deep dive of
+   * 2026-11-25 each mint paid a getTokenSupply of its own (7,816 credits on 2026-11-24, as many as
+   * the largest-accounts reads). A mint whose account the endpoint does not parse is asked the
+   * old way.
    */
   async getLargestHoldersBatch(mintAddresses: string[]): Promise<Map<string, LargestHoldersResult>> {
     const unique = [...new Set(mintAddresses)];
     const out = new Map<string, LargestHoldersResult>();
     if (unique.length === 0) return out;
 
-    const calls: RpcCall[] = unique.flatMap((mint) => [
-      { id: `lta-${mint}`, method: "getTokenLargestAccounts", params: [mint, { commitment: "confirmed" }] },
-      { id: `sup-${mint}`, method: "getTokenSupply", params: [mint, { commitment: "confirmed" }] },
-    ]);
+    const calls: RpcCall[] = unique.map((mint) => ({
+      id: `lta-${mint}`,
+      method: "getTokenLargestAccounts",
+      params: [mint, { commitment: "confirmed" }],
+    }));
     const responses = await this.sendBatched<{ value?: unknown }>(calls, 10_000);
 
     const accountsByMint = new Map<string, { address: string; amount: bigint }[]>();
-    const supplyByMint = new Map<string, bigint>();
     for (const mint of unique) {
       const largest = responses.get(`lta-${mint}`)?.result?.value;
-      const supply = (responses.get(`sup-${mint}`)?.result?.value as { amount?: unknown } | undefined)
-        ?.amount;
-      if (!Array.isArray(largest) || typeof supply !== "string" || !/^\d+$/.test(supply)) {
+      if (!Array.isArray(largest)) {
         out.set(mint, { status: "failed" });
         continue;
       }
@@ -1137,24 +1226,47 @@ export class HeliusClient {
           accounts.push({ address: entry.address, amount: BigInt(entry.amount) });
       }
       accountsByMint.set(mint, accounts);
-      supplyByMint.set(mint, BigInt(supply));
+    }
+    if (accountsByMint.size === 0) return out;
+
+    // The token accounts (for their owners) and the mints themselves (for their supply), one read.
+    const tokenAccounts = [...new Set([...accountsByMint.values()].flat().map((a) => a.address))];
+    const parsed = await this.getMultipleAccounts<{
+      data?: { parsed?: { type?: unknown; info?: { owner?: unknown; supply?: unknown } } };
+    }>([...new Set([...tokenAccounts, ...accountsByMint.keys()])], { encoding: "jsonParsed" });
+    const supplyByMint = new Map<string, bigint>();
+    for (const mint of accountsByMint.keys()) {
+      const account = parsed.get(mint);
+      const data = account && account !== "failed" ? account.value?.data?.parsed : undefined;
+      const supply = data?.type === "mint" ? data.info?.supply : undefined;
+      if (typeof supply === "string" && /^\d+$/.test(supply)) supplyByMint.set(mint, BigInt(supply));
+    }
+    const unread = [...accountsByMint.keys()].filter((mint) => !supplyByMint.has(mint));
+    if (unread.length > 0) {
+      const supplies = await this.sendBatched<{ value?: { amount?: unknown } }>(
+        unread.map((mint) => ({
+          id: `sup-${mint}`,
+          method: "getTokenSupply",
+          params: [mint, { commitment: "confirmed" }],
+        })),
+        10_000,
+      );
+      for (const mint of unread) {
+        const supply = supplies.get(`sup-${mint}`)?.result?.value?.amount;
+        if (typeof supply === "string" && /^\d+$/.test(supply)) supplyByMint.set(mint, BigInt(supply));
+      }
     }
 
-    const tokenAccounts = [...new Set([...accountsByMint.values()].flat().map((a) => a.address))];
-    const owners =
-      tokenAccounts.length > 0
-        ? await this.getMultipleAccounts<{ data?: { parsed?: { info?: { owner?: unknown } } } }>(
-            tokenAccounts,
-            {
-              encoding: "jsonParsed",
-            },
-          )
-        : new Map();
     for (const [mint, accounts] of accountsByMint) {
+      const supply = supplyByMint.get(mint);
+      if (supply === undefined) {
+        out.set(mint, { status: "failed" });
+        continue;
+      }
       const withOwners: LargestAccount[] = [];
       let complete = true;
       for (const a of accounts) {
-        const account = owners.get(a.address);
+        const account = parsed.get(a.address);
         const owner = account && account !== "failed" ? account.value?.data?.parsed?.info?.owner : undefined;
         if (typeof owner !== "string") {
           complete = false;
@@ -1162,9 +1274,7 @@ export class HeliusClient {
         }
         withOwners.push({ owner, amount: a.amount });
       }
-      const holders = complete
-        ? holdersFromLargestAccounts(withOwners, supplyByMint.get(mint)!, FEE_HOLDERS)
-        : null;
+      const holders = complete ? holdersFromLargestAccounts(withOwners, supply, FEE_HOLDERS) : null;
       out.set(mint, holders ? { status: "found", holders } : { status: "failed" });
     }
     return out;
@@ -1476,8 +1586,9 @@ export class HeliusClient {
        * (getSignaturesForAddress, 1 credit) and only those it can't settle go on to
        * getTransactionsForAddress (10 credits): a wallet whose whole history fits one page, or
        * whose page already reaches back past this date, never needs it - which covers the fresh
-       * sniper wallets and long-lived wallets alike; only busy wallets with a full page inside
-       * the window pay for the exact answer.
+       * sniper wallets and long-lived wallets alike. A busy wallet whose first rows all sit inside
+       * the window is then read from the rest of its page (wholePageEarliest), and only one with
+       * a full page of 1,000 transactions inside the window pays for the exact answer.
        */
       boundSufficientBefore?: Date;
     } = {},
@@ -1487,7 +1598,8 @@ export class HeliusClient {
 
     if (opts.boundSufficientBefore && this.gtfaUsable) {
       const sufficientMs = opts.boundSufficientBefore.getTime();
-      const cheap = await this.earliestViaSignatures(unique);
+      const pages = await this.signaturePages(unique);
+      const cheap = this.earliestFromPages(unique, pages);
       // Only a bound inside the window goes on to the exact method. A cheap lookup that failed
       // stays failed (the caller backs it off and asks again): escalating it sent every wallet of
       // a timed-out signatures batch to the 10-credit method on the same slow provider.
@@ -1497,11 +1609,20 @@ export class HeliusClient {
         return r?.status === "older-than" && r.boundAt.getTime() >= sufficientMs && !r.activeSince;
       });
       if (unsettled.length === 0) return cheap;
+      // The rest of the page first: it is the funder reads' 1,000 rows, already paid for, and the
+      // answer above read only its first SIGNATURES_PAGE_LIMIT (wholePageEarliest).
+      const busy: string[] = [];
+      for (const address of unsettled) {
+        const deep = wholePageEarliest(pages.get(address)?.result, sufficientMs);
+        if (deep) cheap.set(address, deep);
+        else busy.push(address);
+      }
+      if (busy.length === 0) return cheap;
       // A wallet another call is already looking up (a fast scan beside the cycle) takes that
       // answer: the sorted lookup doesn't depend on the cutoff (Helius audit 2026-10-23, N-3).
       const exact = await this.shareInFlight(
         this.exactEarliestInFlight,
-        unsettled,
+        busy,
         (address) => address,
         async (own) => (await this.earliestViaGetTransactionsForAddress(own)) ?? new Map(),
       );
@@ -1509,7 +1630,7 @@ export class HeliusClient {
       // the window, which says only "busy", and handing it on when the exact lookup failed had
       // the caller cache a recently funded busy wallet as "not fresh" for good, off one 429.
       // Failed, it is retried on a later cycle instead. The page's newest transaction rides along.
-      for (const address of unsettled) {
+      for (const address of busy) {
         const r = exact.get(address);
         const before = cheap.get(address);
         const lastActivityAt = before?.status === "older-than" ? before.lastActivityAt : undefined;
@@ -1547,8 +1668,15 @@ export class HeliusClient {
    * answer is the one the smaller request gave.
    */
   private async earliestViaSignatures(addresses: string[]): Promise<Map<string, EarliestActivityResult>> {
+    return this.earliestFromPages(addresses, await this.signaturePages(addresses));
+  }
+
+  /** earliestViaSignatures' answers from pages already read (signaturePages). */
+  private earliestFromPages(
+    addresses: string[],
+    responses: ReadonlyMap<string, RpcResponse<SignaturesResult>>,
+  ): Map<string, EarliestActivityResult> {
     const out = new Map<string, EarliestActivityResult>();
-    const responses = await this.signaturePages(addresses);
 
     for (const address of addresses) {
       const res = responses.get(address);
