@@ -22,6 +22,7 @@ import {
   PumpFunClient,
   RugCheckClient,
   HeliusClient,
+  SCAN_SIGNATURES_PAGE_REUSE_MS,
   SolanaRpc,
   SUBSCRIPTION_MINT,
   STONK_MINT,
@@ -508,7 +509,12 @@ async function main() {
     entryFastPath: undefined as EntryFastPath | undefined,
     launchScreen: undefined as LaunchScreen | undefined,
     rugCheck: new RugCheckClient(),
-    helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
+    // A wallet's signatures page is kept ten minutes for its other readers (freshness, funders,
+    // the hot-funder check), which now run cycles apart (SCAN_SIGNATURES_PAGE_REUSE_MS).
+    helius: new HeliusClient({
+      apiKey: env.HELIUS_API_KEY || undefined,
+      signaturePageReuseMs: SCAN_SIGNATURES_PAGE_REUSE_MS,
+    }),
     // The screen's Mayhem and holder reads when Helius gives no answer, so it doesn't reject every
     // new coin through a Helius outage (screenBackup.ts).
     screenBackup: screenBackupFor(env, (rpcUrl) => new HeliusClient({ rpcUrl })),

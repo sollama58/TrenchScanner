@@ -416,12 +416,15 @@ describe("HeliusClient.getEarliestActivityBatch with boundSufficientBefore", () 
             result: { data: [{ signature: "first", blockTime: cutoff - 5 }] },
           };
         }
+        // As the RPC answers: up to the limit asked (the funder reads' 1,000), and "busy" and "old"
+        // have more than that.
+        const limit = (c.params[1] as { limit: number }).limit;
         const result =
           address === "new"
             ? page(cutoff + 60, 3)
             : address === "old"
-              ? page(cutoff - 60, 200)
-              : page(cutoff + 60, 200);
+              ? page(cutoff - 60, limit)
+              : page(cutoff + 60, limit);
         return { jsonrpc: "2.0", id: c.id, result };
       }),
     );
@@ -463,7 +466,10 @@ describe("HeliusClient.getEarliestActivityBatch when the exact lookup fails", ()
           : {
               jsonrpc: "2.0",
               id: c.id,
-              result: Array.from({ length: 200 }, (_, i) => ({ signature: `s${i}`, blockTime: cutoff + 60 })),
+              result: Array.from({ length: (c.params[1] as { limit: number }).limit }, (_, i) => ({
+                signature: `s${i}`,
+                blockTime: cutoff + 60,
+              })),
             },
       ),
     );
@@ -818,33 +824,40 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
 });
 
 describe("HeliusClient.getLargestHoldersBatch", () => {
-  it("reads the largest accounts and supply, then each account's owner", async () => {
+  type Call = { id: string; method: string; params: unknown[] };
+  const largest = (c: Call, rows: [string, string][]) => ({
+    jsonrpc: "2.0",
+    id: c.id,
+    result: { value: rows.map(([address, amount]) => ({ address, amount })) },
+  });
+  /** getMultipleAccounts over token accounts (their owners) and mints (their supply), by key. */
+  const accounts = (c: Call, owners: Record<string, string>, supplies: Record<string, string | null>) => ({
+    jsonrpc: "2.0",
+    id: c.id,
+    result: {
+      value: (c.params[0] as string[]).map((key) =>
+        key in owners
+          ? { data: { parsed: { type: "account", info: { owner: owners[key] } } } }
+          : supplies[key]
+            ? { data: { parsed: { type: "mint", info: { supply: supplies[key] } } } }
+            : // An endpoint that does not parse the mint's program hands back its raw data.
+              { data: ["AAAA", "base64"] },
+      ),
+    },
+  });
+
+  it("reads the largest accounts, then each account's owner and the mint's supply in one read", async () => {
+    const methods: string[] = [];
     const { url } = await startServer((calls) =>
-      calls.map((c) => {
+      (calls as Call[]).map((c) => {
+        methods.push(c.method);
         if (c.method === "getTokenLargestAccounts")
-          return {
-            jsonrpc: "2.0",
-            id: c.id,
-            result: {
-              value: [
-                { address: "acct1", amount: "600" },
-                { address: "acct2", amount: "100" },
-              ],
-            },
-          };
-        if (c.method === "getTokenSupply")
-          return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
-        // getMultipleAccounts: the first account belongs to a program address, the second to a wallet.
-        return {
-          jsonrpc: "2.0",
-          id: c.id,
-          result: {
-            value: [
-              { data: { parsed: { info: { owner: CURVE } } } },
-              { data: { parsed: { info: { owner: WALLET } } } },
-            ],
-          },
-        };
+          return largest(c, [
+            ["acct1", "600"],
+            ["acct2", "100"],
+          ]);
+        // The first account belongs to a program address, the second to a wallet.
+        return accounts(c, { acct1: CURVE, acct2: WALLET }, { mintA: "1000" });
       }),
     );
     const client = new HeliusClient({ rpcUrl: url });
@@ -858,6 +871,39 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
         topHolderShares: [{ owner: WALLET, pct: 10 }],
       },
     });
+    // One credit a mint for the list and one for the batch: no getTokenSupply of its own.
+    expect(methods).toEqual(["getTokenLargestAccounts", "getMultipleAccounts"]);
+  });
+
+  it("asks getTokenSupply for a mint whose account came back unparsed", async () => {
+    const methods: string[] = [];
+    const { url } = await startServer((calls) =>
+      (calls as Call[]).map((c) => {
+        methods.push(c.method);
+        if (c.method === "getTokenLargestAccounts")
+          return largest(c, [[c.params[0] === "mintA" ? "acctA" : "acctB", "250"]]);
+        if (c.method === "getTokenSupply")
+          return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "500" } } };
+        return accounts(c, { acctA: WALLET, acctB: WALLET }, { mintA: "1000", mintB: null });
+      }),
+    );
+    const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(["mintA", "mintB"]);
+    expect(result.get("mintA")).toMatchObject({ status: "found", holders: { top10HolderPct: 25 } });
+    expect(result.get("mintB")).toMatchObject({ status: "found", holders: { top10HolderPct: 50 } });
+    expect(methods.filter((m) => m === "getTokenSupply")).toHaveLength(1);
+  });
+
+  it("fails a mint with no supply from either read", async () => {
+    const { url } = await startServer((calls) =>
+      (calls as Call[]).map((c) => {
+        if (c.method === "getTokenLargestAccounts") return largest(c, [["acct1", "100"]]);
+        if (c.method === "getTokenSupply")
+          return { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } };
+        return accounts(c, { acct1: WALLET }, { mintA: null });
+      }),
+    );
+    const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(["mintA"]);
+    expect(result.get("mintA")).toEqual({ status: "failed" });
   });
 
   it("fails a mint whose reads came back without an answer", async () => {
@@ -870,30 +916,13 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
 
   it("leaves Stonks' fee wallet out of any coin's holders", async () => {
     const { url } = await startServer((calls) =>
-      calls.map((c) => {
+      (calls as Call[]).map((c) => {
         if (c.method === "getTokenLargestAccounts")
-          return {
-            jsonrpc: "2.0",
-            id: c.id,
-            result: {
-              value: [
-                { address: "acct1", amount: "300" },
-                { address: "acct2", amount: "100" },
-              ],
-            },
-          };
-        if (c.method === "getTokenSupply")
-          return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
-        return {
-          jsonrpc: "2.0",
-          id: c.id,
-          result: {
-            value: [
-              { data: { parsed: { info: { owner: STONKS_FEE_WALLET } } } },
-              { data: { parsed: { info: { owner: WALLET } } } },
-            ],
-          },
-        };
+          return largest(c, [
+            ["acct1", "300"],
+            ["acct2", "100"],
+          ]);
+        return accounts(c, { acct1: STONKS_FEE_WALLET, acct2: WALLET }, { mintA: "1000" });
       }),
     );
     const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(["mintA"]);
