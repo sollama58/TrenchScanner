@@ -64,8 +64,25 @@ export interface Mark {
 /**
  * A box that is a whole list or menu rather than one coin's row: one holding a search box, or a
  * layer by its role. A marked row's box never grows into one of these.
+ *
+ * Only a search box counts (by its type, role or label), not any input: Terminal's Trenches rows
+ * hold a quick-buy amount field, and with every input counted (0.9.7) each row's slot was turned
+ * down, its two marks (the row's and its copy button's) each climbed to a different box, and the
+ * coin was ringed twice, one ring inside the other, each with its own pill and safety mark (user
+ * report 2026-11-24). findRows also drops a row inside another row of the same coin.
  */
-const NOT_A_ROW = "input, textarea, [role='dialog'], [role='listbox'], [role='menu'], [aria-modal='true']";
+const NOT_A_ROW = [
+  "input[type='search']",
+  "input[placeholder*='search' i]",
+  "input[aria-label*='search' i]",
+  "[role='searchbox']",
+  "[role='combobox']",
+  "textarea",
+  "[role='dialog']",
+  "[role='listbox']",
+  "[role='menu']",
+  "[aria-modal='true']",
+].join(", ");
 /** How far above its mark a row's box is looked for, when the site gives no sized slot. */
 const MAX_CLIMB = 8;
 
@@ -97,6 +114,28 @@ function mintInUrl(href: string, patterns: readonly RegExp[]): string | null {
     if (match) return mintsIn(match[1] ?? match[0])[0] ?? null;
   }
   return null;
+}
+
+/**
+ * The rows left once a row inside another row of the same coin is dropped: one coin, one ring. Two
+ * marks, or a mark and a link, can each stand for a different box of one card (user report
+ * 2026-11-24: Terminal's cards ringed twice, a pill on each). A row inside a box of another coin,
+ * or of none (a list), is kept. Order is kept.
+ */
+export function outermost(rows: Element[], mintOf: (row: Element) => string | null): Element[] {
+  if (rows.length < 2) return rows;
+  const found = new Set(rows);
+  const mints = new Map<Element, string | null>();
+  const mint = (row: Element) => {
+    if (!mints.has(row)) mints.set(row, mintOf(row));
+    return mints.get(row)!;
+  };
+  return rows.filter((row) => {
+    for (let up = row.parentElement; up; up = up.parentElement) {
+      if (found.has(up) && mint(up) !== null && mint(up) === mint(row)) return false;
+    }
+    return true;
+  });
 }
 
 export function adapterFrom(spec: AdapterSpec): SiteAdapter {
@@ -163,7 +202,7 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
     return false;
   };
 
-  return {
+  const adapter: SiteAdapter = {
     site: spec.site,
     matchesHost: (host) => spec.hosts.test(host),
     findRows(root) {
@@ -189,7 +228,7 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
         // A marked row already stands for the links inside it, and a box around marked rows is a list.
         if (row && !inMarkedRow(row) && !inMarkedRow(link)) add(row);
       }
-      return rows;
+      return outermost(rows, (row) => adapter.mintOf(row));
     },
     mintOf(row) {
       for (const mark of marks) {
@@ -229,4 +268,5 @@ export function adapterFrom(spec: AdapterSpec): SiteAdapter {
     },
     watchedAttributes: [...new Set(["href", ...SCANNED_ATTRIBUTES, ...marks.map((m) => m.attr)])],
   };
+  return adapter;
 }
