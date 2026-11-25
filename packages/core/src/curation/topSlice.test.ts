@@ -6,9 +6,9 @@ import { quantileTable } from "./stacking.js";
 const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 0 };
 
 describe("top slice rank", () => {
-  it("is the top quarter of a member's call zone", () => {
-    expect(topSliceRank(0.98)).toBeCloseTo(0.995, 10);
-    expect(topSliceRank(0.8)).toBeCloseTo(0.95, 10);
+  it("is the top tenth of a member's call zone", () => {
+    expect(topSliceRank(0.98)).toBeCloseTo(0.998, 10);
+    expect(topSliceRank(0.8)).toBeCloseTo(0.98, 10);
   });
 });
 
@@ -77,21 +77,25 @@ describe("trainTopSliceCurator", () => {
   const n = reference.length;
   const ranks = Float64Array.from(reference, (_, i) => i / n);
 
-  it("takes only tree seats with a cutoff, and nothing without one", () => {
+  it("takes only the Sharp seats with a cutoff, and nothing without one", () => {
+    // A plain tree seat (Trees) was a member until 2026-11-25; it is not one now.
     expect(
       trainTopSliceCurator({
         reference,
         memberFoldRanks: new Map([
           ["linear", ranks],
           ["trees", ranks],
+          ["sharp-trees", ranks],
         ]),
         memberShippedProbabilities: new Map([
           ["linear", ranks],
           ["trees", ranks],
+          ["sharp-trees", ranks],
         ]),
         memberCallRanks: new Map([
           ["linear", 0.8],
-          ["trees", null],
+          ["trees", 0.8],
+          ["sharp-trees", null],
         ]),
         targets,
         cooldownHours: 24,
@@ -100,23 +104,23 @@ describe("trainTopSliceCurator", () => {
     ).toBeNull();
   });
 
-  it("grades the fixed rule on the members' fold ranks: the top quarter of the member's calls", () => {
+  it("grades the fixed rule on the members' fold ranks: the top tenth of the member's calls", () => {
     const result = trainTopSliceCurator({
       reference,
-      memberFoldRanks: new Map([["trees", ranks]]),
-      memberShippedProbabilities: new Map([["trees", ranks]]),
-      memberCallRanks: new Map([["trees", 0.8]]),
+      memberFoldRanks: new Map([["sharp-trees", ranks]]),
+      memberShippedProbabilities: new Map([["sharp-trees", ranks]]),
+      memberCallRanks: new Map([["sharp-trees", 0.8]]),
       targets,
       cooldownHours: 0,
       targetPerHour: 0,
     })!;
-    expect(result.params.members.map((m) => m.contestant)).toEqual(["trees"]);
-    expect(result.params.members[0]!.sliceRank).toBeCloseTo(0.95, 10);
+    expect(result.params.members.map((m) => m.contestant)).toEqual(["sharp-trees"]);
+    expect(result.params.members[0]!.sliceRank).toBeCloseTo(0.98, 10);
     expect(result.params.threshold).toBe(0.5);
     expect(result.exam.calls).toBeGreaterThan(0);
     expect(result.precisionCalibration.support).toBe(result.exam.graded);
-    // At serve time the shipped probability that marks the slice is the one at rank 0.95.
-    expect(result.params.members[0]!.sliceProbability).toBeCloseTo(0.95, 2);
+    // At serve time the shipped probability that marks the slice is the one at rank 0.98.
+    expect(result.params.members[0]!.sliceProbability).toBeCloseTo(0.98, 2);
   });
 
   it("grades each chunk with cutoffs set on the other chunks, not the stored in-sample one", () => {
@@ -128,9 +132,9 @@ describe("trainTopSliceCurator", () => {
     const exam = (stored: number) =>
       trainTopSliceCurator({
         reference: rows,
-        memberFoldRanks: new Map([["trees", fold]]),
-        memberShippedProbabilities: new Map([["trees", fold]]),
-        memberCallRanks: new Map([["trees", stored]]),
+        memberFoldRanks: new Map([["sharp-trees", fold]]),
+        memberShippedProbabilities: new Map([["sharp-trees", fold]]),
+        memberCallRanks: new Map([["sharp-trees", stored]]),
         targets,
         cooldownHours: 0,
         targetPerHour: 0,

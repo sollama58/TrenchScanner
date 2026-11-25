@@ -20,13 +20,20 @@ import { paceBudget } from "./governor.js";
 import { noteRunners, type CallRecord } from "./leaderboard.js";
 
 /**
- * The Top Slice contestant: only the most confident calls of the tree seats. Each member keeps
+ * The Top Slice contestant: only the most confident calls of the Sharp seats. Each member keeps
  * its own cutoff; Top Slice calls a token when at least one member ranks it inside the top
- * TOP_SLICE_SHARE of that member's own call zone - with a member calling the top 2% of decision
- * moments, its top half-percent. In production over 2026-10-06..08 the most confident quarter of
- * each tree seat's calls doubled 33%, 41% and 42% day by day, against 17-28% for the rest of
- * their calls (notes/model-eval-2026-10-09.md). The tree seats can't go that tight themselves:
- * their exam cutoffs already sit at the 50-call minimum the exam needs to judge one.
+ * TOP_SLICE_SHARE of that member's own call zone - with a member calling the top 8% of decision
+ * moments, its top 0.8%.
+ *
+ * Members and share (user decision 2026-11-25, notes/lift-levers-2026-11-25): it took the top
+ * quarter of the plain tree seats (Trees, Deep Trees, Trees Recent, Survivor, Runner) and sat at
+ * 27.7% over 11-11..11-25, about the field. Within-seat confidence has resolution for the two
+ * Sharp seats and little for the rest: with each seat's top-10% line set on 11-11..11-14 and
+ * tested on 11-15..11-25, moments where Sharp or Sharp Survivor scored in its top tenth doubled
+ * 37.1% (33 of 89, Wilson lower bound 27.8%), about 18 a day, against 23.2% for every called
+ * moment and 27.4% for Consensus on the same days; top fifth 33.1% (n 145). The plain tree seats'
+ * top fifth ran 28-30%. Earlier, 2026-10-06..08, the tree seats' top quarter doubled 33-42% day by
+ * day (notes/model-eval-2026-10-09.md); that edge had faded by November.
  *
  * Nothing is fitted and the cutoff is fixed: calibrating it would pull it back toward the
  * members' own cutoffs, the volume this seat exists to leave behind. The exam grades the fixed
@@ -44,17 +51,16 @@ import { noteRunners, type CallRecord } from "./leaderboard.js";
 
 export const TOP_SLICE_MODEL_KIND = "top-slice-v1";
 
-/** The tree seats whose top calls Top Slice takes. */
-export const TOP_SLICE_MEMBERS: readonly string[] = [
-  "trees",
-  "deep-trees",
-  "trees-recent",
-  "survivor",
-  "runner",
-];
+/**
+ * The seats whose top calls Top Slice takes: the two Sharp seats (contestants.ts,
+ * SHARP_TREES_CONTESTANT and SHARP_SURVIVOR_CONTESTANT; spelled out to keep this file free of
+ * the roster import). Both are standalone, so the training run reads their exams from the maps
+ * every learner seat sits in, not the lanes' alone.
+ */
+export const TOP_SLICE_MEMBERS: readonly string[] = ["sharp-trees", "sharp-survivor"];
 
-/** The share of a member's call zone that counts as its top slice. */
-export const TOP_SLICE_SHARE = 0.25;
+/** The share of a member's call zone that counts as its top slice (the top tenth, 2026-11-25). */
+export const TOP_SLICE_SHARE = 0.1;
 
 export interface TopSliceMember extends StackedMember {
   /** The rank inside which this member's calls count (see topSliceRank). */

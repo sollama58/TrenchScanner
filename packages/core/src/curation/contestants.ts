@@ -49,8 +49,8 @@ import type { CuratorLearner, SeatGoal } from "./trainer.js";
  *    trains and sits its exam on those moments alone. Winners (user ask 2026-10-17) is standalone
  *    on a reading of its own: it decides only on moments whose newest buyers were read through the
  *    clean winner wallets' records (ContestantSpec.requires, WINNERS_RECIPE).
- *  - "topslice": only the most confident calls of the tree seats - a token one of them ranks in
- *    the top quarter of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
+ *  - "topslice": only the most confident calls of the Sharp seats - a token one of them ranks in
+ *    the top tenth of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
  *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
  *    stored (user decision 2026-10-07): on a decision moment that already carries it, and on a
  *    "second look" the scan takes when the deep read lands after the first decision
@@ -491,8 +491,8 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: TOP_SLICE_CONTESTANT,
     name: "Top Slice",
     description:
-      "Alerts only on what a tree model ranks in the top quarter of its own alerts - fixed cutoff, nothing fitted",
-    summary: "Waits for one of the tree models to be at its most sure, and sends only those alerts.",
+      "Alerts only on what Sharp or Sharp Survivor ranks in the top tenth of its own alerts - fixed cutoff, nothing fitted",
+    summary: "Waits for one of the Sharp models to be at its most sure, and sends only those alerts.",
     role: "topslice",
   },
   {
