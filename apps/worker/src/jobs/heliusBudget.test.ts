@@ -234,6 +234,20 @@ describe.skipIf(!dbAvailable)("checkHeliusBurn against ApiUsage", () => {
     expect(young.notices).toEqual([]);
   });
 
+  // 2026-11-25: through a week of Helius outages the median day was 2 credits, and 689k was
+  // "344523x the usual day".
+  it("leaves the days the credits were out of the usual day", async () => {
+    const through = NOW - 3 * 60_000;
+    const daily = [700_000, 650_000, 3, 0, 120_000, 0, 720_000];
+    const rows = [row(through - HOUR, 700_000)];
+    daily.forEach((credits, i) => rows.push(row(through - (i + 1) * DAY - HOUR, credits)));
+    rows.push(row(through - 8 * DAY, 0));
+    await prisma.apiUsage.createMany({ data: rows });
+    const out = await checkHeliusBurn(null, NOW, false);
+    expect(out.state).toMatchObject({ last24h: 700_000, baselineDaily: 700_000, baselineDays: 3 });
+    expect(out.notices).toEqual([]);
+  });
+
   it("reads back what the heartbeat stored", () => {
     expect(readBurnState(null)).toBeNull();
     expect(readBurnState({ last24h: 5 })).toBeNull();

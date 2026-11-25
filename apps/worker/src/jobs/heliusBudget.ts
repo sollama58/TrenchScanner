@@ -195,14 +195,25 @@ export const HELIUS_BURN_DAILY_CREDITS = 2_000_000;
 const BURN_BASELINE_DAYS = 7;
 /** Fewer full days than this (a fresh table) and only the fixed line is judged. */
 const BURN_MIN_BASELINE_DAYS = 3;
+/**
+ * A day under this share of the window's largest is left out of the usual day: the credits ran out
+ * for most of it. Through the 2026-11-17 to 11-23 outages the median of the days before was 2
+ * credits, and the admins were told 689k was "344523x the usual day" (Helius efficiency audit
+ * 2026-11-25).
+ */
+export const BURN_MIN_DAY_SHARE = 0.25;
 /** While spend stays high the admins hear again once a day, not every check. */
 const BURN_RENOTIFY_MS = DAY_MS;
 
 export type HeliusBurnState = {
   /** Credits in the 24 h up to `through`. */
   last24h: number;
-  /** The median of the full days before it that ApiUsage still holds; null with too few. */
+  /**
+   * The median of the full days before it that ApiUsage still holds, out-of-credits days left out
+   * (BURN_MIN_DAY_SHARE); null with too few.
+   */
   baselineDaily: number | null;
+  /** The days that median is over. */
   baselineDays: number;
   through: string;
   checkedAt: string;
@@ -214,6 +225,12 @@ function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/** Pure: the days a usual day is judged from, without those the credits were out for (BURN_MIN_DAY_SHARE). */
+export function usualDays(days: readonly number[]): number[] {
+  const largest = Math.max(0, ...days);
+  return days.filter((d) => d > 0 && d >= BURN_MIN_DAY_SHARE * largest);
 }
 
 /** Pure: whether the last day is high, by the ratio to the usual day or the fixed line. */
@@ -278,10 +295,11 @@ export async function checkHeliusBurn(
     if (oldest === null || oldest > from) break;
     days.push(await heliusCredits(from, through - k * DAY_MS));
   }
+  const usual = usualDays(days);
   const state: HeliusBurnState = {
     last24h,
-    baselineDaily: days.length >= BURN_MIN_BASELINE_DAYS ? Math.round(median(days)) : null,
-    baselineDays: days.length,
+    baselineDaily: usual.length >= BURN_MIN_BASELINE_DAYS ? Math.round(median(usual)) : null,
+    baselineDays: usual.length,
     through: new Date(through).toISOString(),
     checkedAt: new Date(now).toISOString(),
     notifiedAt: prev?.notifiedAt ?? null,
