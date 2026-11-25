@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   adminWalletSet,
+  dataOutagesBetween,
+  DATA_OUTAGE_LIST_DAYS,
   freeAccessWallets,
   prisma,
   Prisma,
@@ -135,16 +137,20 @@ export async function registerAdminOpsRoutes(
 
   /** /health/worker with the full error text - that route is public and truncates it. */
   app.get("/worker", async () => {
-    const [heartbeats, heldLocks] = await Promise.all([
+    const now = Date.now();
+    const [heartbeats, heldLocks, dataOutages] = await Promise.all([
       // Not the shared Helius stand-down (apiUsage.ts), which shares the table but is not a job.
       prisma.systemHeartbeat.findMany({
         where: { job: { not: HELIUS_CREDITS_OUT_ROW } },
         orderBy: { job: "asc" },
       }),
       heldJobLocks(),
+      dataOutagesBetween(new Date(now - DATA_OUTAGE_LIST_DAYS * 86_400_000), new Date(now), now),
     ]);
-    const now = Date.now();
-    return { jobs: heartbeats.map((h) => summarizeHeartbeat(h, now, { fullError: true, heldLocks })) };
+    return {
+      jobs: heartbeats.map((h) => summarizeHeartbeat(h, now, { fullError: true, heldLocks })),
+      dataOutages,
+    };
   });
 
   const hitRateCaches = new Map<number, SharedCache<Awaited<ReturnType<typeof buildHitRateReport>>>>();

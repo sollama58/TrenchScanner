@@ -1,4 +1,5 @@
 import {
+  loadDataOutages,
   refreshScoreWeights,
   curatedTargets,
   simulateExitPlan,
@@ -575,6 +576,12 @@ async function countSeatShares(
 ): Promise<string[]> {
   const since = new Date(now.getTime() - LIVE_SHARE_WINDOW_HOURS * 3_600_000);
   const dayBefore = new Date(since.getTime() - 86_400_000);
+  // Through a Helius data gap the screen fails closed, so every seat that called the day before
+  // reads silent on the moments still banked: the gap's own alarm, not a seat's.
+  if ((await loadDataOutages(now.getTime())).overlaps(since, now)) {
+    logger.info("seat live-share check skipped: a Helius data gap is in its window", { kind });
+    return [];
+  }
   const [decisions, calls, before] = await Promise.all([
     prisma.candidateOutcome.count({ where: { sampleKind: kind, anchorAt: { gte: since, lt: now } } }),
     prisma.$queryRaw<{ model: string; calls: bigint }[]>`
@@ -864,7 +871,11 @@ async function settleProbation(
     await resolveProbation(pending.id, "abandoned", "the seat changed hands while it waited");
     return { kind: "none" };
   }
-  const waitedHours = (now.getTime() - pending.startedAt.getTime()) / 3_600_000;
+  // Hours with the data flowing: a probation that waited through a Helius data gap has no fresh
+  // moments from it to be judged on (those rows leave the set), so the gap doesn't count as waiting.
+  const outages = await loadDataOutages(now.getTime());
+  const waitedHours =
+    (now.getTime() - pending.startedAt.getTime() - outages.overlapMs(pending.startedAt, now)) / 3_600_000;
   if (waitedHours < env.CURATOR_EVOLUTION_PROBATION_HOURS) {
     logger.info("takeover on probation - waiting for fresh calls", {
       slot: pending.slot,
@@ -1570,6 +1581,11 @@ async function loadRowsOfKind(
       0
     ) <= ${MAX_EVENT_AGE_MINUTES}`;
   const out: TrainingRow[] = [];
+  // Rows a Helius data gap touched (core's dataOutages.ts): banked with their Helius inputs missing,
+  // on a coin whose tape and holder history has a hole, or graded off DexScreener's coarse ticks
+  // while the curve tape was silent. 2026-11-22 20:24 UTC to past a day later was one.
+  const outages = await loadDataOutages();
+  let outageRows = 0;
   let cursor: { anchorAt: Date; id: string } | undefined;
   let pages = 0;
   while (out.length < maxRows && pages < LOAD_MAX_PAGES) {
@@ -1597,6 +1613,11 @@ async function loadRowsOfKind(
       ORDER BY "anchorAt" DESC, "id" DESC
       LIMIT ${take}`;
     for (const loaded of page) {
+      const age = (loaded.features as Record<string, unknown> | null)?.ageMinutes;
+      if (outages.taintsRow(loaded.anchorAt, typeof age === "number" ? age : null)) {
+        outageRows += 1;
+        continue;
+      }
       const r = trainingGradeOf(loaded);
       // A row the rule-4 re-grade never reached stays out of the fit, as it stays out of the exam:
       // which rows it skipped depended on the outcome (busy runners outgrew the candle history,
@@ -1700,6 +1721,12 @@ async function loadRowsOfKind(
     cursor = { anchorAt: last.anchorAt, id: last.id };
   }
   // The count that is true after the screen's cut, which is the set that trains.
-  logger.info("loaded training rows", { sampleKind, rows: out.length, pages, capped: out.length >= maxRows });
+  logger.info("loaded training rows", {
+    sampleKind,
+    rows: out.length,
+    pages,
+    capped: out.length >= maxRows,
+    outageRows,
+  });
   return out;
 }

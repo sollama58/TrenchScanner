@@ -713,12 +713,51 @@ interface Job {
   runningStagesMs: Record<string, number> | null;
 }
 
+/** A Helius data gap as /admin/worker lists it (core's dataOutages.ts). */
+interface DataOutageRow {
+  startedAt: string;
+  endedAt: string | null;
+  minutes: number;
+  causes: string[];
+}
+
+const OUTAGE_CAUSE: Record<string, string> = {
+  "credits-out": "credits out",
+  "no-billed-calls": "no Helius calls billed",
+};
+
+function outageLength(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  return h < 48 ? `${h} h ${minutes % 60} min` : `${Math.round(h / 24)} days`;
+}
+
 function Worker() {
-  const q = usePolling<{ jobs: Job[] }>("/admin/worker", 15_000);
+  const q = usePolling<{ jobs: Job[]; dataOutages?: DataOutageRow[] }>("/admin/worker", 15_000);
   return (
     <Load q={q}>
       {(d) => (
         <div className="stack">
+          {d.dataOutages !== undefined && (
+            <Panel
+              title="Helius data gaps"
+              note="The last 14 days' stretches without Helius's data. Rows banked or graded through one (and for 15 minutes after) stay out of training, the live cutoffs, the score weights and the exit lab."
+            >
+              {d.dataOutages.length === 0 ? (
+                <span className="faint">None in the last 14 days.</span>
+              ) : (
+                <Table
+                  head={["Started", "Ended", "Lasted", "Seen as"]}
+                  rows={d.dataOutages.map((o) => [
+                    when(o.startedAt),
+                    o.endedAt === null ? <Tag tone="bad">going on</Tag> : when(o.endedAt),
+                    <span className="num">{outageLength(o.minutes)}</span>,
+                    o.causes.map((c) => OUTAGE_CAUSE[c] ?? c).join(", "),
+                  ])}
+                />
+              )}
+            </Panel>
+          )}
           <Panel
             title="Jobs"
             note="Every scheduled job's last run, from the worker heartbeats. Refreshes every 15s."

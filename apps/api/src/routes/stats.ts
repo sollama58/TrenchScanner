@@ -5,6 +5,7 @@ import {
   prisma,
   Prisma,
   createLogger,
+  dataOutagesBetween,
   describeExitPlan,
   HEURISTIC_CURATOR_SOURCE,
   WIN_WINDOW_MINUTES,
@@ -1088,6 +1089,9 @@ export async function buildHitRateReport(
 
   return {
     window: { since, until },
+    // The Helius data gaps inside the window (core's dataOutages.ts): the feed paused through them
+    // (the screen fails closed), so a window holding one has fewer calls than its length says.
+    dataOutages: await dataOutagesBetween(since, until),
     rules: {
       win: `2x on the alert price within ${WIN_WINDOW_MINUTES} minutes of the alert, without first falling 50% below it`,
       goal: `4x on the alert price within ${GOAL_WINDOW_MINUTES} minutes of the alert, same stop`,
