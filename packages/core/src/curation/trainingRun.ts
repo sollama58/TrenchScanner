@@ -1688,13 +1688,15 @@ export async function runEvolvingContest(
     }
   }
 
+  // Top Slice's members are the Sharp seats (topSlice.ts, TOP_SLICE_MEMBERS), which are standalone:
+  // their exams sit in Trader's maps, beside every lane's, and not in the lanes' own.
   const topSliceSpec = cfg.contestants.find((c) => c.role === "topslice");
   if (topSliceSpec && reference !== null) {
     const topSlice = trainTopSliceCurator({
       reference,
-      memberFoldRanks: foldRanks,
-      memberShippedProbabilities: shippedProbabilities,
-      memberCallRanks: callRanks,
+      memberFoldRanks: traderFoldRanks,
+      memberShippedProbabilities: traderShipped,
+      memberCallRanks: traderCallRanks,
       targets: cfg.targets,
       cooldownHours: cfg.cooldownHours,
       targetPerHour: cfg.targetPerHour,
@@ -1712,7 +1714,7 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${topSliceSpec.name}: the top quarter of ${names.join(", ")}'s own alerts, judged on their out-of-sample alerts - ${topSlice.exam.wins}/${topSlice.exam.graded} doubled`,
+            reason: `${topSliceSpec.name}: the top tenth of ${names.join(", ")}'s own alerts, judged on their out-of-sample alerts - ${topSlice.exam.wins}/${topSlice.exam.graded} doubled`,
           },
           targets: cfg.targets,
           precisionCalibration: topSlice.precisionCalibration,

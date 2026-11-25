@@ -211,7 +211,7 @@ export function recipeFacts(params: ContestantParams, metrics: Partial<StoredEva
       facts.push(
         {
           label: "Shape",
-          value: "Alerts on a coin one tree seat ranks in the top quarter of its own alerts",
+          value: "Alerts on a coin one Sharp seat ranks in the top tenth of its own alerts",
         },
         { label: "Members", value: String(params.members.length) },
       );
@@ -346,7 +346,7 @@ export function combinerRule(params: ContestantParams, memberCount: number): str
     case BLEND_MODEL_KIND:
       return `Alerts when the members' average rank (highest and lowest dropped) is at least ${params.threshold.toFixed(3)}, where 0.990 means "above 99% of decision moments".`;
     case TOP_SLICE_MODEL_KIND:
-      return "Alerts when any one member ranks the coin in the top quarter of its own alerts.";
+      return "Alerts when any one member ranks the coin in the top tenth of its own alerts.";
     case STACKED_MODEL_KIND: {
       const reads = params.meta.featureNames.includes(RULES_GATE_SIGNAL)
         ? "every member's rank, Rules' score and how many members agree"
