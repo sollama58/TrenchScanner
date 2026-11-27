@@ -49,8 +49,19 @@ export interface WalletHoldingsOptions {
    * a pass behind the cycle - see the wallet stage in scanJob.ts.
    */
   lookupGroups?: number;
-  /** Told how many lookups this call is about to send, before it sends them. */
-  onLookups?: (count: number) => void;
+  /**
+   * Told how many lookups this call is about to send, before it sends them, and how many of those
+   * the shared `maxNewLookups` paid for (the rest came out of `contenders`' own budget).
+   */
+  onLookups?: (count: number, shared: number) => void;
+  /**
+   * The contenders' own budget (WALLET_BALANCE_CONTENDER_LOOKUPS_PER_CYCLE; Helius cuts impact
+   * audit 2026-11-27, owner decision "Free fixes plus D and E"), as Linked and Snipers have: a
+   * group whose mint is in `mints` pays from `budget` first and from `maxNewLookups` only for what
+   * that leaves. At 20 shared reads a cycle two cold contenders' top 10s took all of it, and early
+   * decisions went from 4.5 s to 11-18 s into the cycle while the rest waited.
+   */
+  contenders?: { mints: ReadonlySet<string>; budget: number };
   /**
    * Prices wallets from their token balances and DexScreener instead of DAS - see
    * walletValuation.ts. Used whenever given and WALLET_HOLDINGS_SOURCE is "balances".
@@ -327,6 +338,7 @@ export async function resolveWalletHoldings(
   const toFetch: string[] = [];
   const queued = new Set<string>();
   let reads = 0;
+  let contenderLeft = available ? (opts.contenders?.budget ?? 0) : 0;
   let skippedGroups = 0;
   const earlyStop = opts.earlyStop;
   let stoppedEarly = 0;
@@ -348,11 +360,13 @@ export async function resolveWalletHoldings(
       continue;
     }
     const cost = needed.filter((a) => !unchanged.has(a)).length;
-    if (reads + cost > budget) {
+    const ownBudget = opts.contenders?.mints.has(group.mintAddress) ? Math.min(cost, contenderLeft) : 0;
+    if (reads + cost - ownBudget > budget) {
       skippedGroups += 1;
       continue;
     }
-    reads += cost;
+    contenderLeft -= ownBudget;
+    reads += cost - ownBudget;
     for (const address of needed) {
       toFetch.push(address);
       queued.add(address);
@@ -360,7 +374,7 @@ export async function resolveWalletHoldings(
   }
 
   const cacheHits = result.size;
-  opts.onLookups?.(toFetch.length);
+  opts.onLookups?.(toFetch.length, reads);
   if (toFetch.length === 0) {
     logger.info("resolved wallet holdings", {
       requested: unique.length,

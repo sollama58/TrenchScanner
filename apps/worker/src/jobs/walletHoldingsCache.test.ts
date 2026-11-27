@@ -65,6 +65,43 @@ describe.skipIf(!dbAvailable)("resolveWalletHoldings cache coverage", () => {
     expect(calls[2]).toEqual(top10.slice(6));
   });
 
+  it("pays contenders' reads from their own budget first, and reports the shared reads apart", async () => {
+    const contender = Array.from({ length: 10 }, (_, i) => wallet(`contender-${i}`));
+    const other = Array.from({ length: 10 }, (_, i) => wallet(`other-${i}`));
+    const { helius, calls } = fakeHelius();
+    const seen: [number, number][] = [];
+    await resolveWalletHoldings(
+      [
+        { mintAddress: NEW_LAUNCH, addresses: contender },
+        { mintAddress: OLD_LAUNCH, addresses: other },
+      ],
+      helius,
+      env,
+      {
+        maxNewLookups: 12,
+        contenders: { mints: new Set([NEW_LAUNCH]), budget: 8 },
+        onLookups: (n, shared) => seen.push([n, shared]),
+      },
+    );
+    // The contender's 10 cost its 8 and 2 shared; the other coin's 10 fit in the 10 shared left.
+    expect(calls.flat().sort()).toEqual([...contender, ...other].sort());
+    expect(seen).toEqual([[20, 12]]);
+
+    // Without the contenders' budget the second coin no longer fits.
+    await prisma.walletHoldingsCache.deleteMany({ where: { address: { startsWith: TAG } } });
+    calls.length = 0;
+    await resolveWalletHoldings(
+      [
+        { mintAddress: NEW_LAUNCH, addresses: contender },
+        { mintAddress: OLD_LAUNCH, addresses: other },
+      ],
+      helius,
+      env,
+      { maxNewLookups: 12 },
+    );
+    expect(calls.flat().sort()).toEqual([...contender].sort());
+  });
+
   it("answers a new launch from a complete reading, and re-fetches only a partial one", async () => {
     const [full, partial] = [wallet("full"), wallet("partial")];
     await prisma.walletHoldingsCache.createMany({
