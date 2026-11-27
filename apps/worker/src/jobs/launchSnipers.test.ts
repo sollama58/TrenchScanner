@@ -653,6 +653,21 @@ describe("decisionInputsReady", () => {
     });
   });
 
+  it("holds a decision, not the hourly sample, on an early-stopped atMost Empty bound", () => {
+    const bound = { ...allIn, emptyTop10WalletPct: 70, emptyTop10WalletBound: "atMost" as const };
+    expect(decisionInputsReady(bound, { ...reads("decision"), listRead: true }, ENV, 0)).toEqual({
+      ready: false,
+      held: ["walletChecks"],
+    });
+    expect(decisionInputsReady(bound, { ...reads("hourly"), listRead: true }, ENV, 0)).toEqual({
+      ready: true,
+      held: [],
+    });
+    // An atLeast bound rejects on the screen's cut as the exact share would: nothing to wait for.
+    const over = { ...allIn, emptyTop10WalletPct: 80, emptyTop10WalletBound: "atLeast" as const };
+    expect(decisionInputsReady(over, { ...reads("decision"), listRead: true }, ENV, 0).ready).toBe(true);
+  });
+
   it("runs the hourly sample's three waits side by side, on its own clock", () => {
     expect(decisionInputsReady(unread, reads("hourly"), ENV, 0)).toEqual({
       ready: false,

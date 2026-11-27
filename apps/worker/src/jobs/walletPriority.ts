@@ -115,11 +115,41 @@ export function recentlyAlerted(mint: string, now: number = Date.now()): boolean
   return true;
 }
 
+/**
+ * Coins that passed the event pre-gate on their scored figures in the last NEAR_DECISION_MS
+ * (processCandidate): the wallet stage reads their top 10 whole, right after the held alerts, even
+ * when the pre-scoring figures it sorts on say no decision is near. Helius cuts impact audit
+ * 2026-11-27 (owner decision "Free fixes plus D and E"): such a coin was decided on an early-stopped
+ * Empty bound, null as an input, on 5.4% of decisions. Process-local, as above.
+ */
+const NEAR_DECISION_MS = 15 * 60_000;
+const nearDecision = new Map<string, number>();
+
+export function noteNearDecision(mint: string, now: number = Date.now()): void {
+  nearDecision.delete(mint);
+  nearDecision.set(mint, now + NEAR_DECISION_MS);
+  for (const key of nearDecision.keys()) {
+    if (nearDecision.size <= MAX_AWAITING) break;
+    nearDecision.delete(key);
+  }
+}
+
+export function nearDecisionFor(mint: string, now: number = Date.now()): boolean {
+  const until = nearDecision.get(mint);
+  if (until === undefined) return false;
+  if (until <= now) {
+    nearDecision.delete(mint);
+    return false;
+  }
+  return true;
+}
+
 /** Test hook. */
 export function resetAlertWallets(): void {
   awaiting.clear();
   filterWaitSince.clear();
   recentAlerts.clear();
+  nearDecision.clear();
 }
 
 /**

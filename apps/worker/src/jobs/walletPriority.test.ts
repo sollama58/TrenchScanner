@@ -5,7 +5,9 @@ import {
   alertAwaitingWallets,
   clearFilterWalletWait,
   filterWalletWaitOver,
+  nearDecisionFor,
   noteAlertWallets,
+  noteNearDecision,
   noteRecentAlert,
   recentlyAlerted,
   resetAlertWallets,
@@ -83,5 +85,17 @@ describe("tokens in the alert feeds", () => {
     expect(recentlyAlerted("b", t0 + 5 * 3_600_000)).toBe(true);
     expect(recentlyAlerted("c", t0)).toBe(false);
     expect(recentlyAlerted("a", t0 + 6 * 3_600_000 + 1)).toBe(false);
+  });
+});
+
+describe("coins near a decision", () => {
+  beforeEach(() => resetAlertWallets());
+
+  it("keeps a coin that passed the pre-gate on its scored figures for 15 minutes", () => {
+    const t0 = 1_000_000;
+    expect(nearDecisionFor("m", t0)).toBe(false);
+    noteNearDecision("m", t0);
+    expect(nearDecisionFor("m", t0 + 15 * 60_000 - 1)).toBe(true);
+    expect(nearDecisionFor("m", t0 + 15 * 60_000)).toBe(false);
   });
 });
