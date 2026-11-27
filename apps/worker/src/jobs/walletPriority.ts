@@ -1,3 +1,5 @@
+import { SAFETY_REJECT_EMPTY_WALLET_PCT } from "@trenchscanner/core";
+
 /**
  * Tokens alerted on while their empty-wallet share was still unknown. The wallet stage puts their
  * holder lists right after the contenders', so a card that went out saying "Not checked" gets its
@@ -144,8 +146,43 @@ export function nearDecisionFor(mint: string, now: number = Date.now()): boolean
   return true;
 }
 
+/**
+ * Coins the safety screen rejected on their Empty reading (the screen's cut or over, an exact share
+ * or an "atLeast" bound) in the last EMPTY_REJECT_HOLD_MS. When a later cycle has no Empty reading
+ * for one (a holder's reading expired unread, or a holder new to its top 10 is unread), the screen
+ * keeps the reject instead of passing the unknown (scanSignals.ts withWalletSignals), and the wallet
+ * stage re-reads it ahead of the churn order. Helius cuts impact audit 2026-11-27 (owner decision
+ * "Free fixes plus D and E"): 159 of 418 coins first rejected on Empty alone "passed" later with no
+ * reading at all, and fell 50% within the hour 14% of the time against 3% for coins never rejected.
+ * A reading under the cut clears the hold. Process-local: a restart only loses the holds.
+ */
+const EMPTY_REJECT_HOLD_MS = 60 * 60_000;
+const emptyRejects = new Map<string, { pct: number; until: number }>();
+
+export function noteEmptyReading(mint: string, pct: number, now: number = Date.now()): void {
+  emptyRejects.delete(mint);
+  if (pct < SAFETY_REJECT_EMPTY_WALLET_PCT) return;
+  emptyRejects.set(mint, { pct, until: now + EMPTY_REJECT_HOLD_MS });
+  for (const key of emptyRejects.keys()) {
+    if (emptyRejects.size <= MAX_AWAITING) break;
+    emptyRejects.delete(key);
+  }
+}
+
+/** The Empty share a standing reject holds the coin at, or undefined when none stands. */
+export function heldEmptyReject(mint: string, now: number = Date.now()): number | undefined {
+  const held = emptyRejects.get(mint);
+  if (held === undefined) return undefined;
+  if (held.until <= now) {
+    emptyRejects.delete(mint);
+    return undefined;
+  }
+  return held.pct;
+}
+
 /** Test hook. */
 export function resetAlertWallets(): void {
+  emptyRejects.clear();
   awaiting.clear();
   filterWaitSince.clear();
   recentAlerts.clear();

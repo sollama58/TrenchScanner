@@ -39,6 +39,7 @@ import { kolLookup } from "./kolWalletBook.js";
 import { type KolBundledReading } from "./kolBundled.js";
 import { cachedHolderSolLamports, linkedHoldersOf } from "./linkedWallets.js";
 import { emptyWalletReading, type WalletHoldings } from "./walletHoldings.js";
+import { heldEmptyReject, noteEmptyReading } from "./walletPriority.js";
 import { blockZeroWalletsFromCache } from "./launchSnipers.js";
 import type { CandidatePrior } from "./scanJob.js";
 
@@ -333,13 +334,18 @@ export function withWalletSignals(
 ): OnChainProfile | null {
   if (!onChain?.top10HolderAddresses?.length) return onChain;
   const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
-  const empty = emptyWalletReading(
+  const read = emptyWalletReading(
     onChain.top10HolderAddresses,
     holdingsByAddress,
     env.WALLET_HOLDINGS_MIN_USD,
     onChain.mintAddress,
     emptyWalletThresholds,
   );
+  // No reading now, after a reject on one: the reject stands, as a bound at its last share, until
+  // the coin is read again or the hold runs out (walletPriority.ts heldEmptyReject).
+  if (read) noteEmptyReading(onChain.mintAddress, read.pct);
+  const held = read ? undefined : heldEmptyReject(onChain.mintAddress);
+  const empty = read ?? (held !== undefined ? { pct: held, bound: "atLeast" as const } : null);
   return {
     ...onChain,
     freshTop10WalletPct: freshTop10WalletPct ?? undefined,

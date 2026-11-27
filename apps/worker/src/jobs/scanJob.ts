@@ -144,6 +144,7 @@ import {
 import { seedQuotes } from "./walletValuation.js";
 import {
   alertAwaitingWallets,
+  heldEmptyReject,
   holdForLinked,
   nearDecisionFor,
   noteAlertWallets,
@@ -2397,6 +2398,9 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
       // Someone has its bubble map open: its new holders' funders, fresh and empty checks are read
       // next, so the map's clusters and the holder list's tags follow its holders (user ask 2026-10-19).
       watched: watchedHolders.has(c.mintAddress),
+      // Rejected on Empty and held there for want of a new reading (heldEmptyReject): re-read ahead
+      // of the churn order, so a coin whose holders changed is not held on a stale reject.
+      rejectHeld: heldEmptyReject(c.mintAddress) !== undefined,
       // For oldCoinMints: an old coin no decision is near has its holder reads backed off.
       ageMinutes: candidateAgeMinutes({
         launchedAt: launchedAtByMint.get(c.mintAddress),
@@ -2413,6 +2417,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
         Number(b.near) - Number(a.near) ||
         Number(b.recent) - Number(a.recent) ||
         Number(b.watched) - Number(a.watched) ||
+        Number(b.rejectHeld) - Number(a.rejectHeld) ||
         b.churn - a.churn,
     );
   // Every candidate's own price is already in hand - the wallet valuation reuses it for free.
