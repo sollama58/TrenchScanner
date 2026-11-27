@@ -2317,6 +2317,29 @@ model Subscription {
   @@index([expiresAt])
 }
 
+/// One run of the Admin panel's "extend every subscription" (user ask 2026-11-27,
+/// apps/api/src/routes/adminExtendAll.ts): who ran it, how much it added and to how many live
+/// subscriptions. `requestId` is the panel's id for the run, so a retried request is answered from
+/// this row instead of adding the time twice. Subscription.source is left as it was: this row is
+/// the record of the extension.
+model SubscriptionBulkExtension {
+  id            String   @id @default(cuid())
+  requestId     String   @unique
+  at            DateTime @default(now())
+  /// The admin wallet whose session ran it.
+  by            String
+  /// Set when it ran from a paired phone.
+  deviceId      String?
+  /// "weeks" or "months", as the admin picked it.
+  unit          String
+  amount        Int
+  /// What was added to each expiry, in days.
+  days          Int
+  usersExtended Int
+
+  @@index([at])
+}
+
 /// A key for the Model Alert websocket (`GET /v1/model-alerts`).
 ///
 /// Issued only when someone presses Generate, and only for an admin, a whitelist entry, or a live
