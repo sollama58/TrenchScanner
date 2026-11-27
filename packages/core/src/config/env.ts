@@ -596,8 +596,11 @@ const envSchema = z.object({
   // matched are read whatever their slot; the rest wait on Pump.fun's free lane. 0.5 since
   // 2026-11-21 (Helius efficiency audit, owner decision "Closing cap and half the tapes"): ~45k
   // credits a day of the called coins' ~91k. The wallet book, stop causes and scorecards gain
-  // about half as many Helius-read tapes. 1 reads every called coin, as before.
-  TRADE_TAPE_HELIUS_CALLED_SHARE: z.coerce.number().min(0).max(1).default(0.5),
+  // about half as many Helius-read tapes. 1 reads every called coin, as before. Back to 1 since
+  // 2026-11-27 (Helius cuts impact audit, owner decision "Free fixes plus D and E", ~45k credits a
+  // day): Pump.fun's lane has failed every tape since 2026-11-16, so the other half got no tape
+  // at all, and the wallet book's winner inputs at decisions fell about 40% and kept falling.
+  TRADE_TAPE_HELIUS_CALLED_SHARE: z.coerce.number().min(0).max(1).default(1),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
   // every 15 minutes for the band (5 until 2026-11-02; audit, Helius cut F, owner decision: the
   // Block 0 held share is read at the decision for contenders every minute as before), every
