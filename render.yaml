@@ -476,7 +476,10 @@ services:
       # Helius spend). 10 is the floor - a top-10 holder group is all-or-nothing, so a smaller
       # budget could never complete a contender whose wallets are all uncached.
       # Freshness (WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE) and live-tape pages (LIVE_TAPE_PAGES_PER_CYCLE)
-      # are set in env.ts since 2026-11-21 (owner: hardwire the Helius coverage trims).
+      # are set in env.ts since 2026-11-21 (owner: hardwire the Helius coverage trims). Removing a
+      # key here does not remove it from the service: Render keeps the last value, which then
+      # overrides env.ts (the scanner kept 35 and 10 this way; audit 2026-11-27). Delete it on the
+      # dashboard too, and check Admin > Environment.
       - key: WALLET_HOLDINGS_MAX_LOOKUPS_PER_CYCLE
         value: "10"
       - key: RUGCHECK_CACHE_TTL_MINUTES
