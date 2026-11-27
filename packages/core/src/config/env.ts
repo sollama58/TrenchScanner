@@ -544,6 +544,13 @@ const envSchema = z.object({
   // the screen's cut alone (6.4 with a filter at 60%), so 20 covers about as many coins as 40 did,
   // or about 80% of them while a filter caps Empty at 60%.
   WALLET_BALANCE_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(20),
+  // The same for contenders (coins about to be decided on), on top of the above and spent first on
+  // them, as LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE and SNIPER_CONTENDER_LOOKUPS_PER_CYCLE are.
+  // 30 since 2026-11-27 (Helius cuts impact audit, owner decision "Free fixes plus D and E"): at 20
+  // shared, two cold contenders took the whole budget and early decisions slid from 4.5 s to
+  // 11-18 s into the cycle. Only uncached wallets cost (~2 credits each), so the steady state adds
+  // little; 30 a cycle at most is ~86k a day, inferred ~10-25k. 0 turns it off.
+  WALLET_BALANCE_CONTENDER_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
   // The snipers figure (first 25 buyers still holding), read from the chain - see the worker's
   // launchSnipers.ts. Who the first buyers were costs one 10-credit getTransactionsForAddress per
   // token, read once and cached; this many new tokens are read per scan cycle, contenders first.

@@ -2967,7 +2967,16 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
         resolveWalletHoldings(walletGroups, deps.helius, env, {
           maxNewLookups: holdingsLookupBudget(env),
           lookupGroups: waitedGroups,
-          onLookups: (n) => (holdingsUsed = n),
+          // The backfill behind the cycle gets what the shared budget has left; the contenders'
+          // own budget is theirs alone.
+          onLookups: (_n, shared) => (holdingsUsed = shared),
+          contenders:
+            env.WALLET_HOLDINGS_SOURCE === "balances"
+              ? {
+                  mints: new Set(walletGroups.filter((g) => g.contender).map((g) => g.mintAddress)),
+                  budget: env.WALLET_BALANCE_CONTENDER_LOOKUPS_PER_CYCLE,
+                }
+              : undefined,
           valuation,
           quietMints,
           earlyStop: emptyEarlyStop(walletGroups),

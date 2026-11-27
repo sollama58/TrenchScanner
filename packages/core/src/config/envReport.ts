@@ -288,6 +288,7 @@ export const ENV_MANIFEST: readonly EnvVarSpec[] = [
   // live-tape trims never ran (Helius cuts impact audit 2026-11-27).
   ...[
     "WALLET_BALANCE_LOOKUPS_PER_CYCLE",
+    "WALLET_BALANCE_CONTENDER_LOOKUPS_PER_CYCLE",
     "LINKED_WALLET_LOOKUPS_PER_CYCLE",
     "LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE",
     "LINKED_HOLDER_READS_PER_CYCLE",
