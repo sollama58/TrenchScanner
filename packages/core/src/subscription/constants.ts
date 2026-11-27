@@ -21,6 +21,24 @@ export const SUBSCRIPTION_RAW_PER_MONTH =
 export const SUBSCRIPTION_DAYS = 30;
 
 /**
+ * The Admin panel's "extend every subscription" (user ask 2026-11-27): one run adds weeks or months
+ * to every live subscription, at most three months (MAX_BULK_EXTENSION_DAYS) a run. A month is
+ * SUBSCRIPTION_DAYS, as for a burn, so "1 month" here is the same 30 days a burn buys.
+ */
+export const BULK_EXTENSION_UNITS = ["weeks", "months"] as const;
+export type BulkExtensionUnit = (typeof BULK_EXTENSION_UNITS)[number];
+export const MAX_BULK_EXTENSION_DAYS = 3 * SUBSCRIPTION_DAYS;
+/** Most of each unit one run may add: 12 weeks or 3 months. */
+export const MAX_BULK_EXTENSION: Record<BulkExtensionUnit, number> = {
+  weeks: Math.floor(MAX_BULK_EXTENSION_DAYS / 7),
+  months: MAX_BULK_EXTENSION_DAYS / SUBSCRIPTION_DAYS,
+};
+/** The days `amount` of `unit` adds. */
+export function bulkExtensionDays(unit: BulkExtensionUnit, amount: number): number {
+  return unit === "weeks" ? amount * 7 : amount * SUBSCRIPTION_DAYS;
+}
+
+/**
  * Most months a single burn can buy.
  *
  * Burning a multiple of the price buys the multiple, so nobody who fat-fingers a 2x burn has to

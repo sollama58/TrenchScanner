@@ -12,6 +12,7 @@ import { UsageAdmin } from "./AdminUsage";
 import { ChartsHealth } from "./AdminChartsHealth";
 import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
+import { ExtendAllSubscriptions } from "./AdminExtendAll";
 import { FeesSavedAdmin } from "./AdminFeesSaved";
 import { ProModeAdmin, SacrificeAdmin } from "./AdminProMode";
 import { RunNow } from "./AdminRunNow";
@@ -1244,6 +1245,7 @@ function Access() {
         )}
       </Load>
       <Levers onDone={reloadAll} />
+      <ExtendAllSubscriptions onDone={reloadAll} />
       <FreeAccessAdmin onChanged={reloadAll} />
       <ProModeAdmin />
       <SacrificeAdmin />

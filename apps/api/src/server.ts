@@ -46,6 +46,7 @@ import { registerCandleRoutes } from "./routes/candles.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerKolAvatarRoutes } from "./routes/kolAvatars.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
+import { registerAdminExtendAllRoutes } from "./routes/adminExtendAll.js";
 import { registerAdminOpsRoutes } from "./routes/adminOps.js";
 import { registerAdminCreditRoutes } from "./routes/adminCredits.js";
 import { registerAdminUsageRoutes } from "./routes/adminUsage.js";
@@ -888,6 +889,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       instance.addHook("preHandler", instance.authenticateAdmin);
       recordAdminActions(instance, admins);
       await registerAdminSubscriptionRoutes(instance);
+      // Extend every live subscription at once, behind a preview, a typed word and a signature.
+      await registerAdminExtendAllRoutes(instance);
       // Burn Credits: the ratio, each utility's cost, grants and the ledger.
       await registerAdminCreditRoutes(instance);
       await registerAdminAnnouncementRoutes(instance);
