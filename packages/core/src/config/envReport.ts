@@ -282,6 +282,27 @@ export const ENV_MANIFEST: readonly EnvVarSpec[] = [
     "LIVE_PRICE_INTERVAL_MINUTES",
     "LIVE_PRICE_MAX_TRACKED",
   ].map((key): EnvVarSpec => ({ key, group: "Scan tuning", kind: "setting", on: { scanner: "expected" } })),
+  // ---- The scanner's per-cycle Helius budgets, set in env.ts, not render.yaml: listed so a
+  // value left on the Render dashboard shows here (unset reads the env.ts default). Removing a key
+  // from render.yaml leaves its last value on the service, which is how 2026-11-21's freshness and
+  // live-tape trims never ran (Helius cuts impact audit 2026-11-27).
+  ...[
+    "WALLET_BALANCE_LOOKUPS_PER_CYCLE",
+    "LINKED_WALLET_LOOKUPS_PER_CYCLE",
+    "LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE",
+    "LINKED_HOLDER_READS_PER_CYCLE",
+    "SNIPER_LAUNCH_LOOKUPS_PER_CYCLE",
+    "SNIPER_CONTENDER_LOOKUPS_PER_CYCLE",
+    "TRADE_TAPE_HELIUS_CALLED_SHARE",
+    "TRADE_TAPE_CLOSING_CREDITS_PER_RUN",
+    "MAYHEM_FROM_PUMPPORTAL",
+  ].map((key): EnvVarSpec => ({
+    key,
+    group: "Helius budgets",
+    kind: "setting",
+    on: { scanner: "optional" },
+    note: "Unset reads the env.ts default.",
+  })),
   // ---- Shared by the scanner and the trainer: the market-cap band and the nightly sweeps
   ...[
     "MCAP_FILTER_MIN",

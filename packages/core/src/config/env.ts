@@ -268,7 +268,10 @@ const envSchema = z.object({
   // the cap simply stay unknown for a cycle and retry on the next. 35 in render.yaml from
   // 2026-11-02 (Helius audit); 15 since 2026-11-21 (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml): ~25k
   // credits a day, non-contenders' Fresh readings fill in later. Contenders are read first.
-  WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(15),
+  // That 15 never ran: Render keeps a variable that leaves render.yaml, so the scanner kept 35
+  // (Helius cuts impact audit 2026-11-27). 35 here since then (owner decision "Free fixes plus D
+  // and E": keep what production runs), so the code and the service agree.
+  WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE: z.coerce.number().int().positive().default(35),
   // Cap on UNCACHED wallet first-transaction lookups per scan cycle for the launch-buyer
   // fresh-wallet share (the worker's launchBuyerFreshness.ts): the first ten buyers of each
   // launch already read, on the same cache as the top-10 check, so repeat bot wallets cost
@@ -465,8 +468,11 @@ const envSchema = z.object({
   // it off. History (set in render.yaml until 2026-11-21): 8 (2026-10-23), 15 (2026-10-27, model
   // audit §18), 10 (2026-11-02, Helius audit). 5 since 2026-11-21 (Helius efficiency audit 2026-11-21, owner decision "All five trims", set here rather than in render.yaml):
   // ~40k credits a day; pages for coins off the logs feed (LIVE_TAPE_LOGS_MAX_COINS) age from
-  // about 35 s to about 70 s.
-  LIVE_TAPE_PAGES_PER_CYCLE: z.coerce.number().int().nonnegative().default(5),
+  // about 35 s to about 70 s. That 5 never ran: the scanner kept render.yaml's 10 on Render (its
+  // 11-24 spend, 143k, is a 10-page budget). 10 here since 2026-11-27 (Helius cuts impact audit,
+  // owner decision "Free fixes plus D and E": keep what production runs; the tape's readings were
+  // already missing on about a quarter of entries at 10).
+  LIVE_TAPE_PAGES_PER_CYCLE: z.coerce.number().int().nonnegative().default(10),
   LIVE_TAPE_REFRESH_SECONDS: z.coerce.number().int().positive().default(180),
   // Which coins queue for a live-tape page: by default only those close to a call (a contender
   // past the event pre-gate, or an alert held for a wallet figure), the rest of the scored coins
