@@ -30,6 +30,8 @@ import {
   FRESH_ANCHOR_MAX_RATIO,
   type FreshQuote,
   walletChecksKnown,
+  MAX_EMPTY_TOP10_WALLET_PCT,
+  loadModelGates,
   launchpadFromVenue,
   bestLaunchpad,
   PUMPFUN_LAUNCHPAD,
@@ -140,7 +142,14 @@ import {
   type WalletHoldingsOptions,
 } from "./walletHoldings.js";
 import { seedQuotes } from "./walletValuation.js";
-import { alertAwaitingWallets, holdForLinked, noteAlertWallets, recentlyAlerted } from "./walletPriority.js";
+import {
+  alertAwaitingWallets,
+  holdForLinked,
+  nearDecisionFor,
+  noteAlertWallets,
+  noteNearDecision,
+  recentlyAlerted,
+} from "./walletPriority.js";
 import {
   holderTransfersOf,
   recordTransferEvents,
@@ -490,13 +499,41 @@ export function quietCoinMints(groups: readonly QuietCoinGroup[], called: Readon
  * audit 2026-11-21, owner decision "Early stop, budget 40 to 20"): contenders, held alerts and watched coins are read whole, every
  * other coin only until its Empty reading settles the screen's cut and the active filters' ceilings.
  */
+/** The model seats' gates' Empty ceilings, re-read every 10 minutes (gates change by hand). */
+let gateCeilings: { at: number; values: number[] } | null = null;
+const GATE_CEILINGS_TTL_MS = 10 * 60_000;
+async function modelGateEmptyCeilings(now = Date.now()): Promise<number[]> {
+  if (gateCeilings && now - gateCeilings.at < GATE_CEILINGS_TTL_MS) return gateCeilings.values;
+  try {
+    const values = (await loadModelGates()).flatMap((g) =>
+      g.criteria.maxEmptyTop10WalletPct != null ? [g.criteria.maxEmptyTop10WalletPct] : [],
+    );
+    gateCeilings = { at: now, values };
+  } catch (err) {
+    logger.warn("model gates' Empty ceilings unread - the early stop settles the rest", {
+      error: String(err),
+    });
+    gateCeilings = { at: now, values: gateCeilings?.values ?? [] };
+  }
+  return gateCeilings.values;
+}
+
 function emptyEarlyStop(
-  groups: readonly { mintAddress: string; contender?: boolean; alerted?: boolean; watched?: boolean }[],
+  groups: readonly {
+    mintAddress: string;
+    contender?: boolean;
+    alerted?: boolean;
+    near?: boolean;
+    watched?: boolean;
+  }[],
 ) {
   return {
-    // Held alerts too (a model seat's gate may cap Empty at a ceiling no filter has), and coins
-    // whose bubble map is open, whose holder list shows each wallet's Empty tag.
-    fullMints: new Set(groups.filter((g) => g.contender || g.alerted || g.watched).map((g) => g.mintAddress)),
+    // Held alerts too (a model seat's gate may cap Empty at a ceiling no filter has), coins that
+    // passed the pre-gate on their scored figures lately (nearDecisionFor), and coins whose bubble
+    // map is open, whose holder list shows each wallet's Empty tag.
+    fullMints: new Set(
+      groups.filter((g) => g.contender || g.alerted || g.near || g.watched).map((g) => g.mintAddress),
+    ),
     thresholds: getEmptyWalletThresholds(),
   };
 }
@@ -791,6 +828,7 @@ export function decisionInputsReady(
     | "ageMinutes"
     | "freshTop10WalletPct"
     | "emptyTop10WalletPct"
+    | "emptyTop10WalletBound"
     | "blockZeroHeldPct"
     | "linkedWalletCount"
     | "cexFundedCount"
@@ -810,7 +848,11 @@ export function decisionInputsReady(
   if (!env.CURATED_REQUIRE_WALLET_CHECKS) return { ready: true, held: [] };
   const { lane } = reads;
   const held: DecisionHoldReason[] = [];
-  let walletsIn = walletChecksKnown(scored);
+  // A decision waits out an early-stopped "atMost" Empty bound too: it settles the screen's cut but
+  // is no share (null as a model input). The coin is near a decision from here (noteNearDecision),
+  // so the next wallet stage reads it whole (Helius cuts impact audit 2026-11-27).
+  let walletsIn =
+    walletChecksKnown(scored) && (lane !== "decision" || scored.emptyTop10WalletBound !== "atMost");
   if (lane === "hourly") {
     const key = waitKey(scored.mintAddress, lane);
     if (walletsIn) walletChecksWaitSince.delete(key);
@@ -2031,10 +2073,15 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
   // do. Only filters whose owner has access: see loadMatchableFilters.
   const activeFilters: FilterWithUser[] = await loadMatchableFilters(env);
-  // The Empty ceilings an early-stopped reading has to settle (walletHoldings.ts earlyStop).
-  setEmptyWalletThresholds(
-    activeFilters.flatMap((f) => (f.maxEmptyTop10WalletPct != null ? [f.maxEmptyTop10WalletPct] : [])),
-  );
+  // The Empty ceilings an early-stopped reading has to settle (walletHoldings.ts earlyStop): the
+  // filters', the model seats' gates' and the curator's own cap (Helius cuts impact audit
+  // 2026-11-27: a bound under the screen's 80% did not settle a gate's ceiling, which then refused
+  // the coin for the figure unknown, or the curator's 70%, which read the bound's ceiling).
+  setEmptyWalletThresholds([
+    MAX_EMPTY_TOP10_WALLET_PCT,
+    ...activeFilters.flatMap((f) => (f.maxEmptyTop10WalletPct != null ? [f.maxEmptyTop10WalletPct] : [])),
+    ...(await modelGateEmptyCeilings()),
+  ]);
 
   // Batched fallback for mints RugCheck has no report for - resolved up front for the whole cycle
   // rather than one un-batched call at a time from inside the candidate loop.
@@ -2341,6 +2388,9 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
       // for a wallet figure (see resolveAlertTargets): next in line after the contenders, so the
       // reading lands within a cycle or two.
       alerted: alertAwaitingWallets(c.mintAddress),
+      // Passed the pre-gate on its scored figures in the last 15 minutes (noteNearDecision): read
+      // whole, next after the held alerts, so its next decision has an exact Empty reading.
+      near: nearDecisionFor(c.mintAddress),
       // In the alert feeds (alerted on in the last 6 hours): its readings are kept no older than
       // the 10-minute holdings TTL ahead of coins nobody was alerted to (user decision 2026-10-27).
       recent: recentlyAlerted(c.mintAddress),
@@ -2360,6 +2410,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
       (a, b) =>
         Number(b.contender) - Number(a.contender) ||
         Number(b.alerted) - Number(a.alerted) ||
+        Number(b.near) - Number(a.near) ||
         Number(b.recent) - Number(a.recent) ||
         Number(b.watched) - Number(a.watched) ||
         b.churn - a.churn,
@@ -3978,6 +4029,7 @@ async function processCandidate(
       await recordCandidateSample(token.id, scored, env);
     }
     const preGate = passesEventPreGate(scored, band);
+    if (preGate) noteNearDecision(token.mintAddress);
     if (pass === "entry") {
       // The entry fast path's first scan (entryFastPath.ts) decides on the coin as a decision
       // moment would, held to the same pre-gate and the same inputs, and banks the moment as its

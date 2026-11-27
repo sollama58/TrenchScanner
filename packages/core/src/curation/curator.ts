@@ -96,7 +96,7 @@ const MAX_FRESH_TOP10_WALLET_PCT = 30;
  * is the shape it is meant to catch. The mandatory safety screen rejects 80% and over for every token
  * (SAFETY_REJECT_EMPTY_WALLET_PCT in rugScreen.ts); this curator keeps its own 70 and stands alone.
  */
-const MAX_EMPTY_TOP10_WALLET_PCT = 70;
+export const MAX_EMPTY_TOP10_WALLET_PCT = 70;
 const MAX_RISK_SCORE = 60;
 const MAX_DEV_WALLET_PCT = 10;
 
