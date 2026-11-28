@@ -1219,6 +1219,12 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
       where: { tokenId: newer.token.id },
       data: { createdAt: new Date(ANCHOR + MIN) },
     });
+    // Strictly the oldest: every seeded call shares ANCHOR, and among equal times the order is the
+    // database's, so a coin an earlier test left pending could take Pump.fun's calls first (CI, 2026-11-28).
+    await prisma.curatedAlert.updateMany({
+      where: { tokenId: older.token.id },
+      data: { createdAt: new Date(ANCHOR - MIN) },
+    });
     const asked: string[] = [];
     const helius: TradeTapeDeps["helius"] = {
       gtfaUsable: true,
