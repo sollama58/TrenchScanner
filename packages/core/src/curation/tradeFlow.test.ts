@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildCandidateFeatures, CANDIDATE_FEATURE_NAMES, TRADE_FLOW_FEATURES } from "./features.js";
+import {
+  buildCandidateFeatures,
+  CANDIDATE_FEATURE_NAMES,
+  LEARNER_FEATURE_NAMES,
+  scoredFromFeatures,
+  TRADE_FLOW_FEATURES,
+  TRADE_SHAPE_FEATURES,
+} from "./features.js";
 import {
   chainLaunchBags,
+  chainTradeShape,
   chainWindowFlow,
   EMPTY_TRADE_FLOW,
   resolveDevHolding,
@@ -252,14 +260,14 @@ describe("order-flow features in the vector", () => {
     const names = CANDIDATE_FEATURE_NAMES as readonly string[];
     // After every feature that predates them; only the later text, path, market, 5m-flow and
     // narrative inputs (and the narrative part of the score they feed), the livestream and the
-    // pair's age, the top-10 snipers share, the launch's shape, the fresh quote, the launch buyers' fresh-wallet share, the wallet risk and win readings, the KOL counts, the screen's holder counts, the launchpad flag, the age's source, the wallet-risk coverage, the market source and TokenSage markers, the transfers, the launch facts, the Wallet Score, the clean winners' reading, the curve path, the dev launch reading, block zero, the same-size groups and the cohorts, follow.
+    // pair's age, the top-10 snipers share, the launch's shape, the fresh quote, the launch buyers' fresh-wallet share, the wallet risk and win readings, the KOL counts, the screen's holder counts, the launchpad flag, the age's source, the wallet-risk coverage, the market source and TokenSage markers, the transfers, the launch facts, the Wallet Score, the clean winners' reading, the curve path, the dev launch reading, block zero, the same-size groups, the cohorts and the trade shape, follow.
     const start = names.indexOf(TRADE_FLOW_FEATURES[0]);
     expect(names.slice(start, start + TRADE_FLOW_FEATURES.length)).toEqual([...TRADE_FLOW_FEATURES]);
     expect(
       names
         .slice(start + TRADE_FLOW_FEATURES.length)
         .every((n) =>
-          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$|freshGapPct$|freshQuoteAge|jup|freshLaunchBuyerPct$|walletRisk|knownDumperFirstBuyers$|linked|bundled|flagged|cexFunded|sameTime|walletWin|knownWinnerFirstBuyers$|winnerRecent|kol|largestHolderPct$|sniperTopHolder|top10WalletsChecked$|freshTopHolder|launchpadStonks$|transfer|ageSource$|walletRiskScoredTop10$|firstBuyersSeen$|firstBuyersHoldingCut$|preBondSeconds$|relaunchSibling|walletScoreRecentBuyers|cleanWinner|recentBuyers|curve|devLaunch|vol|px|launchAge|bandDwell|decisionMcap|tradesPerMin|blockZero|sameSizeGroup|launchSameSizeWallets$|cohort)/.test(
+          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$|freshGapPct$|freshQuoteAge|jup|freshLaunchBuyerPct$|walletRisk|knownDumperFirstBuyers$|linked|bundled|flagged|cexFunded|sameTime|walletWin|knownWinnerFirstBuyers$|winnerRecent|kol|largestHolderPct$|sniperTopHolder|top10WalletsChecked$|freshTopHolder|launchpadStonks$|transfer|ageSource$|walletRiskScoredTop10$|firstBuyersSeen$|firstBuyersHoldingCut$|preBondSeconds$|relaunchSibling|walletScoreRecentBuyers|cleanWinner|recentBuyers|curve|devLaunch|vol|px|launchAge|bandDwell|decisionMcap|tradesPerMin|blockZero|sameSizeGroup|launchSameSizeWallets$|cohort|shape[A-Z])/.test(
             n,
           ),
         ),
@@ -437,5 +445,122 @@ describe("withLaunchBags", () => {
     expect(withLaunchBags(undefined, bags)).toMatchObject({ ...EMPTY_TRADE_FLOW, ...bags });
     expect(withLaunchBags(stream, null)).toBe(stream);
     expect(withLaunchBags(undefined, null)).toBeUndefined();
+  });
+});
+
+/**
+ * Program audit 2026-11-28, signal study SG-1 and card 4: the second-level trade shape just before
+ * a decision, read off the live tape's page. The study's cautions are what these pin: the reading
+ * is as of the page's read, and a busy coin's short page reads over what it covers instead of
+ * going null.
+ */
+describe("chainTradeShape", () => {
+  const now = sec(600);
+  const ct = (wallet: string, side: "buy" | "sell", sol: number, secAgo: number, tokens = sol * 1_000) => ({
+    wallet,
+    side,
+    sol,
+    tokens,
+    atMs: now - secAgo * 1000,
+  });
+
+  it("reads the last minute's buys, sizes and net SOL from a page that reaches back past it", () => {
+    const shape = chainTradeShape(
+      [
+        ct("old", "buy", 5, 200),
+        ct("a", "buy", 0.2, 50),
+        ct("b", "buy", 2, 40),
+        ct("a", "sell", 0.1, 35, 100),
+        ct("c", "buy", 0.4, 20),
+        ct("c", "buy", 0.6, 10),
+        ct("d", "buy", 1, 4),
+      ],
+      now,
+      false,
+    );
+    expect(shape).toMatchObject({
+      shapeAgeSec: null,
+      shapeTrades: 7,
+      shapeWholeHistory: 0,
+      shapeSecSinceTrade: 4,
+      shapeBuys30s: 3,
+      shapeBuys1m: 5,
+      shapeSells1m: 1,
+      shapeBuyers1m: 4,
+      shapeNetSol30s: 2,
+      shapeNetSol1m: 4.1,
+      shapeMedBuySol30s: 0.6,
+      shapeMedBuySol1m: 0.6,
+      // 2 + 1 of the 4.2 SOL bought came in buys of 1 SOL or more; b's 2 SOL is the biggest buyer.
+      shapeBigBuyShare1m: 0.714,
+      shapeTopBuyerShare1m: 0.476,
+      // Three buys in the newest 30 seconds against two in the 30 before.
+      shapeBuyAccel30s: 1.333,
+    });
+  });
+
+  it("says who has already sold out and how much the top five hold, from the bags built on the page", () => {
+    const shape = chainTradeShape(
+      [
+        ct("a", "buy", 1, 50, 1_000),
+        ct("a", "sell", 1, 40, 980),
+        ct("b", "buy", 1, 30, 1_000),
+        ct("c", "buy", 1, 20, 3_000),
+        // Sold before buying on the page: its bag started before it, so it is not counted.
+        ct("x", "sell", 1, 15, 5_000),
+      ],
+      now,
+      false,
+    );
+    // a kept 2% of what it bought: out. b and c hold everything.
+    expect(shape.shapeSoldOutShare).toBeCloseTo(1 / 3, 3);
+    expect(shape.shapeTop5HoldShare).toBe(1);
+  });
+
+  it("reads a busy coin's short page over the span it covers instead of going null", () => {
+    // Ten buys in the last ten seconds, with older trades behind the page.
+    const trades = Array.from({ length: 10 }, (_, i) => ct(`w${i}`, "buy", 0.5, 10 - i));
+    const shape = chainTradeShape(trades, now, false);
+    // Ten buys over ten seconds is sixty a minute.
+    expect(shape.shapeBuys1m).toBe(60);
+    expect(shape.shapeBuyers1m).toBe(10);
+    expect(shape.shapeMedBuySol1m).toBe(0.5);
+    expect(shape.shapeTrades).toBe(10);
+    // The same page as a whole history is ten buys in a minute: nothing came before.
+    expect(chainTradeShape(trades, now, true).shapeBuys1m).toBe(10);
+  });
+
+  it("knows nothing from an empty page unless it is the coin's whole history", () => {
+    expect(chainTradeShape([], now, false).shapeTrades).toBeNull();
+    expect(chainTradeShape([], now, true)).toMatchObject({
+      shapeTrades: 0,
+      shapeWholeHistory: 1,
+      shapeBuys1m: 0,
+      shapeSecSinceTrade: null,
+    });
+    // Trades after the read are not part of it.
+    expect(chainTradeShape([ct("a", "buy", 1, -5)], now, false).shapeTrades).toBeNull();
+  });
+
+  it("is recorded on the decision row, read back in a replay, and fed to the learners", () => {
+    const shape = { ...chainTradeShape([ct("a", "buy", 1, 5)], now, true), shapeAgeSec: 3 };
+    const base = {
+      mintAddress: MINT,
+      priceUsd: 1,
+      marketCapUsd: 100_000,
+      narrativeTags: [],
+      rugScreen: { passed: true, reasons: [] },
+      score: { momentum: 0, holderHealth: 0, age: 0, narrative: 0, total: 0 },
+    } as unknown as ScoredToken;
+    const features = buildCandidateFeatures({ ...base, tradeShape: shape });
+    for (const name of TRADE_SHAPE_FEATURES) {
+      expect(CANDIDATE_FEATURE_NAMES).toContain(name);
+      expect(LEARNER_FEATURE_NAMES).toContain(name);
+      expect(features[name]).toBe(shape[name]);
+    }
+    expect(scoredFromFeatures(features, 1, 100_000).tradeShape).toEqual(shape);
+    // A row without the reading carries nulls, not zeros.
+    const none = buildCandidateFeatures(base);
+    for (const name of TRADE_SHAPE_FEATURES) expect(none[name]).toBeNull();
   });
 });

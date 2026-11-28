@@ -492,7 +492,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("cohortCreatorLinked");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("shapeTop5HoldShare");
     expect(CANDIDATE_FEATURE_NAMES).toContain("pathRet30mPerMin");
     expect(CANDIDATE_FEATURE_NAMES).toContain("devLaunchFamilyLaunches");
     // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.

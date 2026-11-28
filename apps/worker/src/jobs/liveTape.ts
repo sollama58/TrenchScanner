@@ -1,5 +1,6 @@
 import {
   chainLaunchBags,
+  chainTradeShape,
   chainWindowFlow,
   cohortReading,
   createLogger,
@@ -23,6 +24,7 @@ import {
   type StreamTapePage,
   type TapeTrade,
   type TradeFlowFeatures,
+  type TradeShapeFeatures,
   type WalletScoreReading,
   type WinnerFollowReading,
 } from "@trenchscanner/core";
@@ -479,6 +481,23 @@ export function liveWindowFlowOf(mint: string, nowMs = Date.now()): TradeFlowFea
   const page = pages.get(mint);
   if (!page || nowMs - page.atMs > MAX_WINDOW_PAGE_AGE_MS) return null;
   return chainWindowFlow(page.trades, page.atMs, page.complete);
+}
+
+/**
+ * The second-level trade shape just before a decision (core's chainTradeShape; program audit
+ * 2026-11-28, card 4), read as of when the page was read and stamped with the page's age at `nowMs`
+ * (the decision): the study found half the gain in the last five seconds, so training has to see
+ * how old the reading was when it was used. Null without a page read in the last five minutes.
+ */
+export function liveTradeShapeOn(
+  page: LiveTapePage | undefined,
+  nowMs = Date.now(),
+): TradeShapeFeatures | null {
+  if (!page || nowMs - page.atMs > MAX_WINDOW_PAGE_AGE_MS) return null;
+  return {
+    ...chainTradeShape(page.trades, page.atMs, page.complete),
+    shapeAgeSec: Math.max(0, Math.round((nowMs - page.atMs) / 1_000)),
+  };
 }
 
 /**

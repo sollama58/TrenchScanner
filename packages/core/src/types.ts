@@ -1,6 +1,6 @@
 import type { LinkedCluster, SameTimeCluster } from "./wallets/linkedWallets.js";
 import type { FlaggedTrade } from "./wallets/liveFlags.js";
-import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
+import type { TradeFlowFeatures, TradeShapeFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
 import type { CurvePathFeatures } from "./curation/curveTape.js";
 import type { DevLaunchFeatures } from "./wallets/devLaunchScore.js";
@@ -550,6 +550,8 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   pricePath?: PricePathFeatures;
   /** A young coin's path read off its bonding curve, change by change (curation/curveTape.ts). */
   curvePath?: CurvePathFeatures;
+  /** The second-level trade shape just before the decision, off the live tape's page (curation/tradeFlow.ts). */
+  tradeShape?: TradeShapeFeatures;
   /** How the creator's other launches went, and its funder's other creators' (wallets/devLaunchScore.ts). */
   devLaunch?: DevLaunchFeatures;
   /** What the market as a whole is doing right now, and the clock (curation/pricePath.ts). */
