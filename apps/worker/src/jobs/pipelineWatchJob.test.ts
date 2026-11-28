@@ -20,6 +20,7 @@ import {
   findCanaryProblems,
   findCapacityProblems,
   findCreditProblems,
+  findHeliusErrorProblems,
   findLowFlowProblems,
   findProblems,
   findSideJobProblems,
@@ -220,6 +221,51 @@ describe("pipeline watch: what counts as stalled", () => {
     expect(out.map((p) => p.key)).toEqual(["helius-credits"]);
     expect(out[0]!.side).toBe(true);
     expect(out[0]!.text).toContain("Helius credits used up since 04:05 UTC");
+    expect(notificationText(out, [], out)).toMatch(/^<b>⚠️ TrenchScanner scanner jobs need a look<\/b>/);
+  });
+
+  it("flags Helius failing 5% of its requests two half hours running (audit 2026-11-28, FD-7)", () => {
+    // The usual day: 40 failed in 200,267.
+    expect(
+      findHeliusErrorProblems([
+        { requests: 4_000, errors: 1 },
+        { requests: 4_200, errors: 0 },
+      ]),
+    ).toEqual([]);
+    // One bad half hour says nothing, whichever it is.
+    expect(
+      findHeliusErrorProblems([
+        { requests: 4_000, errors: 2 },
+        { requests: 4_000, errors: 400 },
+      ]),
+    ).toEqual([]);
+    expect(
+      findHeliusErrorProblems([
+        { requests: 4_000, errors: 400 },
+        { requests: 4_000, errors: 2 },
+      ]),
+    ).toEqual([]);
+    // Too few requests to call a rate (a scanner that is mostly down is another notice's).
+    expect(
+      findHeliusErrorProblems([
+        { requests: 4_000, errors: 400 },
+        { requests: 40, errors: 30 },
+      ]),
+    ).toEqual([]);
+    expect(
+      findHeliusErrorProblems([
+        { requests: 0, errors: 0 },
+        { requests: 0, errors: 0 },
+      ]),
+    ).toEqual([]);
+    const out = findHeliusErrorProblems([
+      { requests: 4_000, errors: 240 },
+      { requests: 5_000, errors: 400 },
+    ]);
+    expect(out.map((p) => p.key)).toEqual(["helius-errors"]);
+    // Notified, with no banner and no restart: a restart does not mend Helius.
+    expect(out[0]!.side).toBe(true);
+    expect(out[0]!.text).toContain("Helius failed 8% of requests in the last 30 minutes (400 of 5,000)");
     expect(notificationText(out, [], out)).toMatch(/^<b>⚠️ TrenchScanner scanner jobs need a look<\/b>/);
   });
 
@@ -1070,6 +1116,56 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
         ? String(again.meta.stalledKeys)
         : String((again as { stalledKeys?: string }).stalledKeys);
     expect(keys).not.toContain("tokensage");
+  });
+
+  it("reads Helius's failed share from the usage rows, and stays quiet with one bad half hour", async () => {
+    const now = Date.now();
+    await jobsRanAt(now);
+    const usage = (at: number, requests: number, errors: number) =>
+      prisma.apiUsage.create({
+        data: {
+          bucket: new Date(Math.floor(at / (5 * MIN)) * 5 * MIN),
+          process: TAG,
+          provider: "helius",
+          endpoint: "POST /",
+          feature: "scan",
+          calls: requests,
+          requests,
+          errors,
+        },
+      });
+    try {
+      // Far more than any other test's rows in the same hour, so the shares are these rows'.
+      await usage(now - 50 * MIN, 1_000_000, 200_000);
+      await usage(now - 40 * MIN, 1_000_000, 0);
+      await usage(now - 20 * MIN, 1_000_000, 200_000);
+      const err = await runPipelineWatch(env, { now, telegram: { sendMessage: vi.fn() } }).catch(
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(JobFailure);
+      expect((err as JobFailure).meta).toMatchObject({
+        stalledKeys: expect.stringContaining("helius-errors"),
+      });
+      expect((err as JobFailure).message).toMatch(/Helius failed 20% of requests in the last 30 minutes/);
+      // Not a stall of the alert path: no restart clock.
+      expect((err as JobFailure).meta).toMatchObject({ stalledSince: null });
+
+      // The older half hour clean: one bad half hour is not yet a notice.
+      await prisma.apiUsage.updateMany({
+        where: { process: TAG, bucket: { lt: new Date(now - 35 * MIN) } },
+        data: { errors: 0 },
+      });
+      const again = await runPipelineWatch(env, { now, telegram: { sendMessage: vi.fn() } }).catch(
+        (e: unknown) => e,
+      );
+      const keys =
+        again instanceof JobFailure
+          ? String(again.meta.stalledKeys)
+          : String((again as { stalledKeys?: string }).stalledKeys);
+      expect(keys).not.toContain("helius-errors");
+    } finally {
+      await prisma.apiUsage.deleteMany({ where: { process: TAG } });
+    }
   });
 
   it("while Helius's credits are out, names them on a banner instead of warning of a restart", async () => {
