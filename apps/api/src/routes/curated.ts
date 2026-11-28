@@ -10,6 +10,7 @@ import {
   walletSafetyCutsSql,
   firstCallOnRowSql,
   notRetiredModelSql,
+  wonSql,
   REPORTED_LABEL_RULE,
 } from "@trenchscanner/core";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
@@ -933,7 +934,7 @@ export async function registerCuratedRoutes(
                count(*) FILTER (WHERE "createdAt" >= ${day7}) AS d7,
                count(*) FILTER (WHERE "createdAt" >= ${day1}) AS d1,
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
-               count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS wins,
+               count(*) FILTER (WHERE ${wonSql()}) AS wins,
                count(*) FILTER (WHERE "hit4xIn1h" AND NOT COALESCE("disqualified", false)) AS goal_hits,
                count(*) FILTER (WHERE "hit10xIn1h" AND NOT COALESCE("disqualified", false)) AS ten_x_hits,
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL

@@ -11,6 +11,7 @@ import {
   REPORTED_LABEL_RULE,
   type PrecisionTargets,
   marketRowWon,
+  wonSql,
   type MarketRow,
 } from "@trenchscanner/core";
 import { marketCounts, type MarketRowSource } from "./marketRows.js";
@@ -632,7 +633,7 @@ export async function buildLearningCurve(
     SELECT ${anchorDay} AS day,
            count(*) AS calls,
            count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql()}) AS won2x,
            count(*) FILTER (WHERE "hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE "hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL
@@ -680,8 +681,7 @@ export async function buildLearningCurve(
   const callCols = Prisma.sql`
            count(*) AS calls,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
-                              AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["a.", "co."])}) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
            count(*) FILTER (WHERE COALESCE(a."hit10xIn1h", co."hit10xIn1h")) AS won10x,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL

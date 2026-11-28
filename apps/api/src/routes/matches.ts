@@ -355,6 +355,9 @@ export const MATCH_OUTCOME_SELECT = {
   hit10xIn1h: true,
   disqualified: true,
   peak24hReturnPct: true,
+  // The fill target's verdict, copied beside the classic one (WIN_TARGET_RULE reports either).
+  fillWin: true,
+  fillReturnPct: true,
   // Whether the candles keep its peak (matchPeakPct): then its watcher run peak no longer counts.
   peakCheckedAt: true,
 } satisfies Prisma.MatchSelect;
@@ -417,6 +420,8 @@ export function matchOutcome(
     runPeakMinutes: null,
     // A match keeps no closing stamp of its own; the row's verdict is what makes it final.
     outcomeFinalizedAt: m.hit2xIn1h === null ? null : m.matchedAt,
+    fillWin: m.fillWin,
+    fillReturnPct: m.fillReturnPct,
     candidateOutcome: (m.candidateOutcomeId && rowById.get(m.candidateOutcomeId)) || null,
   });
 }

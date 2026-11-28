@@ -238,6 +238,8 @@ export interface MarketRow {
   hit4x: boolean | null;
   hit10x: boolean | null;
   disqualified: boolean | null;
+  /** The fill target's verdict (curation/fillTarget.ts), for the reports that follow WIN_TARGET_RULE. */
+  fillWin?: boolean | null;
   simReturnPct: number | null;
   /** While the trailing share is held: the return at the latest reading (CandidateOutcome.openReturnPct). */
   openReturnPct?: number | null;

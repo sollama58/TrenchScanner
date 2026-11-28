@@ -1,6 +1,7 @@
 import "./bootstrap-env.js"; // must run before any @trenchscanner/core import - see file comment
 import {
   loadEnv,
+  setWinTargetRule,
   createLogger,
   installApiUsageMeter,
   nameApiHost,
@@ -24,6 +25,7 @@ const EXAMPLE_JWT_SECRET = "change-me-to-a-random-64-char-hex-string";
 
 async function main() {
   const env = loadEnv();
+  setWinTargetRule(env.WIN_TARGET_RULE);
   // Counts every outside call for Admin > API usage (on-demand live prices, burn checks, chart
   // candles, Telegram), before the server builds any client.
   if (env.TOKENSAGE_API_URL) nameApiHost(env.TOKENSAGE_API_URL, "tokensage");

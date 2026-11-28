@@ -1,4 +1,10 @@
-import { prisma, REPORTED_LABEL_RULE, walletSafetyCutsSql, type MarketRow } from "@trenchscanner/core";
+import {
+  prisma,
+  REPORTED_LABEL_RULE,
+  walletSafetyCutsSql,
+  wonUnder,
+  type MarketRow,
+} from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
 
 /**
@@ -31,12 +37,13 @@ export async function readMarketRows(since: Date): Promise<MarketRow[]> {
       hit4x: boolean | null;
       hit10x: boolean | null;
       dq: boolean | null;
+      fill_win: boolean | null;
       sim: number | null;
       open: number | null;
     }[]
   >`
     SELECT "anchorAt" AS at, "tokenId" AS token, "hit2xIn1h" AS hit2x, "hit4xIn1h" AS hit4x,
-           "hit10xIn1h" AS hit10x, "disqualified" AS dq, "simReturnPct"::float8 AS sim,
+           "hit10xIn1h" AS hit10x, "disqualified" AS dq, "fillWin" AS fill_win, "simReturnPct"::float8 AS sim,
            "openReturnPct"::float8 AS open
     FROM "CandidateOutcome"
     WHERE "sampleKind" = 'event' AND "anchorAt" >= ${since}
@@ -49,6 +56,7 @@ export async function readMarketRows(since: Date): Promise<MarketRow[]> {
     hit4x: r.hit4x,
     hit10x: r.hit10x,
     disqualified: r.dq,
+    fillWin: r.fill_win,
     simReturnPct: r.sim,
     openReturnPct: r.open,
   }));
@@ -119,7 +127,8 @@ export function marketCounts(rows: readonly MarketRow[]): MarketCounts {
     if (r.hit2x === null) continue;
     graded += 1;
     const clean = r.hit2x && r.disqualified !== true;
-    if (clean) won2x += 1;
+    // The 2x count follows the reported rule (WIN_TARGET_RULE); the 10x tier stays the classic one.
+    if (wonUnder({ hit2xIn1h: r.hit2x, disqualified: r.disqualified, fillWin: r.fillWin })) won2x += 1;
     if (r.hit10x !== null || !clean) tenXGraded += 1;
     // A call still riding its trailing share counts at its latest reading, as the SQL's
     // COALESCE("simReturnPct", "openReturnPct").

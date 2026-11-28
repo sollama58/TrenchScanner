@@ -5,6 +5,7 @@ import {
   eventLoopReport,
   nameApiHost,
   loadEnv,
+  setWinTargetRule,
   PricePathBook,
   createLogger,
   prisma,
@@ -336,6 +337,7 @@ function loopStallMeta(): Record<string, string | number | null> {
 
 async function main() {
   const env = loadEnv();
+  setWinTargetRule(env.WIN_TARGET_RULE);
   const role = env.WORKER_ROLE;
   // Counts every outside call for Admin > API usage, before any client below is built. Calls made
   // outside a job (startup, the stream's side reads) count under the process's own name.

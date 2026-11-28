@@ -12,6 +12,10 @@ import {
   hit2xInWinWindow,
   disqualifiedByDrawdown,
   cleanPeakPriceUsd,
+  FILL_LATEST_MS,
+  fillStoppedByReturn,
+  winTargetRule,
+  winTargetSpec,
   contestantSpec,
 } from "@trenchscanner/core";
 import { donateConfigCharities, expandCharityRecipients } from "./donateGg.js";
@@ -764,6 +768,13 @@ export const curatedAlertInclude = {
       disqualified: true,
       peak24hReturnPct: true,
       runPeakMinutes: true,
+      // The fill target's running grade and verdict (core's curation/fillTarget.ts), for the
+      // card's verdict when WIN_TARGET_RULE reports it.
+      fillPriceUsd: true,
+      fillHit2xAt: true,
+      fillStoppedAt: true,
+      fillWin: true,
+      fillReturnPct: true,
     },
   },
 } satisfies Prisma.CuratedAlertInclude;
@@ -802,6 +813,30 @@ export interface OutcomeView {
   finalized: boolean;
   /** Minutes left in the WIN window, for the countdown badge. Null once it has closed. */
   minutesLeft: number | null;
+  /**
+   * Present only when the verdict above is the fill target's (WIN_TARGET_RULE=fill30 and the call
+   * has a fill): the window the card counts down, the stop, the fill the 2x is measured from and,
+   * once the trade is out, its return after costs. Absent, the verdict is the classic rule's.
+   */
+  target?: {
+    rule: "fill30";
+    windowMinutes: number;
+    stopPct: number;
+    fillPriceUsd: number | null;
+    returnPct: number | null;
+  };
+}
+
+/** The fill target's columns as a copy (CuratedAlert, Match) carries them. */
+interface FillCopy {
+  fillPriceUsd?: number | null;
+  fillWin?: boolean | null;
+  fillReturnPct?: number | null;
+}
+/** The fill target's running grade on an open grading row. */
+interface FillLive extends FillCopy {
+  fillHit2xAt?: Date | null;
+  fillStoppedAt?: Date | null;
 }
 
 type OutcomeSources = Pick<
@@ -817,7 +852,11 @@ type OutcomeSources = Pick<
   | "peak24hReturnPct"
   | "runPeakMinutes"
   | "outcomeFinalizedAt"
-> & { candidateOutcome: CuratedAlertWithRelations["candidateOutcome"] };
+> &
+  FillCopy & {
+    candidateOutcome:
+      (Omit<NonNullable<CuratedAlertWithRelations["candidateOutcome"]>, keyof FillLive> & FillLive) | null;
+  };
 
 /**
  * Resolves an alert's outcome from the freshest source available: the live CandidateOutcome link
@@ -905,6 +944,72 @@ export function foldedCallPeakPct(
 }
 
 export function resolveOutcome(alert: OutcomeSources): OutcomeView {
+  const classic = resolveClassicOutcome(alert);
+  return winTargetRule() === "fill30" ? (fillOutcome(alert, classic) ?? classic) : classic;
+}
+
+/**
+ * The fill target's reading of a call (core's curation/fillTarget.ts), laid over the classic view:
+ * the peaks and the run stay as they are (measured from the alert price), the verdict, the
+ * countdown and the tiers follow the fill. Null when the call has no fill to grade from, and the
+ * classic verdict stands (curation/winTarget.ts).
+ *
+ * "disqualified" is a stop-out here as it is on the classic rule: the badge reads "Stopped out".
+ * The 4x and 10x tiers are the classic ones, shown only on a call that also won on the fill.
+ */
+function fillOutcome(alert: OutcomeSources, classic: OutcomeView, now = Date.now()): OutcomeView | null {
+  if (classic.status === "unknown") return null;
+  const live = alert.candidateOutcome;
+  const spec = winTargetSpec("fill30");
+  const view = (
+    status: "watching" | "won" | "missed" | "disqualified",
+    fillPriceUsd: number | null,
+    returnPct: number | null,
+    minutesLeft: number | null,
+  ): OutcomeView => ({
+    ...classic,
+    status,
+    hit2x: status === "won",
+    hitGoal: status === "won" ? classic.hitGoal : status === "watching" ? null : false,
+    hitTenX: status === "won" ? classic.hitTenX : status === "watching" ? null : false,
+    minutesLeft,
+    target: {
+      rule: "fill30",
+      windowMinutes: spec.windowMinutes,
+      stopPct: spec.stopPct,
+      fillPriceUsd,
+      returnPct,
+    },
+  });
+  const settled = (row: FillCopy, stopped: boolean): OutcomeView | null =>
+    row.fillWin == null
+      ? null
+      : view(
+          row.fillWin ? "won" : stopped ? "disqualified" : "missed",
+          row.fillPriceUsd ?? null,
+          row.fillReturnPct ?? null,
+          null,
+        );
+
+  if (live?.finalizedAt != null) return settled(live, live.fillStoppedAt != null);
+  if (alert.hit2xIn1h != null) return settled(alert, fillStoppedByReturn(alert.fillReturnPct));
+  if (!live) return null;
+
+  const elapsedMs = now - live.anchorAt.getTime();
+  const minutesLeft = Math.max(0, Math.round(spec.windowMinutes - elapsedMs / 60_000));
+  const fill = live.fillPriceUsd ?? null;
+  if (fill === null) {
+    // No fill yet: watched for as long as one can still land, with a minute for the watcher's
+    // tick to be stored. Past that there is no trade to grade, and the classic verdict stands.
+    return elapsedMs <= FILL_LATEST_MS + 60_000 ? view("watching", null, null, minutesLeft) : null;
+  }
+  if (live.fillHit2xAt != null) return view("won", fill, null, null);
+  if (live.fillStoppedAt != null) return view("disqualified", fill, null, null);
+  if (elapsedMs >= spec.windowMinutes * 60_000) return view("missed", fill, null, null);
+  return view("watching", fill, null, minutesLeft);
+}
+
+function resolveClassicOutcome(alert: OutcomeSources): OutcomeView {
   const live = alert.candidateOutcome;
   const pctFrom = (price: number, anchor: number) => ((price - anchor) / anchor) * 100;
 

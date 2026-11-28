@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE } from "@trenchscanner/core";
+import { prisma, loadEnv, HEURISTIC_CURATOR_SOURCE, setWinTargetRule } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { readMarketRows } from "../marketRows.js";
@@ -511,6 +511,82 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     const fromQuery = await baselineRates(at(400), TARGETS, at(500));
     expect(fromRows).toEqual(fromQuery);
     expect(fromQuery).toMatchObject({ calls: 6, graded: 5, won2x: 2, won4x: 1, doubledAfterStop: 1 });
+  });
+
+  it("reports the 2x rate on the fill target when WIN_TARGET_RULE says so, and the classic one otherwise", async () => {
+    // Four market moments and a call on each: won on the alert price but lost on the fill, the
+    // reverse twice, and a classic win with no fill verdict (it keeps its classic verdict).
+    const rows = [
+      { hit2x: true, fillWin: false as boolean | null },
+      { hit2x: false, fillWin: true },
+      { hit2x: true, fillWin: null },
+      { hit2x: false, fillWin: true },
+    ];
+    const filter = await prisma.userFilter.findFirstOrThrow({ where: { userId } });
+    const snapshot = await prisma.tokenSnapshot.findFirstOrThrow({ where: { tokenId } });
+    for (const [i, r] of rows.entries()) {
+      const id = await outcome(600 + i, "event", { hit2x: r.hit2x });
+      await prisma.candidateOutcome.update({ where: { id }, data: { fillWin: r.fillWin } });
+      await prisma.curatedAlert.create({
+        data: {
+          tokenId,
+          candidateOutcomeId: id,
+          createdAt: at(600 + i),
+          source: HEURISTIC_CURATOR_SOURCE,
+          confidence: 85,
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 50_000,
+        },
+      });
+      await prisma.match.create({
+        data: {
+          userId,
+          filterId: filter.id,
+          tokenId,
+          snapshotId: snapshot.id,
+          matchedAt: at(600 + i),
+          score: 60,
+          hit2xIn1h: r.hit2x,
+          hit4xIn1h: false,
+          disqualified: false,
+          fillWin: r.fillWin,
+        },
+      });
+    }
+    const report = async (until: number) =>
+      (
+        await app.inject({
+          method: "GET",
+          url: `/stats/hit-rates?since=${at(600).toISOString()}&until=${at(until).toISOString()}`,
+          headers: { authorization: `Bearer ${TOKEN}` },
+        })
+      ).json();
+    const market = (await readMarketRows(at(600))).filter((r) => r.at < at(700));
+
+    const classic = await report(700);
+    expect(classic.rules.winRule).toBe("classic");
+    expect(classic.rules.win).toBe(
+      "2x on the alert price within 15 minutes of the alert, without first falling 50% below it",
+    );
+    expect(classic.curatedAlerts.total).toMatchObject({ graded: 4, won2x: 2 });
+    expect(classic.filterMatches.total).toMatchObject({ graded: 4, won2x: 2 });
+    expect(await baselineRates(at(600), TARGETS, at(700))).toMatchObject({ graded: 4, won2x: 2 });
+    expect(await baselineRates(at(600), TARGETS, at(700), market)).toMatchObject({ graded: 4, won2x: 2 });
+
+    setWinTargetRule("fill30");
+    try {
+      const fill = await report(701);
+      expect(fill.rules.winRule).toBe("fill30");
+      expect(fill.rules.win).toContain("within 30 minutes of the alert, without first falling 30% below it");
+      // The two fill winners and the call with no fill verdict; the classic-only winner is a loss.
+      expect(fill.curatedAlerts.total).toMatchObject({ graded: 4, won2x: 3, hitRate2xPct: 75 });
+      expect(fill.filterMatches.total).toMatchObject({ graded: 4, won2x: 3 });
+      const fromQuery = await baselineRates(at(600), TARGETS, at(700));
+      expect(fromQuery).toMatchObject({ graded: 4, won2x: 3 });
+      expect(await baselineRates(at(600), TARGETS, at(700), market)).toEqual(fromQuery);
+    } finally {
+      setWinTargetRule("classic");
+    }
   });
 
   it("caps the window whichever way it is spelled", async () => {

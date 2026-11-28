@@ -1367,6 +1367,12 @@ const envSchema = z.object({
   // 2026-11-02, FDSA AI audit): at medium every decide answered in 4-6 s for about $0.035, some
   // 500 output tokens, the JSON and little else; high is the smallest step that buys deliberation
   // and still fits the window (about 1.5-2x the cost per decide).
+  // Which win rule pages, reports, boards and Telegram results report (owner decision 2026-11-28,
+  // program audit card 1; core's curation/winTarget.ts): "classic" is 2x on the alert price in 15
+  // minutes before a 50% fall, "fill30" is 2x on a real fill in 30 minutes before a 30% fall. Both
+  // verdicts are stored on every call, so this only picks the one shown. Models, seat scoring and
+  // what is alerted do not read it. Set it the same on the api, the scanner and the trainer.
+  WIN_TARGET_RULE: z.enum(["classic", "fill30"]).default("classic"),
   // What buys (owner decision 2026-11-28, program audit AI-1): "decide" is the Opus decide above;
   // "screen" buys every shortlisted alert on the desk's default exit plan with no decide call.
   // Over 30 days the decide's trades won 26.4% and its passes 25.0%, the shortlist 26.2%: the
