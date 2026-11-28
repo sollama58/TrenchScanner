@@ -7,7 +7,7 @@ import {
   coinGeckoBudget,
   coinGeckoLaneOf,
 } from "./coingeckoBudget.js";
-import { GeckoTerminalClient } from "./geckoterminal.js";
+import { GECKOTERMINAL_FREE_RATE_LIMITED_PAUSE_MS, GeckoTerminalClient } from "./geckoterminal.js";
 import { RateGateDeadlineError } from "./rateGate.js";
 
 const DAY = 86_400_000;
@@ -168,6 +168,37 @@ describe("the chart backfill after the free API's 429", () => {
     // No paid credit left in the lane: the second page waits for the rest to end, past its 1 s.
     await expect(backfill()).rejects.toBeInstanceOf(RateGateDeadlineError);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  // Program audit 2026-11-28, DS-10: the rest was 30 s, inside the provider's one-minute window,
+  // so every process sharing the address came back early and tripped the limit again (54% failed).
+  it("rests the free API for the provider's whole window, and goes back after it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      coinGeckoBudget.configure({ dailyCredits: 100, peakDailyCredits: 0, chartDailyCredits: 0 });
+      const fetch = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementationOnce(async () => new Response("slow down", { status: 429 }))
+        .mockImplementation(async () => new Response(JSON.stringify({ data: {} }), { status: 200 }));
+      const client = new GeckoTerminalClient({ apiKey: "k" });
+      const backfill = () =>
+        withOwnApiFeature("candle-backfill", () =>
+          client.poolMinuteCandles("POOL", "MINT", Date.now(), 1_000),
+        );
+      await expect(backfill()).rejects.toThrow();
+      // 45 seconds on, the old half-minute rest would have let this one through.
+      vi.setSystemTime(Date.now() + 45_000);
+      await expect(backfill()).rejects.toBeInstanceOf(RateGateDeadlineError);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      // Past the window the free lane is used again.
+      vi.setSystemTime(Date.now() + 25_000);
+      await backfill();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(String(fetch.mock.calls[1]![0])).toMatch(/^https:\/\/api\.geckoterminal\.com\//);
+      expect(GECKOTERMINAL_FREE_RATE_LIMITED_PAUSE_MS).toBeGreaterThanOrEqual(60_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("spends a paid credit while the free API rests, if the lane has one", async () => {
