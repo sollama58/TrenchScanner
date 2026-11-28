@@ -846,7 +846,12 @@ async function main() {
       },
       env.WEBHOOK_DISPATCH_INTERVAL_SECONDS / 60,
       {
-        deadlineMinutes: 10,
+        // A hung pass is given up, never a scanner restart (program audit 2026-11-28, AP-1): a
+        // partner's receiver is outside our control and must not be able to stop the alert path.
+        // Each send has its own hard deadline (webhookExchange); this is the second guard. Three
+        // minutes clears the pass's 120 s lock transaction, so the next pass never waits on it.
+        deadlineMinutes: 3,
+        abandonOnDeadline: true,
         runEarly: {
           everyMs: 100,
           quiet: true,

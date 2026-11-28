@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import { createServer, request as httpRequest, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadEnv } from "../config/env.js";
 import { prisma } from "../db.js";
@@ -7,6 +9,7 @@ import {
   newWebhookSecret,
   runWebhookDispatch,
   signWebhook,
+  webhookExchange,
   webhookUrlProblem,
   WEBHOOK_MAX_ATTEMPTS,
   WEBHOOK_MAX_FAILURES,
@@ -37,6 +40,90 @@ describe("webhookUrlProblem", () => {
     ]) {
       expect(webhookUrlProblem(bad), bad).not.toBeNull();
     }
+  });
+});
+
+describe("webhookExchange", () => {
+  // A receiver outside our control (program audit 2026-11-28, AP-1): each case is one that hung
+  // or drained the old sender, against a local server playing the receiver.
+  let server: Server;
+  let behave: (res: ServerResponse) => void = () => {};
+  const timers: NodeJS.Timeout[] = [];
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      req.resume();
+      behave(res);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  });
+  afterAll(async () => {
+    for (const t of timers) clearInterval(t);
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  const send = (deadlineMs: number) =>
+    webhookExchange(
+      httpRequest,
+      new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}/hook`),
+      { "content-type": "application/json" },
+      "{}",
+      deadlineMs,
+    );
+  const trickle = (res: ServerResponse) => timers.push(setInterval(() => res.write("."), 20));
+
+  it("takes a 2xx status as the answer without waiting for a body that never ends", async () => {
+    behave = (res) => {
+      res.writeHead(200);
+      trickle(res);
+    };
+    const started = Date.now();
+    expect(await send(2_000)).toEqual({ status: 200, error: null });
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("gives up at the deadline on a refusal that trickles its body, keeping the status", async () => {
+    behave = (res) => {
+      res.writeHead(503);
+      trickle(res);
+    };
+    const started = Date.now();
+    const result = await send(300);
+    expect(result.status).toBe(503);
+    expect(result.error).toMatch(/^HTTP 503: \.+$/);
+    expect(Date.now() - started).toBeLessThan(1_500);
+  });
+
+  it("gives up at the deadline on a receiver that accepts the connection and says nothing", async () => {
+    behave = () => {};
+    const started = Date.now();
+    expect(await send(300)).toEqual({ status: null, error: "no answer in 300ms" });
+    expect(Date.now() - started).toBeLessThan(1_500);
+  });
+
+  it("stops reading a refusal's body at the cap", async () => {
+    let written = 0;
+    behave = (res) => {
+      res.writeHead(500);
+      const chunk = "x".repeat(64 * 1024);
+      const more = () => {
+        while (written < 512 * 1024 * 1024 && res.write(chunk)) written += chunk.length;
+        if (!res.destroyed) res.once("drain", more);
+      };
+      more();
+    };
+    const result = await send(5_000);
+    expect(result).toEqual({ status: 500, error: `HTTP 500: ${"x".repeat(200)}` });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The receiver could not push its body through: the response was dropped at the cap.
+    expect(written).toBeLessThan(64 * 1024 * 1024);
+  });
+
+  it("reports a short refusal whole", async () => {
+    behave = (res) => {
+      res.writeHead(410);
+      res.end("gone");
+    };
+    expect(await send(2_000)).toEqual({ status: 410, error: "HTTP 410: gone" });
   });
 });
 
