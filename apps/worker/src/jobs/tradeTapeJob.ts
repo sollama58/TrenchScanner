@@ -1073,7 +1073,7 @@ async function readHeliusPage(
   ) {
     // Too busy to read in full within the cap: Pump.fun's from the next run on, or this lane's
     // newest first, which keeps what was read here to meet.
-    keepHandoff(p.coin.tokenId, { trades: p.trades, launch: p.launch, throughMs: lastAtMs });
+    await keepHandoff(p.coin.tokenId, { trades: p.trades, launch: p.launch, throughMs: lastAtMs });
     // The launch side it read is real either way: its candles are kept (to its last whole second).
     const first = p.trades.reduce((min, t) => Math.min(min, t.atMs), Infinity);
     await saveTapeCandles(
@@ -1097,12 +1097,16 @@ async function readHeliusPage(
  * 50% against 15%, with no early buyer stored for any of them, so the wallet book's early-2x
  * credit was built from the coins that mostly did not run. The pages the hand-off kept (10 from
  * the launch, ~1,000 trades) hold exactly those early buyers.
+ *
+ * The save is awaited: fired and forgotten, it could land after the run returned (a shutdown in
+ * that gap lost the row, a later dropHandoff could run before it and leave a stale one, and the
+ * restart test read the table before the row was there and failed in CI on 2026-11-28).
  */
-function keepHandoff(tokenId: string, h: Handoff) {
+async function keepHandoff(tokenId: string, h: Handoff): Promise<void> {
   handoffs.delete(tokenId);
   handoffs.set(tokenId, h);
   while (handoffs.size > MAX_KEPT_HANDOFFS) handoffs.delete(handoffs.keys().next().value!);
-  void prisma.tradeTapeProgress
+  await prisma.tradeTapeProgress
     .upsert({
       where: { lane: `${HANDOFF_LANE_PREFIX}${tokenId}` },
       create: {
