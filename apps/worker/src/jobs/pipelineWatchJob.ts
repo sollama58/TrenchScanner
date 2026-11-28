@@ -70,6 +70,9 @@ const logger = createLogger("pipeline-watch");
  * unsent for being too old (findAgedOutProblems), the scan cycle's time to its decisions and the
  * fast path's and early decisions' own (findScanLatencyProblems), and training's run time against its deadline and the hours since a
  * run last completed (findTrainingRunProblems, findTrainerProblems). All notify only.
+ *
+ * And a flow that still runs at a fifth of its usual output (findLowFlowProblems, program audit
+ * 2026-11-28): notify only. TokenSage's reads stopping is TokenSage's, never a scanner stall.
  */
 
 export interface FlowCheck {
@@ -80,6 +83,11 @@ export interface FlowCheck {
   recent: number;
   /** Produced in the day before the window; 0 means the stage isn't in use, so it isn't judged. */
   baseline: number;
+  /**
+   * Produced in the same window a day earlier, for the low-flow notice (findLowFlowProblems).
+   * Undefined when not read: the flow is then judged at zero only.
+   */
+  dayAgo?: number;
   /**
    * TokenSage only: reads it answered as failed in the window, which `recent` leaves out. A
    * quiet flow with failures in it is TokenSage failing, not the scanner stalling.
@@ -302,6 +310,9 @@ export function clearedKeys(before: Set<string>, now: Set<string>): string[] {
  */
 export const TELEGRAM_LAG_MS = 5 * 60_000;
 
+/** What a TokenSage flow at zero with no failed answers says; creditsOutFlows takes it back off. */
+const TOKENSAGE_QUIET_NOTE = "; TokenSage is not answering - look at TokenSage";
+
 /**
  * Pure: which flows and jobs are stalled. `oldestChatCursor`: the furthest-behind enabled chat;
  * `cursorHeld`: whether Telegram is holding that chat (a 429's retry_after, TelegramChat.holdUntil).
@@ -328,17 +339,25 @@ export function findProblems(
   for (const f of flows) {
     if (f.recent === 0 && f.baseline > 0) {
       const text = `${f.label}: none in the last ${f.windowMinutes} min (${f.baseline} in the day before)`;
-      // The scanner is asking and TokenSage is answering, every read as failed: a restart here
-      // mends nothing, so notify only, and say where to look.
-      out.push(
-        (f.failed ?? 0) > 0
-          ? {
-              key: f.key,
-              text: `${text}; TokenSage answered ${f.failed} as failed - look at TokenSage`,
-              side: true,
-            }
-          : { key: f.key, text },
-      );
+      // TokenSage's reads are another service's work: a restart of the scanner mends nothing
+      // there, so notify only, and say where to look. Until 2026-11-28 only a flow full of failed
+      // answers was put down to TokenSage; with TokenSage simply down (no answers at all) the
+      // flow started the stall clock, the visitors' banner said part of the scanner had stalled,
+      // and the scanner restarted once at ten minutes, emptying its in-memory books for nothing
+      // (program audit 2026-11-28, FD-4). A scanner that has stopped asking shows on the
+      // discovery and decision flows, which still restart it.
+      if (f.key === "tokensage") {
+        out.push({
+          key: f.key,
+          text:
+            (f.failed ?? 0) > 0
+              ? `${text}; TokenSage answered ${f.failed} as failed - look at TokenSage`
+              : `${text}${TOKENSAGE_QUIET_NOTE}`,
+          side: true,
+        });
+        continue;
+      }
+      out.push({ key: f.key, text });
     }
   }
   for (const j of jobs) {
@@ -364,6 +383,41 @@ export function findProblems(
 }
 
 /** The key and text for a job that runs but has not succeeded for `afterMs`, or null. */
+/**
+ * A flow below this share of both its references is running low: the same window a day earlier,
+ * and the day's average for a window that long.
+ */
+export const LOW_FLOW_SHARE = 0.2;
+/** Neither reference is judged under this many: a quiet stage's fifth is a handful. */
+export const LOW_FLOW_MIN_EXPECTED = 25;
+
+/**
+ * Flows that are still running but at a fraction of their usual output (program audit 2026-11-28,
+ * FD-4). Every flow alarmed only at exactly zero, so TokenSage storing a tenth of its usual reads
+ * (the 2026-11-09 kind of outage, before it reached zero) or discovery losing one of its sources
+ * raised nothing. Notify only: something upstream is giving less, and a restart is not the mend.
+ *
+ * Two references, both of which the flow has to be under, so one odd window a day ago or a quiet
+ * hour of the day does not raise it alone. A flow at zero is findProblems's.
+ */
+export function findLowFlowProblems(flows: FlowCheck[]): Problem[] {
+  const out: Problem[] = [];
+  for (const f of flows) {
+    if (f.recent === 0 || f.dayAgo === undefined) continue;
+    const average = (f.baseline * f.windowMinutes) / (24 * 60);
+    if (f.dayAgo < LOW_FLOW_MIN_EXPECTED || average < LOW_FLOW_MIN_EXPECTED) continue;
+    if (f.recent >= f.dayAgo * LOW_FLOW_SHARE || f.recent >= average * LOW_FLOW_SHARE) continue;
+    out.push({
+      key: `${f.key}:low`,
+      text:
+        `${f.label}: ${f.recent} in the last ${f.windowMinutes} min, against ${f.dayAgo} in the same ` +
+        `${f.windowMinutes} min a day ago and about ${Math.round(average)} on the day's average`,
+      side: true,
+    });
+  }
+  return out;
+}
+
 function failingProblem(j: JobCheck, now: number, afterMs: number): Problem | null {
   // Not read (undefined), or a success within the window.
   if (j.lastSuccessAt === undefined || j.lastRunAt === null) return null;
@@ -467,9 +521,13 @@ export function creditsOutFlows(problems: Problem[], outAt: (t: number) => boole
   const windows = FLOW_WINDOWS_MINUTES as Record<string, number>;
   return problems.map((p) => {
     const window = windows[p.key];
-    if (window === undefined || p.side) return p;
+    // A TokenSage flow at zero with nothing answered is the outage's too: with the screen failing
+    // closed the scanner asks TokenSage for nothing, so "look at TokenSage" would point the wrong way.
+    const quietTokenSage = p.side === true && p.text.endsWith(TOKENSAGE_QUIET_NOTE);
+    if (window === undefined || (p.side && !quietTokenSage)) return p;
     if (!outAt(now - Math.max(CREDITS_OUT_FLOW_GRACE_MS, window * 60_000))) return p;
-    return { ...p, text: `${p.text}${CREDITS_OUT_FLOW_NOTE}`, side: true, creditsOut: true };
+    const text = quietTokenSage ? p.text.slice(0, -TOKENSAGE_QUIET_NOTE.length) : p.text;
+    return { ...p, text: `${text}${CREDITS_OUT_FLOW_NOTE}`, side: true, creditsOut: true };
   });
 }
 
@@ -1002,9 +1060,10 @@ async function countFlows(now: number): Promise<FlowCheck[]> {
           return prisma.curatedAlert.count({ where: { createdAt: { gte: from, lt: to } } });
       }
     };
-    const [recent, baseline, failed] = await Promise.all([
+    const [recent, baseline, dayAgo, failed] = await Promise.all([
       count(start, new Date(now)),
       count(dayStart, start),
+      count(dayStart, new Date(now - DAY)),
       key === "tokensage"
         ? prisma.tokenNarrative.count({
             where: { checkedAt: { gte: start, lt: new Date(now) }, status: "failed" },
@@ -1017,6 +1076,7 @@ async function countFlows(now: number): Promise<FlowCheck[]> {
       windowMinutes,
       recent,
       baseline,
+      dayAgo,
       ...(failed !== undefined ? { failed } : {}),
     });
   }
@@ -1722,6 +1782,8 @@ async function watchOnce(
       (t) => heliusCreditsOut(t) !== null,
       now,
     ),
+    // While Helius's credits are out the flows are low for that reason, and the notice above says so.
+    ...(creditsOut ? [] : findLowFlowProblems(flows)),
     ...findSideJobProblems(sideJobs, now),
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
