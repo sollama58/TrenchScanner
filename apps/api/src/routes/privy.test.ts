@@ -613,6 +613,12 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
     it("says plainly when a new wallet has no SOL, or too little for the buy, before building", async () => {
       const { cookie } = await sessionFor(wallet());
       const balance = vi.spyOn(TradingRpc.prototype, "getBalance");
+      // The fee and swap-cost estimates read the chain and Jupiter, and the route treats a failed
+      // read as zero. Both short buys below are short on the buy alone, so the reads fail here at
+      // once: left on the network, a slow answer ran this test past its 5 s (CI, 2026-11-28).
+      vi.stubGlobal("fetch", async () => {
+        throw new TypeError("fetch failed");
+      });
       try {
         balance.mockResolvedValue(0n);
         const empty = await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "100000000" });
@@ -627,6 +633,7 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
         const big = await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: String(6e9) });
         expect(big.json().error).toMatch(/has 1 SOL, short for the buy/);
       } finally {
+        vi.unstubAllGlobals();
         balance.mockRestore();
       }
     });
