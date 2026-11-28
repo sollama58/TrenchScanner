@@ -131,6 +131,27 @@ describe("minuteCandleReader", () => {
     await expect(keyless.minuteCandles(MINT)).rejects.toBeInstanceOf(CandlesUnavailableError);
   });
 
+  it("is a retry, not a verdict, when Pump.fun's candle route is gone and nothing else answers (DS-3)", async () => {
+    // What the client throws for a removed route (HttpError.routeGone). Read as "no such coin", an
+    // empty store and no GeckoTerminal pool gave null, and the label was stamped "no candles" for good.
+    const gone = () =>
+      new HttpError(404, "https://swap-api.pump.fun/v1/coins/x/candles", undefined, undefined, true);
+    const { reader } = setup({
+      pump: async () => {
+        throw gone();
+      },
+      pages: {},
+    });
+    await expect(reader.minuteCandles(MINT)).rejects.toBeInstanceOf(CandlesUnavailableError);
+    // With a pool GeckoTerminal knows, the read is still answered.
+    const { reader: withPool } = setup({
+      pump: async () => {
+        throw gone();
+      },
+    });
+    expect(await withPool.minuteCandles(MINT)).toEqual([{ startMs: 60_000, close: 0.5 }]);
+  });
+
   it("puts a five-minute candle on its last minute, as Pump.fun's are", async () => {
     const { reader, pumpFun, gecko } = setup({ pages: { [PAIR]: ohlcv([[300, 3]]) } });
     pumpFun.fiveMinuteCandles.mockRejectedValueOnce(refused());

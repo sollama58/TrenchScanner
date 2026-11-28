@@ -505,7 +505,11 @@ export class PumpFunClient {
       );
       return parseMinuteCandles(body);
     } catch (err) {
-      if (err instanceof HttpError && err.status === 404) return null;
+      // "Not a Pump.fun coin" only when Pump.fun said so about the coin. A 404 for a removed route
+      // (HttpError.routeGone) is a failed read: read as null, the candle reader took it for the
+      // coin's answer and a label could be stamped "no candles" for good (program audit
+      // 2026-11-28, DS-3; the swap candle route was one of the four removed on 2026-11-16).
+      if (err instanceof HttpError && err.status === 404 && !err.routeGone) return null;
       throw err;
     }
   }

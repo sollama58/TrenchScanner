@@ -423,6 +423,39 @@ describe("PumpFunClient.coinTrades", () => {
   });
 });
 
+describe("PumpFunClient.minuteCandles", () => {
+  it("is null for a coin Pump.fun does not have, and throws when the candle route itself is gone (DS-3)", async () => {
+    let removed = false;
+    server = createServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.statusCode = 404;
+      // A removed route answers as the router does; a missing coin with the API's own message.
+      res.end(
+        JSON.stringify(
+          removed
+            ? { statusCode: 404, message: `Cannot GET ${req.url}`, error: "Not Found" }
+            : { statusCode: 404, message: "Coin not found" },
+        ),
+      );
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const { PumpFunGate } = await import("./pumpfunGate.js");
+    const client = new PumpFunClient({
+      swapBaseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+      gates: {
+        frontend: new PumpFunGate("test-frontend", 6_000, 100, 30_000),
+        swap: new PumpFunGate("test-swap", 6_000, 100, 30_000),
+      },
+    });
+    expect(await client.minuteCandles("Mint1")).toBeNull();
+    removed = true;
+    // The answer that removed the route, and every held-back call after it: a failed read.
+    await expect(client.minuteCandles("Mint1")).rejects.toMatchObject({ status: 404, routeGone: true });
+    await expect(client.minuteCandles("Mint2")).rejects.toMatchObject({ status: 404, routeGone: true });
+    await expect(client.fiveMinuteCandles("Mint2")).rejects.toMatchObject({ routeGone: true });
+  });
+});
+
 describe("launch metadata", () => {
   const cid = "bafkreibuifrxzohrvlpgdztmwku4o7wggni72irolspurpn3toi5mfjq2q";
 

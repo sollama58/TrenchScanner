@@ -143,7 +143,8 @@ export function minuteCandleReader(deps: MinuteCandleReaderDeps): MinuteCandleRe
         } else if (!gecko) {
           // Without GeckoTerminal a 429 or an outage is the caller's, as before.
           throw err;
-        } else if (!(err instanceof HttpError && err.status === 429)) {
+        } else if (!(err instanceof HttpError && (err.status === 429 || err.routeGone))) {
+          // A removed route is said once, as an error, by the gate that holds it back.
           logger.warn("Pump.fun candle read failed; trying the store and GeckoTerminal", {
             mint,
             error: String(err),

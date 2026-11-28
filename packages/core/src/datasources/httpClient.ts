@@ -12,6 +12,11 @@ export class HttpError extends Error {
      * for it (FetchJsonOptions.errorBody). Provider text: untrusted, compared, never executed.
      */
     public readonly body?: string,
+    /**
+     * True when the answer says the route itself no longer exists (routeGone), or the call was
+     * held back because it said so earlier: a failed read, never "the provider has no such coin".
+     */
+    public readonly routeGone: boolean = false,
   ) {
     super(message ?? `HTTP ${status} for ${url}`);
     this.name = "HttpError";
@@ -138,7 +143,13 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
   }
   const goneStatus = gate?.goneRecently?.(url) ?? null;
   if (goneStatus !== null) {
-    throw new HttpError(goneStatus, safeUrl, `HTTP ${goneStatus} for ${safeUrl} (held back: route removed)`);
+    throw new HttpError(
+      goneStatus,
+      safeUrl,
+      `HTTP ${goneStatus} for ${safeUrl} (held back: route removed)`,
+      undefined,
+      true,
+    );
   }
 
   let attempt = 0;
@@ -180,8 +191,9 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       if (gate?.gone && (res.status === 404 || res.status === 410)) {
         // Read once here: the body tells a removed route from a coin the provider does not have.
         const body = await readErrorBody(res);
-        if (routeGone(res.status, body)) gate.gone(url, res.status);
-        throw new HttpError(res.status, safeUrl, undefined, errorBody ? body : undefined);
+        const isGone = routeGone(res.status, body);
+        if (isGone) gate.gone(url, res.status);
+        throw new HttpError(res.status, safeUrl, undefined, errorBody ? body : undefined, isGone);
       }
       if (errorBody && res.status >= 400 && res.status < 500 && res.status !== 429) {
         throw new HttpError(res.status, safeUrl, undefined, await readErrorBody(res));
