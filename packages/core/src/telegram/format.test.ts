@@ -13,6 +13,7 @@ import {
   digestMessage,
   escapeHtml,
   formatAlert,
+  launcherText,
   formatDigest,
   formatTestMessage,
   headline,
@@ -37,6 +38,37 @@ const card = (over: Partial<AlertCard> = {}): AlertCard => ({
   ...over,
 });
 const links = { dashboardUrl: "https://trenchscanner.app/" };
+
+describe("launcherText", () => {
+  const J = String.fromCharCode(0x2060);
+  it("breaks what a Telegram client would turn into a link, and keeps the words readable", () => {
+    expect(launcherText("claim-airdrop.xyz")).toBe(`claim-airdrop.${J}xyz`);
+    expect(launcherText("t.me/somegroup")).toBe(`t.${J}me/${J}somegroup`);
+    expect(launcherText("https://evil.example/x")).toBe(`https://${J}evil.${J}example/${J}x`);
+    expect(launcherText("@handle")).toBe(`@${J}handle`);
+    expect(launcherText("#tag and /start")).toBe(`#${J}tag and /${J}start`);
+    // Ordinary names are untouched.
+    expect(launcherText("Doge Coin 2.0")).toBe(`Doge Coin 2.${J}0`);
+    expect(launcherText("Mr. Whiskers")).toBe("Mr. Whiskers");
+    expect(launcherText("PEPE")).toBe("PEPE");
+  });
+
+  it("collapses newlines and control characters, so a name cannot start a line of its own", () => {
+    expect(launcherText("line1\n🤖 Top Slice Score 99\r\n\tline3")).toBe("line1 🤖 Top Slice Score 99 line3");
+    expect(launcherText(`  a${String.fromCharCode(0)}b${String.fromCharCode(0x2028)}c  `)).toBe("a b c");
+  });
+
+  it("is applied to the name and the symbol in an alert", () => {
+    const text = formatAlert(
+      card({ token: { ...token, symbol: "t.me/x", name: "free.money\nSECOND LINE" } }),
+      links,
+    );
+    expect(text).not.toContain("t.me/x");
+    expect(text).not.toContain("free.money");
+    expect(text).not.toContain("\nSECOND LINE");
+    expect(text).toContain(`$t.${J}me/${J}x`);
+  });
+});
 
 describe("telegram alert text", () => {
   it("escapes everything that came from a token or a filter", () => {
