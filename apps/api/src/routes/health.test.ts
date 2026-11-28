@@ -282,6 +282,19 @@ describe("public worker health: Pump.fun list and launch details", () => {
     const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
     expect(s.lastRun).toMatchObject({ pumpfunList, launchDetails, launchPoller, pumpRelay });
   });
+
+  it("carries PumpPortal's stream block (audit 2026-11-28, FD-5)", () => {
+    const pumpPortal = { connected: 0, connects: 3, launchAgeSec: 900, tradesRefused: 1 };
+    const row = {
+      job: "scan",
+      lastRunAt: new Date(1_000),
+      lastSuccessAt: null,
+      lastError: null,
+      meta: { durationMs: 900, pumpPortal },
+    };
+    const s = summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], 2_000);
+    expect(s.lastRun).toMatchObject({ pumpPortal });
+  });
 });
 
 /** PumpPortal's relayed Mayhem flag against the chain's answers reaches it (MAYHEM_FROM_PUMPPORTAL). */

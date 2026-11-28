@@ -402,6 +402,8 @@ export interface ScanDeps {
     recentTrades?(mint: string): StreamTapePage | null;
     /** A launch created since the last drain, still buffered: what a fast scan records it from. */
     pendingLaunch?(mint: string): StreamEvent | undefined;
+    /** How the stream stands now, for the heartbeat's `pumpPortal` block (PumpPortalStream.health). */
+    health?(): Record<string, number>;
   };
   /** Jupiter's newest launches, read between cycles and drained once per cycle (JupiterLaunchPoller). Optional. */
   launchPoller?: {
@@ -1685,6 +1687,8 @@ async function scanCycle(
       : undefined;
   // Jupiter's newest-launch reads between cycles, and the launches they turned up.
   const launchPoller = deps.launchPoller?.takeStats?.();
+  // PumpPortal's stream as it stands: connected, and how long since it delivered a launch.
+  const pumpPortal = deps.stream?.health?.();
   // The new launches' Mayhem verdicts between cycles: asked, cleared, set aside, how fast.
   const launchScreen = deps.launchScreen?.takeStats();
   // PumpPortal's relayed Mayhem flag against the chain's answers (MAYHEM_FROM_PUMPPORTAL).
@@ -1725,6 +1729,7 @@ async function scanCycle(
     ...(launchScreen ? { launchScreen } : {}),
     ...(mayhemRelay ? { mayhemRelay } : {}),
     ...(launchPoller ? { launchPoller: { ...launchPoller } } : {}),
+    ...(pumpPortal ? { pumpPortal } : {}),
     tracked: tracked.length,
     inBand: candidates.length,
     // Coins under LOW_CAP_MCAP_USD this cycle kept to their market cap (lowCap.ts), not in inBand.
