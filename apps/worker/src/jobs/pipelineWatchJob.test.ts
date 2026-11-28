@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { clearHeliusCreditsOut, meteredFetch, prisma, loadEnv, type Env } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR } from "../scheduler.js";
 import {
@@ -40,6 +40,9 @@ import {
   findFdsaProblems,
   FDSA_QUIET_MS,
   FDSA_QUIET_MIN_ALERTS,
+  DatabaseDownWatch,
+  DB_DOWN_RUNS,
+  isDatabaseUnreachable,
 } from "./pipelineWatchJob.js";
 
 const MIN = 60_000;
@@ -827,6 +830,101 @@ describe("pipeline watch: the AI desk (audit 2026-11-02, DB-4)", () => {
     const text = notificationText(findFdsaProblems(check({ scannerEnabled: false }), NOW), [], []);
     expect(text).toContain("scanner jobs need a look");
     expect(text).not.toContain("pipeline stalled");
+  });
+});
+
+describe("pipeline watch: the database unreachable (audit 2026-11-28, FD-3)", () => {
+  const unreachable = () =>
+    new Prisma.PrismaClientKnownRequestError("Can't reach database server at `db:5432`", {
+      code: "P1001",
+      clientVersion: "test",
+    });
+  const env = { ADMIN_WALLET_ADDRESSES: "", TELEGRAM_BOT_TOKEN: "" } as unknown as Env;
+
+  it("tells a connection failure from every other error", () => {
+    expect(isDatabaseUnreachable(unreachable())).toBe(true);
+    expect(isDatabaseUnreachable(new Prisma.PrismaClientInitializationError("no", "test"))).toBe(true);
+    expect(
+      isDatabaseUnreachable(new Error("Timed out fetching a new connection from the connection pool.")),
+    ).toBe(true);
+    expect(isDatabaseUnreachable(new Error("FATAL: the database system is shutting down"))).toBe(true);
+    // A unique-key clash is a query's answer, and a refused Helius call is not the database.
+    expect(
+      isDatabaseUnreachable(
+        new Prisma.PrismaClientKnownRequestError("dup", { code: "P2002", clientVersion: "test" }),
+      ),
+    ).toBe(false);
+    expect(isDatabaseUnreachable(new Error("fetch failed: connect ECONNREFUSED 10.0.0.1:443"))).toBe(false);
+  });
+
+  it("tells the admins kept from the last good run, once, on the third failed run, and again when it is back", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true, result: {} });
+    const database = new DatabaseDownWatch();
+    const deps = { telegram: { sendMessage }, database, adminChats: async () => [7n, 8n] };
+    const good = () => runPipelineWatch(env, { ...deps, now: 1_000_000, watch: async () => ({}) });
+    const down = () =>
+      runPipelineWatch(env, {
+        ...deps,
+        // With the database down the chats cannot be read either: only the kept ones are used.
+        adminChats: async () => {
+          throw unreachable();
+        },
+        watch: async () => {
+          throw unreachable();
+        },
+      }).catch((e: unknown) => e);
+
+    await good();
+    for (let i = 1; i < DB_DOWN_RUNS; i++) expect(await down()).toBeInstanceOf(Error);
+    expect(sendMessage).not.toHaveBeenCalled(); // a blip of a run or two is the retry's
+    await down();
+    expect(sendMessage.mock.calls.map((c) => c[0])).toEqual([7n, 8n]);
+    expect(String(sendMessage.mock.calls[0]![1])).toContain("cannot reach its database");
+    await down();
+    await down();
+    expect(sendMessage).toHaveBeenCalledTimes(2); // said once while it lasts
+    await good();
+    expect(sendMessage).toHaveBeenCalledTimes(4);
+    expect(String(sendMessage.mock.calls[3]![1])).toContain("reaches the database again");
+    await good();
+    expect(sendMessage).toHaveBeenCalledTimes(4);
+  });
+
+  it("says nothing for an error that is not the connection, or for a stall the watch found", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ ok: true, result: {} });
+    const database = new DatabaseDownWatch();
+    const deps = { telegram: { sendMessage }, database, adminChats: async () => [7n] };
+    await runPipelineWatch(env, { ...deps, watch: async () => ({}) });
+    for (let i = 0; i < DB_DOWN_RUNS + 1; i++) {
+      await runPipelineWatch(env, {
+        ...deps,
+        watch: async () => {
+          throw new Error("unexpected token in JSON");
+        },
+      }).catch(() => undefined);
+    }
+    // Two connection failures, then the watch's own stall verdict: the run's reads answered.
+    for (let i = 0; i < DB_DOWN_RUNS - 1; i++) {
+      await runPipelineWatch(env, {
+        ...deps,
+        watch: async () => {
+          throw unreachable();
+        },
+      }).catch(() => undefined);
+    }
+    await runPipelineWatch(env, {
+      ...deps,
+      watch: async () => {
+        throw new JobFailure("1 stalled", {});
+      },
+    }).catch(() => undefined);
+    await runPipelineWatch(env, {
+      ...deps,
+      watch: async () => {
+        throw unreachable();
+      },
+    }).catch(() => undefined);
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
 
