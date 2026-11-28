@@ -2,7 +2,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { describeEnvVar, ENV_MANIFEST, envReport, readEnvReport, type EnvService } from "./envReport.js";
+import {
+  describeEnvVar,
+  ENV_MANIFEST,
+  envReport,
+  readEnvReport,
+  unlistedEnvKind,
+  type EnvService,
+} from "./envReport.js";
 
 interface RenderEnvVar {
   key?: string;
@@ -115,5 +122,35 @@ describe("envReport / readEnvReport", () => {
     const back = readEnvReport({ ...JSON.parse(JSON.stringify(r)), BAD: { state: "?" }, ODD: 3 });
     expect(back).toEqual(JSON.parse(JSON.stringify(r)));
     expect(readEnvReport(null)).toEqual({});
+  });
+
+  it("reports a schema key set outside the manifest, and never a credential-looking one's value (DB-3)", () => {
+    // The owner's 11-11 decision lives only in the dashboard: no manifest row, so no report had it.
+    expect(ENV_MANIFEST.some((s) => s.key === "CURATOR_CHAMPION_RULE")).toBe(false);
+    const r = envReport({
+      CURATOR_CHAMPION_RULE: "lower-bound",
+      TRADING_JUPITER_API_KEY: "jup-secret-value",
+      PATH: "/usr/bin",
+      NOT_A_SCHEMA_KEY: "x",
+    });
+    expect(r.CURATOR_CHAMPION_RULE).toEqual({ state: "set", hint: "lower-bound" });
+    expect(r.TRADING_JUPITER_API_KEY).toMatchObject({ state: "set", hint: null });
+    expect(JSON.stringify(r)).not.toContain("jup-secret");
+    // Only the schema's keys: the platform's own variables are not the product's settings.
+    expect(r.PATH).toBeUndefined();
+    expect(r.NOT_A_SCHEMA_KEY).toBeUndefined();
+    // An unlisted key that is not set adds nothing.
+    expect(Object.keys(envReport({}))).toHaveLength(ENV_MANIFEST.length);
+    expect(unlistedEnvKind("FDSA_DAILY_BUDGET_USD")).toBe("setting");
+    for (const key of [
+      "X_API_KEY",
+      "SOME_WEBHOOK",
+      "RPC_URL",
+      "FEE_WALLET",
+      "ADMIN_CHAT_ID",
+      "DB_PASSWORD",
+    ]) {
+      expect(unlistedEnvKind(key), key).toBe("identifier");
+    }
   });
 });

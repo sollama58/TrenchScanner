@@ -6,6 +6,8 @@ import {
   fetchJson,
   prisma,
   readEnvReport,
+  UNLISTED_ENV_GROUP,
+  unlistedEnvKind,
   type Env,
   type EnvNeed,
   type EnvService,
@@ -108,6 +110,30 @@ export async function trenchScannerEnv(env: NodeJS.ProcessEnv = process.env): Pr
       cells,
     };
   });
+  // Keys some process has set that the manifest does not list (envReport): one row each, so a
+  // value that lives only in the dashboard can be read, and compared across the services.
+  const listed = new Set(ENV_MANIFEST.map((s) => s.key));
+  const unlisted = new Set<string>();
+  for (const c of columns) {
+    for (const key of Object.keys(reports.get(c.id)?.vars ?? {})) if (!listed.has(key)) unlisted.add(key);
+  }
+  for (const key of [...unlisted].sort()) {
+    const cells: Record<string, EnvCell> = {};
+    for (const c of columns) {
+      const r = reports.get(c.id);
+      const v = r?.vars[key];
+      // A service that reported without the key does not have it; one that never reported is unknown.
+      cells[c.id] = { need: null, state: v?.state ?? (r ? "missing" : "unknown"), hint: v?.hint ?? null };
+    }
+    rows.push({
+      key,
+      group: UNLISTED_ENV_GROUP,
+      kind: unlistedEnvKind(key),
+      note: "Not in render.yaml: set by hand in the dashboard. Unset reads the env.ts default.",
+      differs: differs(columns.map((c) => reports.get(c.id)?.vars[key])),
+      cells,
+    });
+  }
   return { id: "trenchscanner", label: "TrenchScanner", status: "ok", error: null, columns, rows };
 }
 
