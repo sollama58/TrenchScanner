@@ -69,8 +69,13 @@ describe.skipIf(!dbAvailable)("chart chain fill", () => {
     resetCandleChainFill();
     await cleanup();
     await prisma.token.create({ data: { mintAddress: MINT, symbol: "T", launchedAt: new Date(LAUNCH) } });
+    // Stamped ahead of the clock, so it is the newest ask whatever the suite left behind. NOW is
+    // this minute's start, and a run takes the newest 50 asks: when the alert and match suites,
+    // which each leave an ask per call, finished inside the same minute (CI run 46125844792,
+    // 2026-11-28 08:28:00 to 08:28:44), more than 50 of theirs were newer and all nine tests read
+    // nothing. The fill reads the stamp only to order the asks.
     await prisma.candleBackfill.create({
-      data: { mint: MINT, reason: "call", requestedAt: new Date(NOW) },
+      data: { mint: MINT, reason: "call", requestedAt: new Date(Date.now() + 10 * MIN) },
     });
     // The curve tape held the coin's first minute only.
     await saveCandleChunks([
