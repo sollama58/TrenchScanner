@@ -690,10 +690,32 @@ async function dispatchPass(
    */
   const noticeIdle = async (due: readonly ChatRow[]): Promise<void> => {
     for (const chat of due) {
+      // A chat Telegram is holding (a 429's retry-after) takes nothing until the hold ends.
+      if (chat.holdUntil !== null && chat.holdUntil.getTime() > startedAt) continue;
       if ((await hasAccess(chat.user.walletAddress).catch(() => false)) !== true) continue;
       const sent = await api.sendMessage(chat.chatId, IDLE_CHAT_TEXT).catch(() => null);
-      if (!sent?.ok) continue; // Told on a later pass.
-      await prisma.telegramChat.updateMany({ where: { id: chat.id }, data: { idleNoticedAt: new Date() } });
+      // Noted whether or not it landed. A failed send used to write nothing, so a chat that could
+      // not take the notice (the bot blocked, a 429) was asked again every pass, about every 10
+      // seconds, with an access lookup each time (program audit 2026-11-28, TG-4). A failure
+      // now waits the week out like a notice that landed.
+      const unreachable =
+        sent !== null &&
+        !sent.ok &&
+        (sent.code === 403 ||
+          (sent.code === 400 && /chat not found|group chat was deleted/i.test(sent.description)));
+      await prisma.telegramChat.updateMany({
+        where: { id: chat.id },
+        data: {
+          idleNoticedAt: new Date(),
+          // Blocked, kicked, or the chat is gone: unlinked, as an alert send would have done. An
+          // idle chat gets no alert send, so nothing else would ever unlink it.
+          ...(unreachable
+            ? { revokedAt: new Date(), lastError: `${sent.code}: ${sent.description}`.slice(0, 300) }
+            : {}),
+        },
+      });
+      if (unreachable)
+        logger.info("telegram chat unreachable, unlinking", { chat: chat.id, what: "idle notice" });
     }
   };
   if (matches.length === 0 && calls.length === 0) {

@@ -123,11 +123,18 @@ describe("pushPayloads", () => {
     expect(many[0]!.title).toBe(`${MAX_NOTIFICATIONS + 1} new alerts`);
   });
 
-  it("only uses https artwork", () => {
-    const http = card({ token: { ...card().token, imageUrl: "http://x/y.png" } });
-    const https = card({ token: { ...card().token, imageUrl: "https://x/y.png" } });
-    expect(pushPayloads([http], "/")[0]!.icon).toBeUndefined();
-    expect(pushPayloads([https], "/")[0]!.icon).toBe("https://x/y.png");
+  it("never hands the phone a launcher's own image URL as the icon (audit 2026-11-28, TG-8)", () => {
+    const icon = (imageUrl: string | null) =>
+      pushPayloads([card({ token: { ...card().token, imageUrl } })], "/")[0]!.icon;
+    const cid = "bafkreig5wtk2ui6yti4zaczp2u4x27rkbnyzf7n7ontszeedlicqcc2mxe";
+    // A host the launcher chose would learn the subscriber's address and when they were alerted.
+    expect(icon("https://launcher.example/logo.png")).toBeUndefined();
+    expect(icon("http://x/y.png")).toBeUndefined();
+    expect(icon(null)).toBeUndefined();
+    // An IPFS file is read from Pump.fun's gateway, resized, whichever gateway the launcher named.
+    const fromIpfs = icon(`https://launcher-gateway.example/ipfs/${cid}`);
+    expect(fromIpfs).toMatch(new RegExp(`^https://pump\\.mypinata\\.cloud/ipfs/${cid}\\?img-width=`));
+    expect(fromIpfs).not.toContain("launcher-gateway.example");
   });
 });
 
