@@ -1,6 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Prisma } from "@prisma/client";
 import { clearHeliusCreditsOut, meteredFetch, prisma, loadEnv, type Env } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR } from "../scheduler.js";
 import {
@@ -986,6 +987,62 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
     ).catch(() => undefined);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0]![0]).toBe(privateChat);
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+
+  it("says a notice again on the next run when Telegram refused it", async () => {
+    const now = Date.now();
+    const wallet = `${TAG}-admin3`;
+    const user = await prisma.user.create({ data: { walletAddress: wallet } });
+    await prisma.telegramChat.create({
+      data: { chatId: BigInt(now) + 11n, kind: "private", userId: user.id },
+    });
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.tokenNarrative.create({
+      data: {
+        mintAddress: `${TAG}-c`,
+        depth: "basic",
+        status: "complete",
+        checkedAt: new Date(now - 60 * MIN),
+      },
+    });
+    await jobsRanAt(now);
+    const adminEnv = { ...env, ADMIN_WALLET_ADDRESSES: wallet };
+    // The scheduler stores a run's meta on the heartbeat row; the next run reads its state there.
+    const store = (run: unknown) => {
+      const meta = (run as JobFailure).meta as Prisma.InputJsonObject;
+      return prisma.systemHeartbeat.upsert({
+        where: { job: "pipeline-watch" },
+        create: { job: "pipeline-watch", lastRunAt: new Date(now), meta },
+        update: { meta },
+      });
+    };
+    await prisma.systemHeartbeat.deleteMany({ where: { job: "pipeline-watch" } });
+    const refusing = vi.fn().mockResolvedValue({ ok: false, code: 429 });
+    const first = await runPipelineWatch(adminEnv, { now, telegram: { sendMessage: refusing } }).catch(
+      (e: unknown) => e,
+    );
+    expect(refusing).toHaveBeenCalledTimes(1);
+    expect((first as JobFailure).meta).toMatchObject({ notified: 0, noticesUndelivered: true });
+    // Not stored as told: the keys are the ones the run started with.
+    expect(String((first as JobFailure).meta.stalledKeys)).not.toContain("tokensage");
+    await store(first);
+
+    const accepting = vi.fn().mockResolvedValue({ ok: true, result: {} });
+    const second = await runPipelineWatch(adminEnv, { now, telegram: { sendMessage: accepting } }).catch(
+      (e: unknown) => e,
+    );
+    expect(accepting).toHaveBeenCalledTimes(1);
+    expect(String(accepting.mock.calls[0]![1])).toContain("TokenSage");
+    expect((second as JobFailure).meta).toMatchObject({ notified: 1, noticesUndelivered: false });
+    expect(String((second as JobFailure).meta.stalledKeys)).toContain("tokensage");
+    await store(second);
+
+    // Told once: a third run has nothing new to say.
+    const third = vi.fn().mockResolvedValue({ ok: true, result: {} });
+    await runPipelineWatch(adminEnv, { now, telegram: { sendMessage: third } }).catch(() => undefined);
+    expect(third.mock.calls.map((c) => String(c[1]))).toEqual([]);
+    await prisma.systemHeartbeat.deleteMany({ where: { job: "pipeline-watch" } });
     await prisma.user.delete({ where: { id: user.id } });
   });
 

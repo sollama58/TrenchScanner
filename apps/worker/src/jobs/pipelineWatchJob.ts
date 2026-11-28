@@ -1624,19 +1624,29 @@ async function watchOnce(
   }
 
   let notified = 0;
+  let refused = 0;
   if (notices.length > 0 && (deps.telegram || env.TELEGRAM_BOT_TOKEN)) {
     const api = deps.telegram ?? new TelegramApi(env.TELEGRAM_BOT_TOKEN);
     for (const chatId of await adminChats(env)) {
       const res = await api.sendMessage(chatId, notices.join("\n\n"));
       if (res.ok) notified += 1;
-      else logger.warn("pipeline notice not sent", { code: res.code });
+      else {
+        refused += 1;
+        logger.warn("pipeline notice not sent", { code: res.code });
+      }
     }
   }
+  // sendMessage never throws: a refusal (a 429, a blocked bot) comes back as `ok: false`. When
+  // every admin's send was refused, nobody was told, so the stalled keys stay the previous run's
+  // and the next run finds the same problems new and says them again. They were stored as told
+  // before (program audit 2026-11-28, DB-1), and the next run had nothing left to say.
+  const noticesUndelivered = refused > 0 && notified === 0;
 
   const meta: JobRunMeta = {
     stalled: problems.length,
     notified,
-    stalledKeys: [...keys].join(","),
+    noticesUndelivered,
+    stalledKeys: [...(noticesUndelivered ? before.keys : keys)].join(","),
     stalledSince: stalledSince === null ? null : new Date(stalledSince).toISOString(),
     warned,
     lastRestartAt: lastRestartAt === null ? null : new Date(lastRestartAt).toISOString(),
