@@ -34,7 +34,7 @@ describe("panel cards", () => {
     ]);
     for (const a of card.querySelectorAll("a")) expect(a.rel).toBe("noopener noreferrer");
     expect(card.className).toBe("card model");
-    expect(card.textContent).toContain("Sniper v4 41%");
+    expect(card.textContent).toContain("Sniper v4 · 41% like it 2x");
     // The name sits up top; the address is a copy button at the bottom right.
     expect(card.querySelector(".top .full")?.textContent).toBe("Ring Coin");
     expect(card.querySelector(".foot .end > .ca")?.textContent).toBe("6p6x…GiPN");

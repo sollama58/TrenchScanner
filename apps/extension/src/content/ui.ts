@@ -1,3 +1,4 @@
+import { quotedRateLong } from "../shared/rate";
 import { SITE_NAMES, siteUrl, trenchUrl } from "../panel/card";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import {
@@ -662,7 +663,7 @@ export function tooltipBody(
             label,
             call.calibratedPct === null
               ? `${Math.round(call.confidence)}`
-              : `${Math.round(call.calibratedPct)}% to 2x`,
+              : quotedRateLong(call.calibratedPct),
           ),
         );
       }

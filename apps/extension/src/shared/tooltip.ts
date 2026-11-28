@@ -137,7 +137,10 @@ export interface ToastPrefs {
   enabled: boolean;
   models: boolean;
   filters: boolean;
-  /** Model alerts only at or above these odds to 2x (percent); 0 for any. */
+  /**
+   * Model alerts only at or above this quoted 2x rate (percent); 0 for any. The rate is usually the
+   * model's own over its recent alerts (shared/rate.ts), so this mostly picks models, not calls.
+   */
   minOdds: number;
   /** Model alerts only when the AI reviewer says buy (accounts that see its verdicts). */
   aiBuyOnly: boolean;
@@ -341,7 +344,7 @@ export const PILL_PARTS: PillPart[] = [
 
 const PILL_LABELS: Record<string, string> = {
   signal: "Model or filter name",
-  odds: "Model's odds to 2x",
+  odds: "Model's quoted 2x rate",
   change: "Change since the alert",
   mcap: "Market cap now",
   age: "Time since the alert",
