@@ -17,12 +17,11 @@ describe("the browser bar's colour (WB-70)", () => {
     expect(themeColorFor("auto", false)).toBe("#07080c");
   });
 
-  it("uses the stylesheet's two page colours, and index.html sets the light one before paint", () => {
+  it("uses the stylesheet's two page colours, and index.html starts on the dark one", () => {
     const pages = [...read("./styles.css").matchAll(/^ {2}--page: (#[0-9a-f]{6});/gm)].map((m) => m[1]);
     expect(pages.slice(0, 2)).toEqual([themeColorFor("dark", false), themeColorFor("light", false)]);
     const html = read("../index.html");
     expect(html).toContain(`<meta name="theme-color" content="${themeColorFor("dark", false)}" />`);
-    expect(html).toContain(`setAttribute("content", "${themeColorFor("light", false)}")`);
   });
 });
 

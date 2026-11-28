@@ -88,7 +88,8 @@
       content="Scans new Solana launches, screens out the common rug patterns, and raises alerts on the tokens its models rate highest."
     />
     <!-- The browser's bar matches the page on both themes (audit WB-46, WB-70): it was the dark
-         colour over the light theme. The theme script below sets it once a theme is chosen. -->
+         colour over the light theme. src/appearance.ts sets it when the app loads; the inline
+         theme script is left alone, since its hash is pinned in render.yaml's policy. -->
     <meta name="theme-color" content="#07080c" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -126,10 +127,6 @@
         var theme = look && look.theme;
         if (theme !== "auto")
           document.documentElement.setAttribute("data-theme", theme === "light" ? "light" : "dark");
-        // The browser's bar takes the page's colour (themeColorFor in src/appearance.ts).
-        var light =
-          theme === "light" || (theme === "auto" && matchMedia("(prefers-color-scheme: light)").matches);
-        if (light) document.querySelector('meta[name="theme-color"]').setAttribute("content", "#f4f5f9");
       } catch (e) {}
     </script>
     <script>

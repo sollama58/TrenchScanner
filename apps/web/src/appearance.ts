@@ -721,7 +721,8 @@ function subscribe(listener: () => void) {
 /**
  * The colour of the browser's own bar (the `theme-color` meta): the page colour of the theme
  * showing, `--page` in styles.css. It was the dark colour on both themes (audit WB-46, WB-70), a
- * black bar over a light page on a phone. index.html sets the same before the first paint.
+ * black bar over a light page on a phone. index.html starts on the dark one and this module sets
+ * the right one as it loads (the inline theme script's hash is pinned in render.yaml's policy).
  */
 export function themeColorFor(theme: FeedAppearance["theme"], deviceLight: boolean): string {
   const light = theme === "light" || (theme === "auto" && deviceLight);
