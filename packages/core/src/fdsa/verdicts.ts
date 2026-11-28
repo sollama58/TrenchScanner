@@ -73,6 +73,13 @@ export const FDSA_MODEL_SCREEN_MODEL = "scanner-model";
 export const FDSA_MODEL_SCREEN_VERSION = "fdsa-screen-model-v1";
 
 /**
+ * A buy straight from the screen (owner decision 2026-11-28, FDSA_ENTRY_SOURCE "screen"): no
+ * decide call, so the decide row that carries the buy to the desk has the scanner model's sentinel
+ * as its `model` and this promptVersion, and the record never reads it as an Opus decide.
+ */
+export const FDSA_SCREEN_ENTRY_VERSION = "fdsa-entry-screen-v1";
+
+/**
  * A model-score screen as stored: the scanner model's own calibrated 2x odds are the score,
  * shortlisted at or above `minScore`; an alert with no odds (a rules call) is a drop.
  */

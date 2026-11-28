@@ -68,6 +68,8 @@ interface FdsaState {
     tradeTopPct: number | null;
     decideModel: string;
     decideEffort: string;
+    /** What buys: the decide call, or the screen alone. Absent from an API older than the switch. */
+    entrySource?: "decide" | "screen";
     promptVersion: string;
   };
   budget: {
@@ -381,11 +383,18 @@ function DeskPanel({ s, reload }: { s: FdsaState; reload: () => void }) {
         {s.settings.screenShortlistPct !== null && s.settings.screenShortlistPct > 0
           ? `shortlists the top ${s.settings.screenShortlistPct}% of the last day's scores (${s.settings.screenMinScore} until a day is on record)`
           : `shortlists at ${s.settings.screenMinScore}`}
-        . Decide: {s.settings.decideModel} at {s.settings.decideEffort} effort
-        {s.settings.tradeTopPct !== null && s.settings.tradeTopPct > 0
-          ? `, trades the top ${s.settings.tradeTopPct}% of the last day's odds`
-          : ""}
-        . Prompt {s.settings.promptVersion}.
+        .{" "}
+        {s.settings.entrySource === "screen" ? (
+          <>Buys every shortlisted alert on the default exit plan, with no decide call.</>
+        ) : (
+          <>
+            Decide: {s.settings.decideModel} at {s.settings.decideEffort} effort
+            {s.settings.tradeTopPct !== null && s.settings.tradeTopPct > 0
+              ? `, trades the top ${s.settings.tradeTopPct}% of the last day's odds`
+              : ""}
+            . Prompt {s.settings.promptVersion}.
+          </>
+        )}
       </p>
     </Panel>
   );

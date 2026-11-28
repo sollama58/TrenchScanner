@@ -48,6 +48,7 @@ export function workerConfigMeta(env: Env): {
       // and with which screen threshold and models, since those are the worker's env, not the API's.
       fdsaEnabled: env.FDSA_ENABLED,
       fdsaScreenSource: env.FDSA_SCREEN_SOURCE,
+      fdsaEntrySource: env.FDSA_ENTRY_SOURCE,
       fdsaScreenModel: env.FDSA_SCREEN_MODEL,
       fdsaScreenMinScore: env.FDSA_SCREEN_MIN_SCORE,
       fdsaScreenShortlistPct: env.FDSA_SCREEN_SHORTLIST_PCT,

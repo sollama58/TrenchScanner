@@ -219,6 +219,7 @@ export async function registerFdsaRoutes(app: FastifyInstance, { env }: { env: E
               : null,
         apiKeySet: worker?.credentials.anthropicApiKey ?? null,
         screenSource: setting("fdsaScreenSource", env.FDSA_SCREEN_SOURCE),
+        entrySource: setting("fdsaEntrySource", env.FDSA_ENTRY_SOURCE),
         screenModel: setting("fdsaScreenModel", env.FDSA_SCREEN_MODEL),
         screenMinScore: setting("fdsaScreenMinScore", env.FDSA_SCREEN_MIN_SCORE),
         screenShortlistPct: setting("fdsaScreenShortlistPct", env.FDSA_SCREEN_SHORTLIST_PCT),
