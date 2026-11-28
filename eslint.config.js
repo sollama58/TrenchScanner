@@ -25,7 +25,7 @@ export default tseslint.config(
     rules: {
       // Prefixing with _ is the standard convention for "intentionally unused" (destructured
       // params we don't need, catch bindings, etc.) - matches patterns already in this codebase.
-      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
       // We use `interface X extends Y {}` in a couple of places purely to attach a doc comment
       // to an otherwise-identical re-export (e.g. RugCheckProfile) - that's a legitimate pattern,
       // not an accident.

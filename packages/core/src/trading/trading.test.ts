@@ -40,7 +40,6 @@ import {
   dexScreenerPricesUsd,
   JupiterSwapClient,
   KeyRefusedError,
-  NoRouteError,
   RateLimitedError,
   type SwapQuote,
 } from "./jupiterSwap.js";

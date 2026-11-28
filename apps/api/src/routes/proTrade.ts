@@ -1590,11 +1590,6 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
 /** The pauses before a build's retries, when the chain or Jupiter didn't answer. */
 const BUILD_RETRY_MS = [800, 2_000];
 
-/** Lamports as SOL for a message, up to four decimals. */
-function solAmount(lamports: bigint): string {
-  return (Number(lamports) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 4 });
-}
-
 /**
  * Whether a Privy wallet may sign this trade without Privy's confirm window (user rule 2026-10-18):
  * a sale (the wallet holds the coin), or a buy of a coin the wallet already holds, whose latest scan

@@ -1,6 +1,6 @@
 import { prisma } from "@trenchscanner/core";
 import type { TrackedWallet } from "../trackedWallets.js";
-import { fundedEdge, GraphBuilder, hotFunders, loadCoTraders, transferEdge, type CoTrader } from "./graph.js";
+import { fundedEdge, GraphBuilder, hotFunders, transferEdge, type CoTrader } from "./graph.js";
 
 /**
  * "Similar trades" (user ask 2026-10-24): the wallets that buy the same coins as this one within
