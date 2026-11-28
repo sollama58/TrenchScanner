@@ -31,6 +31,12 @@ export interface MintSupplyOptions {
   waitMs?: number;
   /** Mints kept; the least recently read go first. */
   maxEntries?: number;
+  /**
+   * Re-reads of readings past their TTL go out together, at most once in this long, instead of
+   * with whichever ask first finds one stale. 0 (the default) re-reads at once, as before. A
+   * reading can then be up to ttlMs plus this old. A mint with no reading is always read at once.
+   */
+  refreshEveryMs?: number;
   now?: () => number;
 }
 
@@ -39,6 +45,11 @@ export interface MintSupplyOptions {
  * and the reads of one call go out as one batch (getMultipleAccounts, 100 mints a call). A stale
  * reading is still answered while its re-read is out, and a failed read keeps it, so a slow or
  * failing RPC costs freshness, never the figure.
+ *
+ * With `refreshEveryMs` the stale re-reads are gathered (program audit 2026-11-28, DS-8): the
+ * api's live tick and charts ask for their on-screen coins every few seconds, the coins' readings
+ * run out at different moments, and so nearly every ask found one stale and sent a read of its
+ * own, about 37k getMultipleAccounts a day for supplies that almost never change.
  */
 export class MintSupplies implements MintSupplySource {
   private readonly entries = new Map<string, { supply: number; at: number }>();
@@ -46,6 +57,10 @@ export class MintSupplies implements MintSupplySource {
   private readonly ttlMs: number;
   private readonly waitMs: number;
   private readonly maxEntries: number;
+  private readonly refreshEveryMs: number;
+  /** Stale mints waiting for the next gathered re-read (refreshEveryMs). */
+  private readonly stale = new Set<string>();
+  private refreshedAt = -Infinity;
   private readonly now: () => number;
 
   constructor(
@@ -55,6 +70,7 @@ export class MintSupplies implements MintSupplySource {
     this.ttlMs = opts.ttlMs ?? 60_000;
     this.waitMs = opts.waitMs ?? 1_500;
     this.maxEntries = opts.maxEntries ?? 20_000;
+    this.refreshEveryMs = opts.refreshEveryMs ?? 0;
     this.now = opts.now ?? Date.now;
   }
 
@@ -66,7 +82,18 @@ export class MintSupplies implements MintSupplySource {
       const hit = this.entries.get(m);
       return !hit || now - hit.at >= this.ttlMs;
     });
-    const toRead = due.filter((m) => !this.inFlight.has(m));
+    let toRead = due.filter((m) => !this.inFlight.has(m));
+    if (this.refreshEveryMs > 0) {
+      // A mint never read goes now; the stale ones wait for the gathered re-read, which this ask
+      // sends when it is due, with every mint that went stale since the last one.
+      for (const m of toRead) if (this.entries.has(m)) this.stale.add(m);
+      toRead = toRead.filter((m) => !this.entries.has(m));
+      if (this.stale.size > 0 && now - this.refreshedAt >= this.refreshEveryMs) {
+        this.refreshedAt = now;
+        toRead = [...new Set([...toRead, ...[...this.stale].filter((m) => !this.inFlight.has(m))])];
+        this.stale.clear();
+      }
+    }
     if (toRead.length > 0) {
       const read = this.reader
         .getMintSupplies(toRead)
