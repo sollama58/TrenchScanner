@@ -8,6 +8,7 @@ import {
   heliusCreditsOut,
   JOB_LOCKED_JOBS,
   lockLostDuringRun,
+  Prisma,
   runningSinceFrom,
   syncDataOutages,
   TELEGRAM_MAX_FAILURES,
@@ -1452,7 +1453,86 @@ export interface PipelineWatchDeps {
   now?: number;
   /** Ends the process after RESTART_DELAY_MS so the platform starts a fresh one. */
   restart?: () => void;
+  /** Test hook: the run itself, in place of watchOnce. */
+  watch?: () => Promise<JobRunMeta>;
+  /** Test hook: the admins' chats, in place of the database read. */
+  adminChats?: () => Promise<bigint[]>;
+  /** Test hook: this run's database-down counters, in place of the process's. */
+  database?: DatabaseDownWatch;
 }
+
+/**
+ * The database unreachable: the one outage this job could not say, because it read the admins'
+ * chats from the database it was reporting on and threw before any message (program audit
+ * 2026-11-28, FD-3). The chats of the last good read are kept in this process, and after
+ * DB_DOWN_RUNS runs in a row that failed on the connection the admins are told straight through
+ * Telegram, which needs no database; once more when a run succeeds again.
+ *
+ * What this cannot cover: a process that boots while the database is down has no chats to tell
+ * (and the restart a 10-minute stall brings forgets them), a database that accepts connections and
+ * then hangs ends at the run's deadline instead, and a dead scanner says nothing at all. Those are
+ * an outside monitor's (the production checklist's /health?db=1 check).
+ */
+export const DB_DOWN_RUNS = 3;
+/** How often a good run re-reads the admins' chats to keep. */
+const DB_DOWN_CHATS_REFRESH_MS = 15 * 60_000;
+
+/** Prisma's codes for "could not reach or keep a connection": P1001, P1002, P1008, P1017, P2024. */
+const DB_UNREACHABLE_CODES = new Set(["P1001", "P1002", "P1008", "P1017", "P2024"]);
+// Only text the database or Prisma's pool writes: "connection refused" alone is also what a failed
+// Helius or Telegram call says, and must not read as the database.
+const DB_UNREACHABLE_TEXT =
+  /Can't reach database server|Server has closed the connection|Timed out fetching a new connection from the connection pool|the database system is (starting up|shutting down|in recovery mode)|too many clients already|remaining connection slots are reserved/i;
+
+/** Whether an error says the database could not be reached, not that a query was wrong. */
+export function isDatabaseUnreachable(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientInitializationError) return true;
+  if (err instanceof Prisma.PrismaClientKnownRequestError && DB_UNREACHABLE_CODES.has(err.code)) return true;
+  // An error that crossed a wrapper carries only its text.
+  return DB_UNREACHABLE_TEXT.test(err instanceof Error ? err.message : String(err));
+}
+
+/** Pure but for its own counters: what to tell the admins after each run, if anything. */
+export class DatabaseDownWatch {
+  private chats: bigint[] = [];
+  private chatsAt = 0;
+  private failures = 0;
+  private told = false;
+
+  /** True when a good run should read the admins' chats again. */
+  chatsStale(now: number): boolean {
+    return now - this.chatsAt >= DB_DOWN_CHATS_REFRESH_MS;
+  }
+
+  keepChats(chats: bigint[], now: number): void {
+    this.chats = chats;
+    this.chatsAt = now;
+  }
+
+  /** After a run: `unreachable` when it failed on the database connection. */
+  after(unreachable: boolean): { text: string; chats: bigint[] } | null {
+    if (!unreachable) {
+      const wasTold = this.told;
+      this.failures = 0;
+      this.told = false;
+      return wasTold && this.chats.length > 0
+        ? { text: "<b>✅ TrenchScanner:</b> the scanner reaches the database again.", chats: this.chats }
+        : null;
+    }
+    this.failures += 1;
+    if (this.failures < DB_DOWN_RUNS || this.told || this.chats.length === 0) return null;
+    this.told = true;
+    return {
+      text:
+        "<b>⚠️ TrenchScanner cannot reach its database</b>\n" +
+        `• ${this.failures} watch runs in a row failed on the connection - nothing is scored, stored or alerted ` +
+        "until it is back; check the database on Render (down, suspended or out of connections)",
+      chats: this.chats,
+    };
+  }
+}
+
+const databaseDown = new DatabaseDownWatch();
 
 /** The stall state as stored on the heartbeat row, read back by previousState. */
 function stateMeta(state: WatchState): JobRunMeta {
@@ -1494,13 +1574,50 @@ export async function runPipelineWatch(env: Env, deps: PipelineWatchDeps = {}): 
   // lastRestartAt - letting the next process restart again inside the hourly cap. Any error is
   // rethrown as a JobFailure carrying the newest state known.
   let known: WatchState | null = null;
+  const tell = async (notice: { text: string; chats: bigint[] } | null) => {
+    if (!notice || !(deps.telegram || env.TELEGRAM_BOT_TOKEN)) return;
+    const api = deps.telegram ?? new TelegramApi(env.TELEGRAM_BOT_TOKEN);
+    for (const chatId of notice.chats) {
+      const res = await api.sendMessage(chatId, notice.text);
+      if (!res.ok) logger.warn("database notice not sent", { code: res.code });
+    }
+  };
+  const watch = deps.database ?? databaseDown;
   try {
-    return await watchOnce(env, deps, (state) => {
-      known = state;
-    });
+    const meta = await (
+      deps.watch ??
+      (() =>
+        watchOnce(env, deps, (state) => {
+          known = state;
+        }))
+    )();
+    await afterGoodRun(env, deps, watch, tell);
+    return meta;
   } catch (err) {
-    if (err instanceof JobFailure || known === null) throw err;
+    // A JobFailure is the watch's own verdict (a stall), raised after its reads all answered.
+    if (err instanceof JobFailure) {
+      await afterGoodRun(env, deps, watch, tell);
+      throw err;
+    }
+    await tell(watch.after(isDatabaseUnreachable(err))).catch(() => {});
+    if (known === null) throw err;
     throw new JobFailure(String(err), stateMeta(known));
+  }
+}
+
+/** A run whose reads answered: keeps the admins' chats for an outage, and says one is over. */
+async function afterGoodRun(
+  env: Env,
+  deps: PipelineWatchDeps,
+  watch: DatabaseDownWatch,
+  tell: (notice: { text: string; chats: bigint[] } | null) => Promise<void>,
+): Promise<void> {
+  const now = deps.now ?? Date.now();
+  try {
+    if (watch.chatsStale(now)) watch.keepChats(await (deps.adminChats ?? (() => adminChats(env)))(), now);
+    await tell(watch.after(false));
+  } catch (err) {
+    logger.warn("database-down watch not updated", { error: String(err) });
   }
 }
 
