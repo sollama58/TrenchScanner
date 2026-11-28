@@ -6,6 +6,7 @@ import {
   scoreTokenLegacy,
   prisma,
   loadEnv,
+  FILL_NET_FACTOR,
   initialOutcomeAggregates,
   pumpCurveUsdPerUnit,
   type CurveState,
@@ -331,6 +332,106 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.lastPriceUsd).toBe(2.2);
     expect(updated.finalizedAt).toBeNull();
     expect(updated.nextCheckAt.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("sets the fill target's fill from the first price past the fill delay, and decides nothing on it", async () => {
+    const token = await createToken("fill-open");
+    // Inside the three minutes a first price still counts as the fill.
+    const anchorAt = new Date(Date.now() - 2 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0, { labelRule: 3 });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.2 }), env);
+
+    const filled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    // The minute sample plus 1%. The old label saw a 2x from the 1.0 alert price; the fill target
+    // bought at 2.222 and has seen nothing since.
+    expect(filled.hit2xAt).not.toBeNull();
+    expect(filled.fillPriceUsd).toBeCloseTo(2.222);
+    expect(filled.fillSource).toBe("minute");
+    expect(filled.fillHit2xAt).toBeNull();
+    expect(filled.fillStoppedAt).toBeNull();
+    expect(filled.fillWin).toBeNull();
+
+    // 30% under the fill is 1.5554: the next price is through it.
+    await prisma.candidateOutcome.update({
+      where: { id: row.id },
+      data: { nextCheckAt: new Date(Date.now() - 1000) },
+    });
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.5 }), env);
+    const stopped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(stopped.fillStoppedAt).not.toBeNull();
+    expect(stopped.fillExitPriceUsd).toBeCloseTo(1.5);
+    expect(stopped.fillWin).toBeNull();
+  });
+
+  it("takes no fill from a first price later than three minutes after the call", async () => {
+    const token = await createToken("fill-late");
+    const row = await seedRow(token.id, new Date(Date.now() - 5 * MINUTE), 1.0, { labelRule: 3 });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.2 }), env);
+
+    const late = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(late.hit2xAt).not.toBeNull();
+    expect(late.fillPriceUsd).toBeNull();
+    expect(late.fillSource).toBeNull();
+  });
+
+  it("writes the fill target's verdict at the close, beside the label, and copies it to the alert", async () => {
+    const token = await createToken("fill-close");
+    const anchorAt = new Date(Date.now() - 31 * MINUTE);
+    // The old label: a clean 2x from the 1.0 alert price. The fill target: bought at 1.5 and
+    // stopped at 1.0 before the price ever reached 3.0, so the same call is a loss on it.
+    const row = await seedRow(token.id, anchorAt, 1.0, {
+      peak1hPriceUsd: 2.4,
+      peakBeforeStopPriceUsd: 2.4,
+      peak24hPriceUsd: 2.4,
+      hit2xAt: new Date(anchorAt.getTime() + 10 * MINUTE),
+      fillPriceUsd: 1.5,
+      fillAt: new Date(anchorAt.getTime() + 16_000),
+      fillSource: "tape",
+      fillStoppedAt: new Date(anchorAt.getTime() + 2 * MINUTE),
+      fillExitPriceUsd: 1.0,
+    });
+    const alert = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: row.id,
+        source: "heuristic-v1",
+        confidence: 80,
+        anchorPriceUsd: 1.0,
+        anchorMcapUsd: 100_000,
+      },
+    });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.2 }), env);
+
+    const closed = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(closed.hit2xIn1h).toBe(true);
+    expect(closed.disqualified).toBe(false);
+    expect(closed.labelValue).toBeGreaterThan(1);
+    expect(closed.fillWin).toBe(false);
+    // Out at 1.0 on a 1.5 fill, after a 1% fee each side and 1% slippage on the sale.
+    expect(closed.fillReturnPct).toBeCloseTo(((1 / 1.5) * FILL_NET_FACTOR - 1) * 100);
+    const copied = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
+    expect(copied.hit2xIn1h).toBe(true);
+    expect(copied.fillWin).toBe(false);
+    expect(copied.fillSource).toBe("tape");
+    expect(copied.fillPriceUsd).toBeCloseTo(1.5);
+    expect(copied.fillReturnPct).toBeCloseTo(closed.fillReturnPct!);
+  });
+
+  it("leaves the fill target's verdict empty on a row that never had a fill", async () => {
+    const token = await createToken("fill-none");
+    const anchorAt = new Date(Date.now() - 31 * MINUTE);
+    const row = await seedRow(token.id, anchorAt, 1.0);
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.1 }), env);
+
+    const closed = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(closed.hit2xIn1h).toBe(false);
+    expect(closed.fillPriceUsd).toBeNull();
+    expect(closed.fillWin).toBeNull();
+    expect(closed.fillReturnPct).toBeNull();
   });
 
   it("finalizes a clean winner at the window edge and keeps watching it to 24h", async () => {

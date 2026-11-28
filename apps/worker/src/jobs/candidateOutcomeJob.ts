@@ -4,7 +4,9 @@ import {
   forEachWithConcurrency,
   buildCandidateFeatures,
   initialOutcomeAggregates,
+  applyFillTick,
   applyPriceTick,
+  computeFillLabels,
   computeOutcomeLabels,
   tenXVerdict,
   simulateExitPlan,
@@ -29,6 +31,7 @@ import {
   type Env,
   type DexScreenerClient,
   type ScoredToken,
+  type FillAggregates,
   type OutcomeAggregates,
   SMOOTHED_FINE_TICK_LABEL_RULE,
 } from "@trenchscanner/core";
@@ -315,6 +318,12 @@ const WATCH_ROW_SELECT = {
   trailHighPriceUsd: true,
   trailExitAt: true,
   trailExitPriceUsd: true,
+  fillPriceUsd: true,
+  fillAt: true,
+  fillSource: true,
+  fillHit2xAt: true,
+  fillStoppedAt: true,
+  fillExitPriceUsd: true,
   finalizedAt: true,
   peak1hReturnPct: true,
   maxDrawdown1hPct: true,
@@ -574,6 +583,8 @@ export async function runCandidateWatchJob(
         Math.max(tickAt.getTime(), dollar?.at.getTime() ?? tickAt.getTime()),
       );
       let usedFineTicks = false;
+      // Which of this sweep's ticks are curve-tape prints: the fill target marks its fill by source.
+      const tapeTicks = new Set<{ priceUsd: number; at: Date }>();
       let coveredAdd = 0;
       if (slice) {
         const prices = curveLabelPrices(row.token.mintAddress, slice.afterMs, slice.untilMs);
@@ -602,6 +613,7 @@ export async function runCandidateWatchJob(
             usedFineTicks = true;
             fineTicks += fine.length;
             ticks.push(...fine);
+            for (const t of fine) tapeTicks.add(t);
             ticks.sort((a, b) => a.at.getTime() - b.at.getTime());
           }
         }
@@ -613,12 +625,23 @@ export async function runCandidateWatchJob(
       const priceAt = last?.at ?? tickAt;
 
       // The Prisma row structurally IS an OutcomeAggregates - same field names on purpose.
-      const merged: OutcomeAggregates = { ...row };
+      const merged: OutcomeAggregates & FillAggregates = { ...row };
       const aggUpdates: Partial<OutcomeAggregates> = {};
       for (const t of ticks) {
         const u = applyPriceTick(merged, t.priceUsd, t.at);
         Object.assign(merged, u);
         Object.assign(aggUpdates, u);
+      }
+      // The fill target (curation/fillTarget.ts), folded from the same ticks while the window is
+      // open and written beside the labels. It reads nothing the labels write and they read
+      // nothing of it. An unobserved row (entryAt null) is closed ungraded below, fill and all.
+      const fillUpdates: ReturnType<typeof applyFillTick> = {};
+      if (row.finalizedAt === null) {
+        for (const t of ticks) {
+          const u = applyFillTick(merged, t.priceUsd, t.at, tapeTicks.has(t));
+          Object.assign(merged, u);
+          Object.assign(fillUpdates, u);
+        }
       }
       // The exit plan's trailing exit: armed by the plan's first sale (a tick at the first rung
       // before the stop) inside the window, then moved by every tick until it fires or the hold
@@ -648,6 +671,7 @@ export async function runCandidateWatchJob(
       const data: Prisma.CandidateOutcomeUpdateInput = {
         ...aggUpdates,
         ...trailUpdates,
+        ...fillUpdates,
         lastCheckedAt: priceAt > tickAt ? priceAt : tickAt,
         // Null stays null until a sweep actually had tape inside the window.
         ...(coveredAdd > 0 || row.curveTapeCoveredMs != null
@@ -683,6 +707,7 @@ export async function runCandidateWatchJob(
 
       let extended = row.extended24h;
       let closedLabels: ReturnType<typeof computeOutcomeLabels> | null = null;
+      let fillLabels: ReturnType<typeof computeFillLabels> = null;
       let simReturnPct: number | null = null;
       let finalPeak24hPct: number | null = null;
       let runPeakMinutes: number | null = null;
@@ -718,6 +743,12 @@ export async function runCandidateWatchJob(
           data.hit10xIn1h = tenX;
         }
         data.labelValue = closedLabels.labelValue;
+        // Null when no price was seen after the fill delay: no trade to grade, the columns stay null.
+        fillLabels = computeFillLabels(merged);
+        if (fillLabels) {
+          data.fillWin = fillLabels.fillWin;
+          data.fillReturnPct = fillLabels.fillReturnPct;
+        }
         // The call's return under the fixed exit plan. A call that never sold closes at this
         // tick's price (the first seen at or after the window closed) or, without one, the last
         // price the row saw. The window peak arms an unarmed trail before that close can: a
@@ -876,6 +907,14 @@ export async function runCandidateWatchJob(
                     hit4xIn1h: closedLabels.hit4xIn1h,
                     disqualified: closedLabels.disqualified,
                     simReturnPct,
+                    ...(fillLabels
+                      ? {
+                          fillPriceUsd: merged.fillPriceUsd,
+                          fillSource: merged.fillSource,
+                          fillWin: fillLabels.fillWin,
+                          fillReturnPct: fillLabels.fillReturnPct,
+                        }
+                      : {}),
                   }
                 : {}),
               ...(simSettled ? { simReturnPct } : {}),
@@ -903,6 +942,9 @@ export async function runCandidateWatchJob(
                     hit2xIn1h: closedLabels.hit2xIn1h,
                     hit4xIn1h: closedLabels.hit4xIn1h,
                     disqualified: closedLabels.disqualified,
+                    ...(fillLabels
+                      ? { fillWin: fillLabels.fillWin, fillReturnPct: fillLabels.fillReturnPct }
+                      : {}),
                   }
                 : {}),
               ...(tenX !== null ? { hit10xIn1h: tenX } : {}),
@@ -1034,6 +1076,10 @@ async function repairCuratedVerdicts(): Promise<number> {
           hit10xIn1h: true,
           disqualified: true,
           simReturnPct: true,
+          fillPriceUsd: true,
+          fillSource: true,
+          fillWin: true,
+          fillReturnPct: true,
           peak24hReturnPct: true,
           runPeakMinutes: true,
           finalized24hAt: true,
@@ -1060,6 +1106,10 @@ async function repairCuratedVerdicts(): Promise<number> {
           hit10xIn1h: outcome.hit10xIn1h,
           disqualified: outcome.disqualified,
           simReturnPct: outcome.simReturnPct,
+          fillPriceUsd: outcome.fillPriceUsd,
+          fillSource: outcome.fillSource,
+          fillWin: outcome.fillWin,
+          fillReturnPct: outcome.fillReturnPct,
           ...(outcome.peak24hReturnPct !== null
             ? { peak24hReturnPct: outcome.peak24hReturnPct, runPeakMinutes: outcome.runPeakMinutes }
             : {}),
