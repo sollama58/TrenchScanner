@@ -157,6 +157,9 @@ const BODY_LIMIT_BYTES = 64 * 1024;
  */
 const REQUEST_TIMEOUT_MS = 120_000;
 
+/** How often the api re-reads the mint supplies that have passed their TTL, all in one batch. */
+const SUPPLY_REFRESH_EVERY_MS = 30_000;
+
 export async function buildServer(env: Env): Promise<FastifyInstance> {
   const app = Fastify({
     loggerInstance: fastifyLogger(),
@@ -741,8 +744,12 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // through the same client.
   const walletHelius = env.HELIUS_API_KEY ? new HeliusClient({ apiKey: env.HELIUS_API_KEY }) : null;
   // The chart, live tail, live trades and positions put Pump.fun's launch-billion caps on each coin's
-  // supply now (mintSupply.ts): a mint read, shared by every reader of the coin for a minute.
-  configureMintSupplies(new MintSupplies(walletHelius ?? new HeliusClient({})));
+  // supply now (mintSupply.ts): a mint read, shared by every reader of the coin for a minute. Stale
+  // readings are re-read together twice a minute, not one read per ask (program audit DS-8): the
+  // live tick and open charts ask every few seconds, and a supply only moves on a burn.
+  configureMintSupplies(
+    new MintSupplies(walletHelius ?? new HeliusClient({}), { refreshEveryMs: SUPPLY_REFRESH_EVERY_MS }),
+  );
   // The token chart's live tail follows open charts' curves on its own Helius socket (liveCurve.ts).
   const solPrice = sharedSolPrice;
   // Read once listening, so the first chart answers after a deploy don't wait on three providers

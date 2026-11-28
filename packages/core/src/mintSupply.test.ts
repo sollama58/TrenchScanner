@@ -35,6 +35,37 @@ describe("MintSupplies", () => {
     expect(r.getMintSupplies).toHaveBeenCalledTimes(2);
   });
 
+  it("gathers stale re-reads into one read per refresh interval, and still reads a new mint at once", async () => {
+    // Twelve coins first asked five seconds apart, so their readings run out one after another.
+    const mints = Array.from({ length: 12 }, (_, i) => `m${i}`);
+    const supplies: Record<string, number> = Object.fromEntries(mints.map((m) => [m, 1e9]));
+    supplies.late = 5e8;
+    const r = reader(supplies);
+    let now = 0;
+    const book = new MintSupplies(r, { ttlMs: 60_000, refreshEveryMs: 30_000, now: () => now });
+    for (let i = 0; i < mints.length; i++) {
+      now = i * 5_000;
+      await book.get(mints.slice(0, i + 1));
+    }
+    expect(r.getMintSupplies).toHaveBeenCalledTimes(12);
+    // A tick every 5 s for two minutes. Re-read each at its own expiry, every tick sends a read
+    // (25 of them); gathered, it is one read per 30 s carrying every coin that went stale since.
+    supplies.m0 = 9e8;
+    for (now = 60_000; now <= 180_000; now += 5_000) {
+      await book.get(mints);
+      // Let the read land before the next tick.
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    const calls = r.getMintSupplies.mock.calls.slice(12).map(([asked]) => asked.length);
+    expect(calls.length).toBe(5);
+    expect(Math.max(...calls)).toBeGreaterThan(1);
+    // The burn was read, late by no more than the refresh interval.
+    expect((await book.get(["m0"])).get("m0")).toBe(9e8);
+    // A coin never read before does not wait for the next refresh.
+    expect((await book.get(["late"])).get("late")).toBe(5e8);
+    expect(r.getMintSupplies.mock.calls.at(-1)![0]).toEqual(["late"]);
+  });
+
   it("keeps the last reading when a re-read fails, and leaves out a mint never read", async () => {
     let fail = false;
     const r = {
