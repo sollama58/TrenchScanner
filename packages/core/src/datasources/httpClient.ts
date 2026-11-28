@@ -57,6 +57,16 @@ export interface FetchJsonOptions extends RequestInit {
     refused?(url: string, headers: Headers): void;
     /** The provider answered this URL with anything but a 403 (a probe got through). */
     answered?(url: string): void;
+    /**
+     * A removed-route breaker (PumpFunGate): the status this URL's endpoint answered when the
+     * provider said the route itself no longer exists, while that still holds; the request then
+     * fails with that status without being sent. Null otherwise.
+     */
+    goneRecently?(url: string): number | null;
+    /** The provider answered that this URL's route no longer exists (see routeGone). */
+    gone?(url: string, status: number): void;
+    /** The provider answered this URL with a 2xx: a route held as removed is back. */
+    back?(url: string): void;
   };
 }
 
@@ -126,6 +136,10 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
   if (gate?.refusedRecently?.(url)) {
     throw new HttpError(403, safeUrl, `HTTP 403 for ${safeUrl} (held back: refused moments ago)`);
   }
+  const goneStatus = gate?.goneRecently?.(url) ?? null;
+  if (goneStatus !== null) {
+    throw new HttpError(goneStatus, safeUrl, `HTTP ${goneStatus} for ${safeUrl} (held back: route removed)`);
+  }
 
   let attempt = 0;
   while (true) {
@@ -159,8 +173,15 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
       if (res.status === 403) gate?.refused?.(url, res.headers);
       else gate?.answered?.(url);
       if (res.ok) {
+        gate?.back?.(url);
         onHeaders?.(res.headers);
         return JSON.parse(await readCappedText(res, safeUrl)) as T;
+      }
+      if (gate?.gone && (res.status === 404 || res.status === 410)) {
+        // Read once here: the body tells a removed route from a coin the provider does not have.
+        const body = await readErrorBody(res);
+        if (routeGone(res.status, body)) gate.gone(url, res.status);
+        throw new HttpError(res.status, safeUrl, undefined, errorBody ? body : undefined);
       }
       if (errorBody && res.status >= 400 && res.status < 500 && res.status !== 429) {
         throw new HttpError(res.status, safeUrl, undefined, await readErrorBody(res));
@@ -214,6 +235,19 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
 export const ERROR_BODY_MAX_CHARS = 512;
 
 /** The start of an error response's body, or undefined when it can't be read. Never throws. */
+/**
+ * Whether an answer says the route itself is gone, not the thing asked for: a 410, or the 404 a
+ * Node router sends for a path it has no handler for ("Cannot GET /coins-v2/<mint>"). Pump.fun
+ * removed four routes this way on 2026-11-16 (program audit 2026-11-28): every caller read the 404
+ * as "no such coin", so about 52,000 calls a day went on failing for twelve days with no alarm.
+ * A missing coin answers 404 with its own message ("Coin not found for address"), which this
+ * leaves alone.
+ */
+export function routeGone(status: number, body: string | undefined): boolean {
+  if (status === 410) return true;
+  return status === 404 && body !== undefined && /Cannot (GET|POST|PUT|DELETE|PATCH) \//.test(body);
+}
+
 async function readErrorBody(res: Response): Promise<string | undefined> {
   try {
     const text = await readCappedText(res, "");

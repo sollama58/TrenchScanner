@@ -4,6 +4,7 @@ import {
   endpointOf,
   PumpFunGate,
   pumpFunFrontendGate,
+  GONE_PAUSE_MS,
   REFUSED_MAX_PAUSE_MS,
   refusedPauseFor,
   takePumpFunGateStats,
@@ -25,6 +26,8 @@ describe("PumpFunGate", () => {
       refused: 0,
       heldBackRefused: 0,
       challenged: 0,
+      gone: 0,
+      heldBackGone: 0,
     });
   });
 
@@ -114,6 +117,33 @@ describe("PumpFunGate", () => {
       frontendChallenged: 1,
       swapChallenged: 0,
     });
+  });
+
+  it("holds a removed route back with its own status, asks again after the pause, and frees it on an answer", () => {
+    let now = 0;
+    const gate = new PumpFunGate("test", 600, 10, 30_000, () => now);
+    const v2 = "https://frontend-api-v3.pump.fun/coins-v2/" + "A".repeat(44);
+    const v2other = "https://frontend-api-v3.pump.fun/coins-v2/" + "B".repeat(44);
+    const v3 = "https://frontend-api-v3.pump.fun/coins-v3/" + "A".repeat(44);
+    expect(gate.goneRecently(v2)).toBeNull();
+    gate.gone(v2, 404);
+    // Every coin on the removed route is held; the route beside it is not.
+    expect(gate.goneRecently(v2)).toBe(404);
+    expect(gate.goneRecently(v2other)).toBe(404);
+    expect(gate.goneRecently(v3)).toBeNull();
+    expect(gate.goneEndpoints()).toEqual(["frontend-api-v3.pump.fun/coins-v2/*"]);
+
+    now = GONE_PAUSE_MS; // one request goes out to ask, the rest still wait for its answer
+    expect(gate.goneRecently(v2)).toBeNull();
+    expect(gate.goneRecently(v2other)).toBe(404);
+    gate.gone(v2, 404); // still removed: held for another pause
+    now += GONE_PAUSE_MS - 1;
+    expect(gate.goneRecently(v2)).toBe(404);
+
+    gate.back(v2);
+    expect(gate.goneRecently(v2)).toBeNull();
+    expect(gate.goneEndpoints()).toEqual([]);
+    expect(gate.takeStats()).toMatchObject({ gone: 2, heldBackGone: 4 });
   });
 
   it("names an endpoint by its path with the coin left out", () => {

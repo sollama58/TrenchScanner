@@ -249,7 +249,7 @@ describe("PumpFunClient.charityName", () => {
     return `http://127.0.0.1:${address.port}`;
   }
 
-  it("loads the charity name from coins-v2", async () => {
+  it("loads the charity name from coins-v3", async () => {
     const url = await serveCoin(200, {
       mint: "m",
       is_charity: true,
@@ -326,7 +326,7 @@ describe("PumpFunClient.liveMarketCap", () => {
   it("reads the coin's usd_market_cap from the single-coin endpoint", async () => {
     const { url, paths } = await serveCoin({ mint: "m", usd_market_cap: 13_164.2 });
     expect(await new PumpFunClient({ baseUrl: url }).liveMarketCap("m")).toBe(13_164.2);
-    expect(paths).toEqual(["/coins-v2/m"]);
+    expect(paths).toEqual(["/coins-v3/m"]);
   });
 
   it("is null for an unknown coin or one with no usable figure, and throws on a server error", async () => {
@@ -384,7 +384,7 @@ describe("PumpFunClient.coinDetails", () => {
   it("reads one coin's description and socials", async () => {
     server = createServer((req, res) => {
       res.setHeader("content-type", "application/json");
-      if (req.url === "/coins-v2/Mint1") {
+      if (req.url === "/coins-v3/Mint1") {
         res.end(
           JSON.stringify({ mint: "Mint1", symbol: "ONE", description: "hi", twitter: "https://x.com/one" }),
         );
@@ -405,6 +405,21 @@ describe("PumpFunClient.coinDetails", () => {
       twitterUrl: "https://x.com/one",
     });
     expect(await client.coinDetails("Missing")).toBeNull();
+  });
+});
+
+describe("PumpFunClient.coinTrades", () => {
+  it("reads the retired trades route's 410 as no coin, as its 404 was", async () => {
+    server = createServer((_req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.statusCode = 410;
+      res.end(JSON.stringify({ statusCode: 410, message: "This endpoint has been deprecated" }));
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const client = new PumpFunClient({
+      swapBaseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    });
+    expect(await client.coinTrades("Mint1", "0")).toBeNull();
   });
 });
 

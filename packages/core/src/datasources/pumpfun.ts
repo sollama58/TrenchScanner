@@ -259,6 +259,11 @@ export class PumpFunClient {
   }
 
   /**
+   * The single-coin endpoint is `/coins-v3/<mint>` since 2026-11-16: Pump.fun removed
+   * `/coins-v2/<mint>` that day (a router 404, "Cannot GET") and serves the same fields, and more,
+   * one version on (program audit 2026-11-28, checked against a live answer). Launch details,
+   * launch times, live market caps, charity names and the tape's coin lookup all read it.
+   *
    * One coin as the single-coin endpoint reports it - the same fields the coin list gives
    * (description, socials, image, launch time, Mayhem flag), for a launch the list didn't show.
    * Null when Pump.fun has no such coin; throws on a transport failure.
@@ -266,7 +271,7 @@ export class PumpFunClient {
   async coinDetails(mintAddress: string, timeoutMs = 4_000): Promise<DiscoveredCoin | null> {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
-        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        `${this.baseUrl}/coins-v3/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
 
@@ -294,7 +299,7 @@ export class PumpFunClient {
   async charityShares(mintAddress: string, timeoutMs = 2_500): Promise<PumpCharityShare[]> {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
-        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        `${this.baseUrl}/coins-v3/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
 
@@ -354,7 +359,7 @@ export class PumpFunClient {
   async launchTime(mintAddress: string): Promise<Date | null> {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
-        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        `${this.baseUrl}/coins-v3/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
 
@@ -379,7 +384,7 @@ export class PumpFunClient {
   async liveMarketCap(mintAddress: string, timeoutMs = 2_000): Promise<number | null> {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
-        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        `${this.baseUrl}/coins-v3/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
 
@@ -426,7 +431,11 @@ export class PumpFunClient {
       );
       return tradesFromPumpFun(body);
     } catch (err) {
-      if (err instanceof HttpError && err.status === 404) return null;
+      // 410: Pump.fun retired this route on 2026-11-16 ("This endpoint has been deprecated and is
+      // no longer available", program audit 2026-11-28). Read as "no such coin", which is what the
+      // trade tape's lane already got from its coin lookup while that route was gone too, so the
+      // lane behaves as it did until its own change lands (the owner's decision: Helius credits).
+      if (err instanceof HttpError && (err.status === 404 || err.status === 410)) return null;
       throw err;
     }
   }
@@ -438,7 +447,7 @@ export class PumpFunClient {
   async coinOrigin(mintAddress: string): Promise<{ creator: string | null; createdAt: Date | null } | null> {
     try {
       const coin = await fetchJson<(PumpFunCoin & { creator?: unknown }) | null>(
-        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        `${this.baseUrl}/coins-v3/${encodeURIComponent(mintAddress)}`,
         {
           gate: this.frontendGate,
 
