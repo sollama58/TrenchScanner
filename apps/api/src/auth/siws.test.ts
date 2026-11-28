@@ -205,6 +205,135 @@ describe.skipIf(!dbAvailable)("POST /auth/verify, legacy signMessage path", () =
   });
 });
 
+/**
+ * The preferred wallet.signIn() path of POST /auth/verify, end to end. Nothing ran
+ * verifySignInAndConsumeNonce past its nonce lookup, nor the route's `method: "signIn"` branch
+ * (program audit 2026-11-28, CH-1): the check that the signing key is the claimed wallet could be
+ * dropped with every api test still green, and anyone holding a nonce for a wallet could then
+ * sign in as it with a key of their own.
+ */
+describe.skipIf(!dbAvailable)("POST /auth/verify, wallet.signIn path", () => {
+  let app: FastifyInstance;
+  const wallets: string[] = [];
+  const env = loadEnv({ ...process.env });
+  const domain = appDomainForOrigin(env, undefined);
+
+  beforeAll(async () => {
+    app = await buildServer(env);
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    if (!dbAvailable) return;
+    await prisma.authNonce.deleteMany({ where: { walletAddress: { in: wallets } } });
+    await prisma.user.deleteMany({ where: { walletAddress: { in: wallets } } });
+  });
+
+  function newWallet() {
+    const kp = nacl.sign.keyPair();
+    const wallet = bs58.encode(kp.publicKey);
+    wallets.push(wallet);
+    return { kp, wallet };
+  }
+
+  async function issue(wallet: string) {
+    const res = await app.inject({ method: "POST", url: "/auth/nonce", payload: { wallet } });
+    expect(res.statusCode).toBe(200);
+    const { nonce } = res.json() as { nonce: string };
+    const row = await prisma.authNonce.findUniqueOrThrow({ where: { nonce } });
+    return { nonce, issuedAt: row.createdAt };
+  }
+
+  /** What wallet.signIn() returns over the wire: the sign-in text for `address`, signed by `kp`. */
+  function signIn(address: string, nonce: string, issuedAt: Date, forDomain: string, kp: nacl.SignKeyPair) {
+    const input = buildSignInInput(
+      address,
+      nonce,
+      issuedAt,
+      forDomain,
+    ) as SolanaSignInInputWithRequiredFields;
+    const signedMessage = createSignInMessage(input);
+    return {
+      signedMessage: bs58.encode(signedMessage),
+      signature: bs58.encode(nacl.sign.detached(signedMessage, kp.secretKey)),
+    };
+  }
+
+  const verify = (
+    walletAddress: string,
+    nonce: string,
+    output: { publicKey: string; signedMessage: string; signature: string },
+  ) =>
+    app.inject({
+      method: "POST",
+      url: "/auth/verify",
+      payload: { method: "signIn", walletAddress, nonce, output },
+    });
+
+  async function expectRefused(res: Awaited<ReturnType<typeof verify>>, nonce: string) {
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: "bad_signature" });
+    expect(res.cookies.length).toBe(0);
+    // A refused sign-in must not spend the nonce: the real owner can still use it.
+    const row = await prisma.authNonce.findUniqueOrThrow({ where: { nonce } });
+    expect(row.usedAt).toBeNull();
+  }
+
+  it("signs in with the wallet's own signIn output, once", async () => {
+    const { kp, wallet } = newWallet();
+    const { nonce, issuedAt } = await issue(wallet);
+    const output = { publicKey: wallet, ...signIn(wallet, nonce, issuedAt, domain, kp) };
+
+    const ok = await verify(wallet, nonce, output);
+    expect(ok.statusCode).toBe(200);
+    expect((ok.json() as { sessionToken?: string }).sessionToken).toBeTruthy();
+    expect(await prisma.user.findUnique({ where: { walletAddress: wallet } })).not.toBeNull();
+
+    // The same output a second time is a replay.
+    const replay = await verify(wallet, nonce, output);
+    expect(replay.statusCode).toBe(401);
+    expect(replay.json()).toEqual({ error: "nonce_used" });
+  });
+
+  it("refuses the victim's sign-in text signed by, and presented with, another key", async () => {
+    // The message says the victim's address and its signature is a true one by the attacker's
+    // key: the library's verifySignIn alone passes this. Only the key-to-wallet check stops it.
+    const victim = newWallet();
+    const attacker = nacl.sign.keyPair();
+    const { nonce, issuedAt } = await issue(victim.wallet);
+    const output = {
+      publicKey: bs58.encode(attacker.publicKey),
+      ...signIn(victim.wallet, nonce, issuedAt, domain, attacker),
+    };
+    await expectRefused(await verify(victim.wallet, nonce, output), nonce);
+    expect(await prisma.user.findUnique({ where: { walletAddress: victim.wallet } })).toBeNull();
+  });
+
+  it("refuses the victim's key named with a signature the victim did not make", async () => {
+    const victim = newWallet();
+    const attacker = nacl.sign.keyPair();
+    const { nonce, issuedAt } = await issue(victim.wallet);
+    const output = { publicKey: victim.wallet, ...signIn(victim.wallet, nonce, issuedAt, domain, attacker) };
+    await expectRefused(await verify(victim.wallet, nonce, output), nonce);
+  });
+
+  it("refuses a sign-in the wallet made for another domain (phishing page)", async () => {
+    const { kp, wallet } = newWallet();
+    const { nonce, issuedAt } = await issue(wallet);
+    const output = { publicKey: wallet, ...signIn(wallet, nonce, issuedAt, "phishing-site.example", kp) };
+    await expectRefused(await verify(wallet, nonce, output), nonce);
+  });
+
+  it("refuses a sign-in over another nonce, and output that is not base58", async () => {
+    const { kp, wallet } = newWallet();
+    const { nonce, issuedAt } = await issue(wallet);
+    const other = { publicKey: wallet, ...signIn(wallet, "0".repeat(32), issuedAt, domain, kp) };
+    await expectRefused(await verify(wallet, nonce, other), nonce);
+    const junk = { publicKey: wallet, signedMessage: "not-base58-0OIl", signature: "not-base58-0OIl" };
+    await expectRefused(await verify(wallet, nonce, junk), nonce);
+  });
+});
+
 function randomWallet(): string {
   return bs58.encode(nacl.sign.keyPair().publicKey);
 }
