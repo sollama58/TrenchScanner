@@ -64,6 +64,9 @@ const CALL_SELECT = {
   peak24hReturnPct: true,
   runPeakMinutes: true,
   outcomeFinalizedAt: true,
+  fillPriceUsd: true,
+  fillWin: true,
+  fillReturnPct: true,
   candidateOutcome: {
     select: { ...curatedAlertInclude.candidateOutcome.select, simReturnPct: true },
   },
@@ -90,6 +93,15 @@ interface GradedAlert {
   calledAt: Date | null;
   /** When it first reached 2x of its anchor, if it has (the grading row's hit2xAt). */
   hit2xAt: Date | null;
+}
+
+/** When the 2x the verdict counts landed: the fill target's when the verdict is its (outcome.target). */
+function winAt(
+  outcome: { target?: unknown },
+  row: { hit2xAt: Date | null; fillHit2xAt?: Date | null } | null,
+): Date | null {
+  if (!row) return null;
+  return outcome.target ? (row.fillHit2xAt ?? null) : row.hit2xAt;
 }
 
 /**
@@ -203,7 +215,7 @@ async function gradedAlerts(chatRowId: string, since: Date, only?: { tokenId: st
         returnPct: call.simReturnPct ?? call.candidateOutcome?.simReturnPct ?? null,
         tracking: call.candidateOutcome !== null && call.candidateOutcome.finalized24hAt === null,
         calledAt: call.createdAt,
-        hit2xAt: call.candidateOutcome?.hit2xAt ?? null,
+        hit2xAt: winAt(outcome, call.candidateOutcome),
       });
       continue;
     }
@@ -225,7 +237,7 @@ async function gradedAlerts(chatRowId: string, since: Date, only?: { tokenId: st
         tracking: row !== null && row.finalized24hAt === null,
         // Priced from a fresh quote: its readings from the first minute lag behind it, as a call's.
         calledAt: match.alertMcapUsd !== null ? match.matchedAt : null,
-        hit2xAt: row?.hit2xAt ?? null,
+        hit2xAt: winAt(outcome, row),
       });
       continue;
     }

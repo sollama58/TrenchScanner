@@ -8,7 +8,9 @@ import {
   dataOutagesBetween,
   describeExitPlan,
   HEURISTIC_CURATOR_SOURCE,
-  WIN_WINDOW_MINUTES,
+  describeWinTarget,
+  winTargetRule,
+  wonSql,
   GOAL_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
   REPORTED_LABEL_RULE,
@@ -317,7 +319,7 @@ export async function baselineRates(
   const [row] = await prisma.$queryRaw<RawCounts[]>`
     SELECT count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["co."])}) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
@@ -724,8 +726,7 @@ export async function buildHitRateReport(
   const curatedCountCols = Prisma.sql`
            count(*) AS calls,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h")
-                              AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["a.", "co."])}) AS won2x,
            count(*) FILTER (WHERE COALESCE(a."hit4xIn1h", co."hit4xIn1h")) AS won4x,
            count(*) FILTER (WHERE COALESCE(a."hit10xIn1h", co."hit10xIn1h")) AS won10x,
            count(*) FILTER (WHERE COALESCE(a."hit2xIn1h", co."hit2xIn1h") IS NOT NULL
@@ -787,7 +788,7 @@ export async function buildHitRateReport(
   const shadowCountCols = Prisma.sql`
            count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["co."])}) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
@@ -817,12 +818,14 @@ export async function buildHitRateReport(
       SELECT a."source", a."confidence",
              COALESCE(a."hit2xIn1h", co."hit2xIn1h") AS hit2x,
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
-             COALESCE(a."disqualified", co."disqualified") AS dq
+             COALESCE(a."disqualified", co."disqualified") AS dq,
+             ${wonSql(["a.", "co."])} AS won
       FROM "CuratedAlert" a
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
       UNION ALL
-      SELECT s."source", s."confidence", co."hit2xIn1h", co."hit4xIn1h", co."disqualified"
+      SELECT s."source", s."confidence", co."hit2xIn1h", co."hit4xIn1h", co."disqualified",
+             ${wonSql(["co."])}
       FROM "CuratedShadowEmission" s
       LEFT JOIN "CandidateOutcome" co ON co."id" = s."candidateOutcomeId"
       WHERE s."createdAt" >= ${since} AND s."createdAt" < ${until}
@@ -831,7 +834,7 @@ export async function buildHitRateReport(
            (LEAST(GREATEST(floor("confidence" / 10), 0), 9) * 10)::int AS band,
            count(*) AS calls,
            count(*) FILTER (WHERE hit2x IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE hit2x AND NOT COALESCE(dq, false)) AS won2x,
+           count(*) FILTER (WHERE won) AS won2x,
            count(*) FILTER (WHERE hit4x) AS won4x,
            count(*) FILTER (WHERE dq) AS doubled_after_stop
     FROM calls
@@ -843,7 +846,7 @@ export async function buildHitRateReport(
            COALESCE(r."decision", 'error') AS decision,
            count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["co."])}) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
@@ -861,7 +864,7 @@ export async function buildHitRateReport(
     SELECT (LEAST(GREATEST(floor(r."probability2x" * 10), 0), 9) * 10)::int AS band,
            count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["co."])}) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
@@ -922,7 +925,7 @@ export async function buildHitRateReport(
              f."name" AS name,
              count(*) AS calls,
              count(*) FILTER (WHERE m."hit2xIn1h" IS NOT NULL) AS graded,
-             count(*) FILTER (WHERE m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)) AS won2x,
+             count(*) FILTER (WHERE ${wonSql(["m."])}) AS won2x,
              count(*) FILTER (WHERE m."hit4xIn1h") AS won4x,
              count(*) FILTER (WHERE m."hit10xIn1h") AS won10x,
              count(*) FILTER (WHERE m."hit2xIn1h" IS NOT NULL
@@ -936,13 +939,15 @@ export async function buildHitRateReport(
                                                 AND o."finalized24hAt" IS NOT NULL
                                                 AND o."finalizedAt" IS NULL))) AS ungradable
       FROM (
-        SELECT "filterId", "matchedAt", "candidateOutcomeId", "hit2xIn1h", "hit4xIn1h", "hit10xIn1h", "disqualified"
+        SELECT "filterId", "matchedAt", "candidateOutcomeId", "hit2xIn1h", "hit4xIn1h", "hit10xIn1h", "disqualified", "fillWin"
         FROM "Match"
         WHERE "matchedAt" >= ${since} AND "matchedAt" < ${until}
         -- Matches older than MATCH_ARCHIVE_DAYS were moved here by the cleanup, verdicts included;
         -- this report reaches back MAX_WINDOW_DAYS.
         UNION ALL
-        SELECT "filterId", "matchedAt", "candidateOutcomeId", "hit2xIn1h", "hit4xIn1h", "hit10xIn1h", "disqualified"
+        SELECT "filterId", "matchedAt", "candidateOutcomeId", "hit2xIn1h", "hit4xIn1h", "hit10xIn1h", "disqualified",
+               -- The archive predates the fill target and carries no verdict on it.
+               NULL::boolean AS "fillWin"
         FROM "MatchArchive"
         WHERE "matchedAt" >= ${since} AND "matchedAt" < ${until}
       ) m
@@ -956,7 +961,7 @@ export async function buildHitRateReport(
     SELECT co."sampleKind" AS kind,
            count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["co."])}) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
@@ -1099,7 +1104,10 @@ export async function buildHitRateReport(
     // (the screen fails closed), so a window holding one has fewer calls than its length says.
     dataOutages: await dataOutagesBetween(since, until),
     rules: {
-      win: `2x on the alert price within ${WIN_WINDOW_MINUTES} minutes of the alert, without first falling 50% below it`,
+      // The rule the 2x rates in this report follow (WIN_TARGET_RULE; core's curation/winTarget.ts).
+      // The 4x and 10x tiers, the stop-out count and the run peaks stay on the alert price.
+      win: describeWinTarget(),
+      winRule: winTargetRule(),
       goal: `4x on the alert price within ${GOAL_WINDOW_MINUTES} minutes of the alert, same stop`,
       windowsNote:
         "The windows were 1 hour each until 2026-10-05; older alerts were re-graded under the current windows from their recorded price path.",

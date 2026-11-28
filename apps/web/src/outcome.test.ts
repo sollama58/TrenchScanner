@@ -45,6 +45,17 @@ describe("outcomeAt", () => {
     });
   });
 
+  it("counts down the window the API says the call is graded on", () => {
+    const target = { rule: "fill30", windowMinutes: 30, stopPct: 30, fillPriceUsd: 1, returnPct: null };
+    // 17 minutes in: past the classic window, 13 minutes left on the 30-minute one.
+    expect(outcomeAt(watching({ target }), at(17), now)).toMatchObject({
+      status: "watching",
+      minutesLeft: 13,
+    });
+    expect(outcomeAt(watching({ target }), at(31), now)).toBeNull();
+    expect(minutesLeftAt(at(6), now, 30)).toBe(24);
+  });
+
   it("reads a watching answer whose window has run out as grading", () => {
     expect(outcomeAt(watching({ minutesLeft: 1 }), at(17), now)).toBeNull();
   });

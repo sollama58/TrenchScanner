@@ -544,6 +544,18 @@ export interface Outcome {
   runPeakMinutes?: number | null;
   finalized: boolean;
   minutesLeft: number | null;
+  /**
+   * Present when the verdict is graded on the fill target (the API's WIN_TARGET_RULE=fill30): the
+   * window the card counts down, the stop, the fill the 2x is measured from and, once the trade
+   * is out, its return after costs. Absent on the classic rule and from older API builds.
+   */
+  target?: {
+    rule: string;
+    windowMinutes: number;
+    stopPct: number;
+    fillPriceUsd: number | null;
+    returnPct: number | null;
+  };
 }
 
 export interface AdminAiReview {

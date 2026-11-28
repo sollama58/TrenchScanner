@@ -70,10 +70,13 @@ export function stoppedThenRan(outcome: Outcome): boolean {
   );
 }
 
-/** Whole minutes left in the win window at `now`, never below zero. */
-export function minutesLeftAt(alertedAt: string, now: number): number {
+/**
+ * Whole minutes left in the win window at `now`, never below zero. The window is the classic 15
+ * minutes unless the API says the call is graded on another one (Outcome.target.windowMinutes).
+ */
+export function minutesLeftAt(alertedAt: string, now: number, windowMin = WIN_WINDOW_MIN): number {
   const minutesIn = (now - new Date(alertedAt).getTime()) / 60_000;
-  return Math.max(0, Math.ceil(WIN_WINDOW_MIN - minutesIn));
+  return Math.max(0, Math.ceil(windowMin - minutesIn));
 }
 
 /**
@@ -91,7 +94,7 @@ export function outcomeAt(
   // A call whose grading row is gone (or a card from a build that sends none) has no verdict yet.
   if (!outcome) return null;
   if (outcome.status !== "watching") return outcome;
-  const minutesLeft = minutesLeftAt(alertedAt, now);
+  const minutesLeft = minutesLeftAt(alertedAt, now, outcome.target?.windowMinutes);
   if (minutesLeft > 0) return { ...outcome, minutesLeft };
   return outcome.hit2x ? { ...outcome, minutesLeft: 0 } : null;
 }

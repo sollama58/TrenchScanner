@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setWinTargetRule } from "@trenchscanner/core";
 import {
   callPeakAt,
   callPeakPct,
@@ -771,5 +772,131 @@ describe("foldedCallPeakPct", () => {
     expect(foldedCallPeakPct({ peakMcapUsd: 60_000, peakAt: at(-40) }, T0, 30_000)).toBeNull();
     expect(foldedCallPeakPct({ peakMcapUsd: 60_000, peakAt: null }, T0, 30_000)).toBeNull();
     expect(foldedCallPeakPct({ peakMcapUsd: null, peakAt: at(10) }, T0, 30_000)).toBeNull();
+  });
+});
+
+// ── resolveOutcome on the fill target (WIN_TARGET_RULE=fill30) ───────────
+
+describe("resolveOutcome on the fill target", () => {
+  afterEach(() => setWinTargetRule("classic"));
+
+  // Doubled on the alert price inside 15 minutes, but the buyer filled higher and was stopped.
+  const classicWinFillStop = () =>
+    alert({
+      candidateOutcome: liveRow({
+        anchorAt: minutesAgo(40),
+        hit2xAt: minutesAgo(35),
+        finalizedAt: minutesAgo(10),
+        hit2xIn1h: true,
+        hit4xIn1h: true,
+        disqualified: false,
+        fillPriceUsd: 1.3,
+        fillStoppedAt: minutesAgo(38),
+        fillWin: false,
+        fillReturnPct: -32.1,
+      }),
+    });
+
+  it("leaves the verdict alone while the switch is off", () => {
+    const view = resolveOutcome(classicWinFillStop());
+    expect(view.status).toBe("won");
+    expect(view.target).toBeUndefined();
+  });
+
+  it("reads a finalized row's fill verdict: a stop-out, with the fill and the return", () => {
+    setWinTargetRule("fill30");
+    const view = resolveOutcome(classicWinFillStop());
+    expect(view).toMatchObject({ status: "disqualified", hit2x: false, hitGoal: false, hitTenX: false });
+    expect(view.target).toEqual({
+      rule: "fill30",
+      windowMinutes: 30,
+      stopPct: 30,
+      fillPriceUsd: 1.3,
+      returnPct: -32.1,
+    });
+  });
+
+  it("reads the copy on the alert once the grading row is gone, telling a stop from a time-out", () => {
+    setWinTargetRule("fill30");
+    const copy = (fillWin: boolean, fillReturnPct: number) =>
+      resolveOutcome(
+        alert({
+          candidateOutcome: null,
+          hit2xIn1h: false,
+          hit4xIn1h: false,
+          disqualified: false,
+          outcomeFinalizedAt: minutesAgo(5),
+          fillPriceUsd: 1.01,
+          fillWin,
+          fillReturnPct,
+        }),
+      ).status;
+    expect(copy(true, 94)).toBe("won");
+    expect(copy(false, -40)).toBe("disqualified");
+    expect(copy(false, -12)).toBe("missed");
+  });
+
+  it("counts down 30 minutes, past the classic window, until the fill settles", () => {
+    setWinTargetRule("fill30");
+    // 20 minutes in: the classic window closed as a miss, the fill target still has 10 minutes.
+    const open = resolveOutcome(
+      alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(20), fillPriceUsd: 1.01 }) }),
+    );
+    expect(open).toMatchObject({ status: "watching", hit2x: false, minutesLeft: 10 });
+    expect(open.target?.fillPriceUsd).toBe(1.01);
+
+    const won = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(20),
+          fillPriceUsd: 1.01,
+          fillHit2xAt: minutesAgo(2),
+        }),
+      }),
+    );
+    expect(won).toMatchObject({ status: "won", hit2x: true, minutesLeft: null });
+
+    const stopped = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(3),
+          fillPriceUsd: 1.01,
+          fillStoppedAt: minutesAgo(1),
+        }),
+      }),
+    );
+    expect(stopped).toMatchObject({ status: "disqualified", minutesLeft: null });
+
+    const timedOut = resolveOutcome(
+      alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(31), fillPriceUsd: 1.01 }) }),
+    );
+    expect(timedOut).toMatchObject({ status: "missed", minutesLeft: null });
+  });
+
+  it("waits for a fill in the first minutes, then falls back to the classic verdict", () => {
+    setWinTargetRule("fill30");
+    const waiting = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(1) }) }));
+    expect(waiting).toMatchObject({ status: "watching", minutesLeft: 29 });
+    expect(waiting.target?.fillPriceUsd).toBeNull();
+
+    // No price in the minutes a buyer would have bought in: no fill, so the classic view stands.
+    const noFill = resolveOutcome(alert({ candidateOutcome: liveRow({ anchorAt: minutesAgo(6) }) }));
+    expect(noFill).toMatchObject({ status: "watching", minutesLeft: 9 });
+    expect(noFill.target).toBeUndefined();
+
+    const gradedNoFill = resolveOutcome(
+      alert({
+        candidateOutcome: liveRow({
+          anchorAt: minutesAgo(40),
+          hit2xAt: minutesAgo(35),
+          finalizedAt: minutesAgo(10),
+          hit2xIn1h: true,
+          hit4xIn1h: false,
+          disqualified: false,
+        }),
+      }),
+    );
+    expect(gradedNoFill.status).toBe("won");
+    expect(gradedNoFill.target).toBeUndefined();
   });
 });

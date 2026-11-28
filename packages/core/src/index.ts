@@ -79,6 +79,7 @@ export * from "./curation/features.js";
 export * from "./curation/narrativeFeatures.js";
 export * from "./curation/labels.js";
 export * from "./curation/fillTarget.js";
+export * from "./curation/winTarget.js";
 export * from "./curation/profitSim.js";
 export * from "./curation/regrade.js";
 export * from "./curation/candlePeak.js";
