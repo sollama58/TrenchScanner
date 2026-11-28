@@ -637,6 +637,203 @@ export function chainWindowFlow(
 }
 
 /**
+ * Second-level trade shape just before a decision (program audit 2026-11-28, signal study SG-1;
+ * owner pick on card 4, "record and feed at next retrain"). The study built 53 readings from the
+ * trades before a call; added to the models' inputs they lifted the top 20% of called coins from
+ * 28.5% to 30.9-33.4% at matched volume, the holdout agreeing in direction. What carried it: who
+ * has already sold out, seconds since the last trade, the median buy size and net SOL of the last
+ * 30 to 60 seconds, and how much the top five hold. These are those, read from the page of newest
+ * trades the worker's live tape already holds for the coin: no new read, no new credits.
+ *
+ * Two cautions from the study shape the fields:
+ * - Half the gain sat in the last 5 seconds, so a stale page is a different reading. Everything is
+ *   as of when the page was read, and the caller stamps the page's age (shapeAgeSec) beside it.
+ * - A model can learn "the tape is complete" in place of the market, and the busiest coins (whose
+ *   page is the shortest slice of time) win most. So nothing goes null because a coin is busy: a
+ *   page that does not reach back a full window reads over the span it covers, counts scaled to
+ *   the window, and shapeTrades and shapeWholeHistory say what the reading stood on.
+ */
+export interface TradeShapeFeatures {
+  /** Seconds between the page's read and the decision; set by the caller (the worker). */
+  shapeAgeSec: number | null;
+  /** Trades on the page the reading stood on. */
+  shapeTrades: number | null;
+  /** 1 when the page is the coin's whole history, 0 when older trades lie behind it. */
+  shapeWholeHistory: number | null;
+  /** Seconds from the coin's last trade to the page's read: whether buying is still arriving. */
+  shapeSecSinceTrade: number | null;
+  /** Buys in the last 30 s / minute, and sells in the last minute (scaled on a shorter page). */
+  shapeBuys30s: number | null;
+  shapeBuys1m: number | null;
+  shapeSells1m: number | null;
+  /** Distinct wallets that bought in the last minute (not scaled). */
+  shapeBuyers1m: number | null;
+  /** SOL bought minus SOL sold over the last 30 s / minute (scaled on a shorter page). */
+  shapeNetSol30s: number | null;
+  shapeNetSol1m: number | null;
+  /** The median buy over the last 30 s / minute, in SOL; null with no buy. */
+  shapeMedBuySol30s: number | null;
+  shapeMedBuySol1m: number | null;
+  /** Share of the last minute's buy SOL that came in buys of SHAPE_BIG_BUY_SOL or more, 0-1. */
+  shapeBigBuyShare1m: number | null;
+  /** The biggest buyer's share of the last minute's buy SOL, 0-1. */
+  shapeTopBuyerShare1m: number | null;
+  /** Buys in the newer half of the last minute against the older half: (n + 1) / (m + 1). */
+  shapeBuyAccel30s: number | null;
+  /**
+   * Of the wallets that bought on the page, the share left with SHAPE_SOLD_OUT_SHARE or less of
+   * what they bought on it, 0-1.
+   */
+  shapeSoldOutShare: number | null;
+  /** The five largest bags built on the page, as a share of every bag built on it, 0-1. */
+  shapeTop5HoldShare: number | null;
+}
+
+export const EMPTY_TRADE_SHAPE: TradeShapeFeatures = {
+  shapeAgeSec: null,
+  shapeTrades: null,
+  shapeWholeHistory: null,
+  shapeSecSinceTrade: null,
+  shapeBuys30s: null,
+  shapeBuys1m: null,
+  shapeSells1m: null,
+  shapeBuyers1m: null,
+  shapeNetSol30s: null,
+  shapeNetSol1m: null,
+  shapeMedBuySol30s: null,
+  shapeMedBuySol1m: null,
+  shapeBigBuyShare1m: null,
+  shapeTopBuyerShare1m: null,
+  shapeBuyAccel30s: null,
+  shapeSoldOutShare: null,
+  shapeTop5HoldShare: null,
+};
+
+/** A buy this size or larger is a big one (the study's cut). */
+export const SHAPE_BIG_BUY_SOL = 1;
+/** A wallet left with this share of what it bought, or less, has sold out (the study's cut). */
+export const SHAPE_SOLD_OUT_SHARE = 0.05;
+const SHAPE_WINDOW_MS = 60_000;
+
+const round3 = (v: number) => Math.round(v * 1_000) / 1_000;
+
+/** The middle value (the mean of the middle two); null for none. */
+function median(values: readonly number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return round3(sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2);
+}
+
+/**
+ * The trade shape read from a page of a coin's newest chain trades, as of `now` (when the page was
+ * read). `complete` says the page is the coin's whole history. shapeAgeSec is left null: only the
+ * caller knows when the decision is. All null for a page with no trade behind it that is not a
+ * whole history (nothing is known); a whole history with no trade is a coin nobody has traded.
+ */
+export function chainTradeShape(
+  trades: readonly ChainFlowTrade[],
+  now: number,
+  complete: boolean,
+): TradeShapeFeatures {
+  const out: TradeShapeFeatures = { ...EMPTY_TRADE_SHAPE };
+  const sorted = trades.filter((t) => t.atMs <= now).sort((a, b) => a.atMs - b.atMs);
+  if (sorted.length === 0 && !complete) return out;
+  out.shapeTrades = sorted.length;
+  out.shapeWholeHistory = complete ? 1 : 0;
+  if (sorted.length === 0) {
+    out.shapeBuys30s = 0;
+    out.shapeBuys1m = 0;
+    out.shapeSells1m = 0;
+    out.shapeBuyers1m = 0;
+    out.shapeNetSol30s = 0;
+    out.shapeNetSol1m = 0;
+    return out;
+  }
+  const oldest = sorted[0]!.atMs;
+  out.shapeSecSinceTrade = Math.round((now - sorted[sorted.length - 1]!.atMs) / 1_000);
+
+  // The span the minute's figures stand on: the full minute when the page reaches back past it or
+  // is the whole history, else from the page's oldest trade. `scale` turns a count over a shorter
+  // span into the window's terms.
+  const whole = complete || oldest < now - SHAPE_WINDOW_MS;
+  const span = whole ? SHAPE_WINDOW_MS : Math.max(1_000, now - oldest);
+  const from = now - span;
+  const half = now - span / 2;
+  const scale = SHAPE_WINDOW_MS / span;
+  const buysNew: number[] = [];
+  const buysAll: number[] = [];
+  const byWallet = new Map<string, number>();
+  let buysOld = 0;
+  let sells = 0;
+  let netNew = 0;
+  let netAll = 0;
+  let big = 0;
+  for (const t of sorted) {
+    if (t.atMs < from) continue;
+    const recent = t.atMs >= half;
+    const signed = t.side === "buy" ? t.sol : -t.sol;
+    netAll += signed;
+    if (recent) netNew += signed;
+    if (t.side !== "buy") {
+      sells += 1;
+      continue;
+    }
+    buysAll.push(t.sol);
+    if (recent) buysNew.push(t.sol);
+    else buysOld += 1;
+    if (t.sol >= SHAPE_BIG_BUY_SOL) big += t.sol;
+    byWallet.set(t.wallet, (byWallet.get(t.wallet) ?? 0) + t.sol);
+  }
+  const buySol = buysAll.reduce((sum, v) => sum + v, 0);
+  out.shapeBuys30s = round3(buysNew.length * scale);
+  out.shapeBuys1m = round3(buysAll.length * scale);
+  out.shapeSells1m = round3(sells * scale);
+  out.shapeBuyers1m = byWallet.size;
+  out.shapeNetSol30s = round3(netNew * scale);
+  out.shapeNetSol1m = round3(netAll * scale);
+  out.shapeMedBuySol30s = median(buysNew);
+  out.shapeMedBuySol1m = median(buysAll);
+  out.shapeBuyAccel30s = round3((buysNew.length + 1) / (buysOld + 1));
+  if (buySol > 0) {
+    out.shapeBigBuyShare1m = round3(big / buySol);
+    out.shapeTopBuyerShare1m = round3(Math.max(...byWallet.values()) / buySol);
+  }
+
+  // The bags built on the page: what each buyer on it bought and sold on it, in tokens.
+  const bags = new Map<string, { bought: number; sold: number }>();
+  for (const t of sorted) {
+    if (!(t.tokens > 0)) continue;
+    let bag = bags.get(t.wallet);
+    if (!bag) {
+      // A wallet first seen selling bought before the page: its bag is not known from here.
+      if (t.side !== "buy") continue;
+      bag = { bought: 0, sold: 0 };
+      bags.set(t.wallet, bag);
+    }
+    if (t.side === "buy") bag.bought += t.tokens;
+    else bag.sold += t.tokens;
+  }
+  if (bags.size > 0) {
+    let soldOut = 0;
+    let held = 0;
+    const left: number[] = [];
+    for (const bag of bags.values()) {
+      const balance = Math.max(0, bag.bought - bag.sold);
+      if (balance <= bag.bought * SHAPE_SOLD_OUT_SHARE) soldOut += 1;
+      held += balance;
+      left.push(balance);
+    }
+    out.shapeSoldOutShare = round3(soldOut / bags.size);
+    if (held > 0) {
+      left.sort((a, b) => b - a);
+      out.shapeTop5HoldShare = round3(left.slice(0, 5).reduce((sum, v) => sum + v, 0) / held);
+    }
+  }
+  return out;
+}
+
+/**
  * A coin's trade flow with its 5m fields taken from `window` (chainWindowFlow) instead of the
  * stream's: for a coin the stream doesn't carry, whose stream window would read an empty five
  * minutes as a quiet one. Without a window reading, those fields are unknown.

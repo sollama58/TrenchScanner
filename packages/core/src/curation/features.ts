@@ -2,7 +2,13 @@ import { PUMPFUN_LAUNCHPAD, STONKS_LAUNCHPAD } from "../launchpads.js";
 import { marketSourceCode, marketSourceFromCode } from "../marketSource.js";
 import type { FreshQuote, ScoredToken } from "../types.js";
 import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
-import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
+import {
+  EMPTY_TRADE_FLOW,
+  EMPTY_TRADE_SHAPE,
+  resolveDevHolding,
+  type TradeFlowFeatures,
+  type TradeShapeFeatures,
+} from "./tradeFlow.js";
 import { decisionAnchor, freshQuoteMcapUsd } from "./labels.js";
 import type { TextScores } from "./textFeatures.js";
 import { EMPTY_CURVE_PATH, type CurvePathFeatures } from "./curveTape.js";
@@ -467,6 +473,41 @@ export const COHORT_FEATURES = [
 ] as const;
 
 /**
+ * Added 2026-11-28 (program audit, signal study SG-1, notes/program-audit-2026-11-28/
+ * signal-study.md; owner pick on card 4, "record and feed at next retrain"): the second-level
+ * trade shape just before the decision, read from the page of newest trades the live tape already
+ * holds (curation/tradeFlow.ts chainTradeShape; no new read). In the study these lifted the top
+ * 20% of called coins from 28.5% to 30.9-33.4% at matched volume, measured inside called coins
+ * only and with the holdout agreeing in direction, not proved. Null without a page read in the
+ * last five minutes, and on every row banked before. Never backfilled.
+ *
+ * READ BY THE LEARNERS by the owner's pick, so they are not in RETIRED_LEARNER_INPUTS. The onset
+ * guard (featureOnset.ts) keeps them out of a run until they cover enough of the exam's span,
+ * including inside age buckets, so the first retrain that reads them is the first one they have
+ * rows enough for. To go back to recording only, list TRADE_SHAPE_FEATURES in
+ * RETIRED_LEARNER_INPUTS.
+ */
+export const TRADE_SHAPE_FEATURES = [
+  "shapeAgeSec",
+  "shapeTrades",
+  "shapeWholeHistory",
+  "shapeSecSinceTrade",
+  "shapeBuys30s",
+  "shapeBuys1m",
+  "shapeSells1m",
+  "shapeBuyers1m",
+  "shapeNetSol30s",
+  "shapeNetSol1m",
+  "shapeMedBuySol30s",
+  "shapeMedBuySol1m",
+  "shapeBigBuyShare1m",
+  "shapeTopBuyerShare1m",
+  "shapeBuyAccel30s",
+  "shapeSoldOutShare",
+  "shapeTop5HoldShare",
+] as const satisfies readonly (keyof TradeShapeFeatures)[];
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -734,6 +775,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...BLOCK_ZERO_FEATURES,
   ...GROUP_HOLD_FEATURES,
   ...COHORT_FEATURES,
+  ...TRADE_SHAPE_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -2007,6 +2049,23 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   sameSizeGroupSolShare: "share of recent buy SOL from a same-size group",
   launchSameSizeWallets: "first buyers taking the same size in one slot",
   recentBuyersHoldMean: "recent buyers' usual hold time",
+  shapeAgeSec: "age of the trade page (seconds)",
+  shapeTrades: "trades on the page",
+  shapeWholeHistory: "page is the coin's whole history",
+  shapeSecSinceTrade: "seconds since the last trade",
+  shapeBuys30s: "buys (30s)",
+  shapeBuys1m: "buys (1m)",
+  shapeSells1m: "sells (1m)",
+  shapeBuyers1m: "buying wallets (1m)",
+  shapeNetSol30s: "net SOL bought (30s)",
+  shapeNetSol1m: "net SOL bought (1m)",
+  shapeMedBuySol30s: "median buy, SOL (30s)",
+  shapeMedBuySol1m: "median buy, SOL (1m)",
+  shapeBigBuyShare1m: "share of buy SOL in buys of 1 SOL or more (1m)",
+  shapeTopBuyerShare1m: "biggest buyer's share of buy SOL (1m)",
+  shapeBuyAccel30s: "buys, newest 30s against the 30s before",
+  shapeSoldOutShare: "recent buyers already sold out",
+  shapeTop5HoldShare: "top five bags' share of recent buyers' holdings",
   cohortRecentBuyersPct: "recent buyers in a recurring cohort",
   cohortRecentMaxSize: "largest recurring cohort among recent buyers",
   cohortCreatorLinked: "a recent buyers' cohort includes a creator",
@@ -2143,6 +2202,9 @@ export function scoredFromFeatures(
     curvePath: Object.fromEntries(
       CURVE_PATH_FEATURES.map((k) => [k, num(k) ?? null]),
     ) as unknown as CurvePathFeatures,
+    tradeShape: Object.fromEntries(
+      TRADE_SHAPE_FEATURES.map((k) => [k, num(k) ?? null]),
+    ) as unknown as TradeShapeFeatures,
     devLaunch: Object.fromEntries(
       DEV_LAUNCH_FEATURES.map((k) => [k, num(k) ?? null]),
     ) as unknown as DevLaunchFeatures,
@@ -2448,6 +2510,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     ...(Object.fromEntries(
       CURVE_PATH_FEATURES.map((k) => [k, (scored.curvePath ?? EMPTY_CURVE_PATH)[k]]),
     ) as Record<(typeof CURVE_PATH_FEATURES)[number], number | null>),
+    ...(Object.fromEntries(
+      TRADE_SHAPE_FEATURES.map((k) => [k, (scored.tradeShape ?? EMPTY_TRADE_SHAPE)[k]]),
+    ) as Record<(typeof TRADE_SHAPE_FEATURES)[number], number | null>),
     ...(Object.fromEntries(
       DEV_LAUNCH_FEATURES.map((k) => [k, (scored.devLaunch ?? EMPTY_DEV_LAUNCH)[k]]),
     ) as Record<(typeof DEV_LAUNCH_FEATURES)[number], number | null>),

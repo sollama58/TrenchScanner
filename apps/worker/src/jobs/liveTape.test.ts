@@ -8,6 +8,7 @@ import {
   liveCohortOn,
   liveRecentBuyersHoldOn,
   liveSameSizeGroupOn,
+  liveTradeShapeOn,
   liveWalletScoreOf,
   liveWalletScoreOn,
   liveWindowFlowOf,
@@ -307,6 +308,28 @@ describe("live tape", () => {
     });
     expect(liveWindowFlowOf(MINT, readAt + 6 * 60_000)).toBeNull();
     expect(liveWindowFlowOf("other", readAt)).toBeNull();
+  });
+
+  // Program audit 2026-11-28, card 4: the trade shape is as of the page's read, stamped with how
+  // old the page was at the decision (half the study's gain sat in the last five seconds).
+  it("reads the trade shape off the page and stamps it with the page's age", async () => {
+    const readAt = 1_700_000_160_000;
+    await readLiveTape([MINT], fakeHelius(), { maxPages: 1, refreshMs: 60_000, nowMs: readAt });
+    // The whole history is one 2 SOL buy, a minute before the read.
+    expect(liveTradeShapeOn(livePageOf(MINT, readAt), readAt + 7_000)).toMatchObject({
+      shapeAgeSec: 7,
+      shapeTrades: 1,
+      shapeWholeHistory: 1,
+      shapeSecSinceTrade: 60,
+      shapeBuys1m: 1,
+      shapeBuys30s: 0,
+      shapeMedBuySol1m: 2,
+      shapeSoldOutShare: 0,
+      shapeTop5HoldShare: 1,
+    });
+    // A page read more than five minutes before the decision says nothing about the last minute.
+    expect(liveTradeShapeOn(livePageOf(MINT, readAt), readAt + 6 * 60_000)).toBeNull();
+    expect(liveTradeShapeOn(undefined, readAt)).toBeNull();
   });
 
   it("reads the launch's bags off a page that is the coin's whole history, with the dev off the profile", async () => {

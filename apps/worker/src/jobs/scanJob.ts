@@ -129,6 +129,7 @@ import {
   liveCohortOn,
   liveRecentBuyersHoldOn,
   liveSameSizeGroupOn,
+  liveTradeShapeOn,
   liveWalletScoreOn,
   liveWinnerFollowOn,
   liveWindowFlowOf,
@@ -2845,6 +2846,7 @@ async function scanTracked(deps: ScanDeps, env: Env, pass: ScanPass): Promise<Sc
             // mean is left off with the Wallet Score when the own-tape read failed.
             {
               sameSize: liveSameSizeGroupOn(livePages.get(candidate.mintAddress)),
+              tradeShape: liveTradeShapeOn(livePages.get(candidate.mintAddress)),
               cohort: liveCohortOn(
                 livePages.get(candidate.mintAddress),
                 cohortLookup(),
@@ -3799,6 +3801,8 @@ async function processCandidate(
     scored.pricePath = pricePath.features(candidate.mintAddress);
   }
   scored.curvePath = curvePathOf(candidate.mintAddress);
+  // The trade shape off the live page (card 4, 2026-11-28): unknown (left off) without a recent page.
+  if (groups?.tradeShape) scored.tradeShape = groups.tradeShape;
   if (devLaunch) scored.devLaunch = devLaunch;
   if (marketContext) scored.marketContext = marketContext;
   if (liveStreams) {

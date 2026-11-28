@@ -24,6 +24,7 @@ import {
   type LiveFlagsReading,
   type LiveTraderCounts,
   type CohortReading,
+  type TradeShapeFeatures,
   type SameSizeGroupReading,
   type WalletScoreReading,
   type WinnerFollowReading,
@@ -678,6 +679,8 @@ export interface LiveGroupReading {
   recentBuyersHoldMean: number | null;
   /** The recurring cohorts among the page's buyers; null before the cohort book loads. */
   cohort?: CohortReading | null;
+  /** The trade shape just before the decision (liveTape.ts liveTradeShapeOn); null without a recent page. */
+  tradeShape?: TradeShapeFeatures | null;
 }
 
 /** The live flagged-wallet reading on the profile; unknown (left off) without one. Exported for tests. */
