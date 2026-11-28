@@ -9,6 +9,9 @@ import {
   narrativeNoteReadiness,
   emptyRecord,
   exitPlanView,
+  describeWinTarget,
+  winTargetShort,
+  winTargetSpec,
   currentFreeAccessPeriod,
   freeAccessPhase,
   recentScoreScale,
@@ -67,6 +70,16 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
   // exit plan popup beside average profit and return. Public and static: it changes with a deploy.
   const exitPlan = exitPlanView();
   app.get("/exit-plan", () => exitPlan);
+
+  // The win rule the pages report (curation/winTarget.ts, WIN_TARGET_RULE), so the site's wording
+  // says the rule its numbers were counted on instead of restating one that the switch can change.
+  // Public like the exit plan. Read per request, not at registration: the rule is set at startup
+  // and nothing should depend on which of the two ran first.
+  app.get("/win-target", () => ({
+    ...winTargetSpec(),
+    sentence: describeWinTarget(),
+    short: winTargetShort(),
+  }));
 
   // Free Access, for the sign-in page: whether it is open (or coming) and until when. Public like
   // the rest - the times are what an admin announces anyway. Not cached: one indexed read of a

@@ -11,6 +11,7 @@ import {
   type Leaderboard,
 } from "../api";
 import { usePolling } from "../hooks";
+import { useWinTarget, winRuleLong } from "../winTarget";
 import { invalidate } from "../cache";
 import { pct, usd } from "../format";
 import {
@@ -115,6 +116,7 @@ export function FiltersTab() {
   const filters = usePolling<Filter[]>("/filters", 120_000);
   const config = usePolling<AppConfig>("/config", 600_000);
   const settings = useSettings();
+  const win = useWinTarget();
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
   // `opened` tells apart two editors for the same filter (or two new ones), so opening again starts
   // the form over instead of keeping the last one's keyword text.
@@ -338,8 +340,9 @@ export function FiltersTab() {
                 one. Leave a field blank to ignore it.
               </p>
               <p className="muted small">
-                Each filter's 2x / 4x / 10x rate uses the same rule as the curated feed: 2x within 15 minutes
-                (4x within 30, 10x within an hour) of the alert price, before a 50% drop.
+                Each filter's 2x rate uses the same rule as the curated feed: {winRuleLong(win)}. Its 4x and
+                10x rates are 4x within 30 minutes and 10x within an hour of the alert price, before a 50%
+                drop.
               </p>
               <TopFiltersPick onCopied={filters.reload} />
             </div>

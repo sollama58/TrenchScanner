@@ -5,6 +5,7 @@
  */
 
 import { wilsonBounds } from "@trenchscanner/core/wilson";
+import { winRuleShort } from "./winTarget";
 
 /** Graded calls a rate needs before it is coloured against a goal or ranked as "best". */
 export const MIN_GRADED_FOR_RATE = 30;
@@ -116,10 +117,8 @@ export function calibratedRateLabel(rate: number | null): string | null {
 
 /** The pill's hover text for that rate, with the median note when several models called. */
 export function calibratedRateTitle(rate: number, several: boolean): string {
-  const own =
-    "The share of similarly ranked recent calls that doubled: of alerts like it, this percent hit 2x within 15 min of the alert, before a 50% stop";
-  const pooled =
-    "This model's recent alerts ranked like this one 2x'd under 35% of the time, so the card quotes the model's rate over all its recent alerts: this percent hit 2x within 15 min, before a 50% stop";
+  const own = `The share of similarly ranked recent calls that doubled: of alerts like it, this percent hit ${winRuleShort()}`;
+  const pooled = `This model's recent alerts ranked like this one 2x'd under 35% of the time, so the card quotes the model's rate over all its recent alerts: this percent hit ${winRuleShort()}`;
   return `${rate >= CARD_BAND_MIN_PCT ? own : pooled}${several ? " (the middle of the alerting models' rates)" : ""}`;
 }
 

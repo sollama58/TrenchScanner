@@ -2111,6 +2111,18 @@ export interface ExitPlanView {
   maxHoldMinutes: number;
 }
 
+/** The win rule the site's hit rates and outcomes are reported on (GET /config/win-target). */
+export interface WinTargetView {
+  rule: "classic" | "fill30";
+  /** Minutes from the alert the 2x has to land in. */
+  windowMinutes: number;
+  multiple: number;
+  /** How far below the base price stops the trade, in percent. */
+  stopPct: number;
+  /** What the 2x and the stop are measured from: the alert price, or the price a buyer could get. */
+  base: "alert" | "fill";
+}
+
 /** The composite score's current weights (GET /config/score). */
 export interface ScoreWeightsInfo {
   weights: { momentum: number; freshness: number; holderQuality: number; narrative: number };
