@@ -706,6 +706,75 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     }
   });
 
+  it("does not ask an idle chat again every pass when the notice cannot be sent (audit 2026-11-28, TG-4)", async () => {
+    const day = 24 * 3_600_000;
+    const idle = (extra: Record<string, unknown> = {}) =>
+      prisma.telegramChat.update({
+        where: { id: chatRowId },
+        data: {
+          sentThrough: new Date(),
+          lastSentAt: new Date(Date.now() - 8 * day),
+          idleNoticedAt: null,
+          revokedAt: null,
+          holdUntil: null,
+          ...extra,
+        },
+      });
+    const idleSends = (api: FakeTelegramApi) => api.sent().filter((m) => m.text === IDLE_CHAT_TEXT).length;
+    try {
+      // Telegram is rate limiting: the notice is not delivered, and the chat is not asked again
+      // on the next pass. It keeps its link.
+      await idle();
+      const limited = new FakeTelegramApi();
+      limited.answers.set("sendMessage", {
+        ok: false,
+        code: 429,
+        description: "Too Many Requests",
+        retryAfter: 30,
+      });
+      await run(limited);
+      await run(limited);
+      expect(idleSends(limited)).toBe(1);
+      let row = await prisma.telegramChat.findUniqueOrThrow({ where: { id: chatRowId } });
+      expect(row.idleNoticedAt).not.toBeNull();
+      expect(row.revokedAt).toBeNull();
+
+      // The user blocked the bot: unlinked, as an alert send would have done.
+      await idle();
+      const blocked = new FakeTelegramApi();
+      blocked.answers.set("sendMessage", {
+        ok: false,
+        code: 403,
+        description: "Forbidden: bot was blocked by the user",
+      });
+      await run(blocked);
+      await run(blocked);
+      expect(idleSends(blocked)).toBe(1);
+      row = await prisma.telegramChat.findUniqueOrThrow({ where: { id: chatRowId } });
+      expect(row.revokedAt).not.toBeNull();
+      expect(row.lastError).toBe("403: Forbidden: bot was blocked by the user");
+
+      // A chat Telegram is holding is not sent the notice until the hold ends.
+      await idle({ holdUntil: new Date(Date.now() + 60_000) });
+      const held = new FakeTelegramApi();
+      await run(held);
+      expect(idleSends(held)).toBe(0);
+      row = await prisma.telegramChat.findUniqueOrThrow({ where: { id: chatRowId } });
+      expect(row.idleNoticedAt).toBeNull();
+    } finally {
+      await prisma.telegramChat.update({
+        where: { id: chatRowId },
+        data: {
+          lastSentAt: new Date(),
+          idleNoticedAt: null,
+          revokedAt: null,
+          holdUntil: null,
+          lastError: null,
+        },
+      });
+    }
+  });
+
   it("holds the cursor behind a transaction still open, so its late commit is not skipped", async () => {
     const api = new FakeTelegramApi();
     await rewind();
