@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { outermost } from "./adapters/adapter";
 import { axiom, gmgn, terminal } from "./adapters/sites";
 import { columnOf, findColumns } from "./columns";
 import { Scoper } from "./scope";
-import { OverlayEngine, structural } from "./engine";
+import { OverlayEngine, SCAN_FLOOR_MS, structural } from "./engine";
 import { safetyBody, tooltipBody } from "./ui";
 import { DEFAULT_SETTINGS } from "../shared/settings";
 import { cleanTooltip } from "../shared/tooltip";
@@ -620,5 +620,42 @@ describe("where rings go (user ask 2026-10-28)", () => {
     }
     expect(health).toEqual([2, 1]);
     e.stop();
+  });
+});
+
+describe("the floor between scans (audit 2026-11-28, EX-24)", () => {
+  it("scans a board that never stops changing ten times a second, not on every frame", () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "Date", "requestAnimationFrame", "cancelAnimationFrame"],
+    });
+    try {
+      board(`<div data-pulse-token-address="${A}"></div>`);
+      const e = new OverlayEngine(axiom, DEFAULT_SETTINGS, {
+        lookup: async () => ({ tokens: {}, problem: null }),
+        safety: async () => ({ verdicts: {}, problem: null }),
+      });
+      const scan = vi.spyOn(e, "scan");
+      const changed = e as unknown as { schedule(): void };
+      // the first change after a quiet spell is scanned on the next frame
+      changed.schedule();
+      vi.advanceTimersByTime(20);
+      expect(scan).toHaveBeenCalledTimes(1);
+      // a change every 10 ms for a second
+      for (let i = 0; i < 100; i++) {
+        changed.schedule();
+        vi.advanceTimersByTime(10);
+      }
+      const inTheSecond = scan.mock.calls.length - 1;
+      expect(inTheSecond).toBeGreaterThanOrEqual(7);
+      expect(inTheSecond).toBeLessThanOrEqual(1000 / SCAN_FLOOR_MS);
+      // and the last change is not lost
+      vi.advanceTimersByTime(SCAN_FLOOR_MS + 20);
+      const settled = scan.mock.calls.length;
+      vi.advanceTimersByTime(1_000);
+      expect(scan.mock.calls.length).toBe(settled);
+      e.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

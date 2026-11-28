@@ -113,6 +113,7 @@ async function syncLook(key: string, remote: SavedLook | null | undefined): Prom
   if (remote && theirs > local) {
     const prefs = cleanTooltip(remote.prefs);
     await chrome.storage.local.set({ tooltip: prefs, tooltipSavedAt: theirs });
+    setAlertsAlarm(prefs);
     tellRingTabs({ type: "tooltipChanged", prefs });
     void chrome.runtime.sendMessage({ type: "lookChanged" }).catch(() => undefined);
   } else if (tooltip !== undefined && (local > theirs || !remote)) {
@@ -128,6 +129,7 @@ async function saveTooltip(raw: unknown): Promise<TooltipPrefs> {
   const prefs = cleanTooltip(raw);
   const savedAt = Date.now();
   await chrome.storage.local.set({ tooltip: prefs, tooltipSavedAt: savedAt });
+  setAlertsAlarm(prefs);
   tellRingTabs({ type: "tooltipChanged", prefs });
   // The icon's count follows the options at once (its switch, the unsafe coins left out).
   void noteAlerts(lastTokens);
@@ -359,7 +361,20 @@ function usdShort(value: number): string {
   return `$${Math.round(value)}`;
 }
 
-chrome.alarms.create("alerts", { periodInMinutes: 1 });
+/**
+ * The once-a-minute alarm exists only while something reads on it: notifications, the icon's
+ * count or run alerts (audit 2026-11-28, EX-25). It used to be created at every start and woke the
+ * worker each minute with all three off, where the store listing says "only while one of them is
+ * on". Set at start and whenever the options change.
+ */
+function setAlertsAlarm(prefs: TooltipPrefs): void {
+  if (prefs.panel.notify || prefs.panel.badge || prefs.runs.enabled) {
+    chrome.alarms.create("alerts", { periodInMinutes: 1 });
+  } else {
+    void chrome.alarms.clear("alerts");
+  }
+}
+void tooltipPrefs().then(setAlertsAlarm, () => chrome.alarms.create("alerts", { periodInMinutes: 1 }));
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== "alerts") return;
   void (async () => {
@@ -717,7 +732,12 @@ async function handle(request: PanelRequest): Promise<unknown> {
         Array.isArray(request.mints) ? request.mints.filter((m) => typeof m === "string") : [],
       );
       return { ok: true };
-    case "disconnect":
+    case "disconnect": {
+      // Everything this account left here goes (audit 2026-11-28, EX-22). The settings, display
+      // choices, snoozed coins and run marks used to stay, against the privacy page's "removes
+      // them", and the next account to connect inherited them: its own were older than the ones
+      // left behind, so syncLook saved the last user's choices to it. The account keeps its own
+      // copy of the settings and choices, and gets them back when it connects again.
       await chrome.storage.local.remove([
         "key",
         "wallet",
@@ -726,7 +746,14 @@ async function handle(request: PanelRequest): Promise<unknown> {
         "refused",
         "alertsNotified",
         "alertsRead",
+        "settings",
+        "tooltip",
+        "tooltipSavedAt",
+        "runsNotified",
       ]);
+      const defaults = cleanTooltip(undefined);
+      setAlertsAlarm(defaults);
+      tellRingTabs({ type: "tooltipChanged", prefs: defaults });
       void chrome.action.setBadgeText({ text: "" });
       lastTokens = [];
       feedReadAt = 0;
@@ -734,6 +761,7 @@ async function handle(request: PanelRequest): Promise<unknown> {
       void chrome.storage.session.remove("buddy").catch(() => undefined);
       problem = "disconnected";
       return { ok: true };
+    }
     case "saveSettings": {
       const { key } = await stored();
       await chrome.storage.local.set({ settings: request.settings });

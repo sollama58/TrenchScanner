@@ -21,6 +21,7 @@ let onMessageExternal: Listener;
 let onAlarm: (alarm: { name: string }) => void;
 const local = new Map<string, unknown>();
 const notices: { id: string; title: string; message: string }[] = [];
+const alarms: string[] = [];
 
 function area(map: Map<string, unknown>) {
   return {
@@ -49,7 +50,11 @@ function area(map: Map<string, unknown>) {
   },
   storage: { local: area(local), session: area(new Map()) },
   action: { setBadgeText: async () => undefined, setBadgeBackgroundColor: async () => undefined },
-  alarms: { create: () => undefined, onAlarm: { addListener: (l: typeof onAlarm) => (onAlarm = l) } },
+  alarms: {
+    create: (name: string) => void alarms.push(`create ${name}`),
+    clear: async (name: string) => void alarms.push(`clear ${name}`),
+    onAlarm: { addListener: (l: typeof onAlarm) => (onAlarm = l) },
+  },
   notifications: {
     create: (id: string, o: { title: string; message: string }) =>
       void notices.push({ id, title: o.title, message: o.message }),
@@ -321,5 +326,50 @@ describe("alert and run notifications", () => {
     onAlarm({ name: "alerts" });
     await new Promise((r) => setTimeout(r, 10));
     expect(api.feed).not.toHaveBeenCalled();
+  });
+});
+
+describe("disconnecting (audit 2026-11-28, EX-22)", () => {
+  it("removes everything the account left here, as the privacy page says", async () => {
+    local.set("key", KEY);
+    local.set("wallet", "7xQ1…k2Ab");
+    local.set("settings", { minConfidence: 80 });
+    local.set("tooltip", { snoozed: { [A]: Date.now() + 3_600_000 } });
+    local.set("tooltipSavedAt", Date.now());
+    local.set("runsNotified", { [A]: { level: 2, dropped: false } });
+    local.set("alertsNotified", [A]);
+    local.set("alertsRead", [A]);
+    expect(await send(onMessage, { type: "disconnect" }, panel)).toEqual({ ok: true });
+    expect([...local.keys()]).toEqual([]);
+  });
+
+  it("leaves the next account nothing to inherit: its look is not overwritten", async () => {
+    local.set("key", KEY);
+    await send(
+      onMessage,
+      { type: "saveTooltip", prefs: { snoozed: { [A]: Date.now() + 3_600_000 } } },
+      panel,
+    );
+    await vi.waitFor(() => expect(api.saveLook).toHaveBeenCalledTimes(1));
+    await send(onMessage, { type: "disconnect" }, panel);
+    api.saveLook.mockClear();
+    // another account connects in this browser; it has never saved a look
+    local.set("key", `tsx_${"b".repeat(43)}`);
+    const prefs = (await send(onMessage, { type: "tooltip" }, panel)) as { snoozed: Record<string, number> };
+    expect(prefs.snoozed).toEqual({});
+    expect(local.has("tooltipSavedAt")).toBe(false);
+  });
+});
+
+describe("the once-a-minute alarm (audit 2026-11-28, EX-25)", () => {
+  it("is set at start, cleared when nothing reads on it, and set again when something does", async () => {
+    // the options start with the icon's count on
+    expect(alarms[0]).toBe("create alerts");
+    local.set("key", KEY);
+    const off = { panel: { notify: false, badge: false, hideUnsafe: false }, runs: { enabled: false } };
+    await send(onMessage, { type: "saveTooltip", prefs: off }, panel);
+    expect(alarms.at(-1)).toBe("clear alerts");
+    await send(onMessage, { type: "saveTooltip", prefs: { ...off, runs: { enabled: true } } }, panel);
+    expect(alarms.at(-1)).toBe("create alerts");
   });
 });
