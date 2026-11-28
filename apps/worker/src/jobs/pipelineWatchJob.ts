@@ -502,6 +502,34 @@ export function findCreditProblems(out: { since: Date; until: Date } | null): Pr
   ];
 }
 
+/** After this long with no launch from PumpPortal's stream, while launches are found elsewhere, it is down. */
+export const PUMPPORTAL_QUIET_MS = 5 * 60_000;
+
+/**
+ * PumpPortal's stream gone quiet (program audit 2026-11-28, FD-5). It reconnects by itself (90 s
+ * idle, back-off to 5 minutes) and until now only logged: discovery carries on from Jupiter's
+ * poller and Pump.fun's list, so no flow reads zero, while every new launch arrives without the
+ * stream's first-seconds inputs and its Mayhem flag (MAYHEM_FROM_PUMPPORTAL). `block` is the scan
+ * heartbeat's `pumpPortal` (PumpPortalStream.health) and `discovered` the coins first seen in the
+ * discovery flow's window: with none found anywhere, a quiet stream is a quiet market or another
+ * notice's. Trades are not judged: on a key without funds PumpPortal sends none (tradesRefused),
+ * which is how production runs. Notify-only.
+ */
+export function findPumpPortalProblems(block: Record<string, unknown> | null, discovered: number): Problem[] {
+  const age = block?.launchAgeSec;
+  if (typeof age !== "number" || !(age * 1000 >= PUMPPORTAL_QUIET_MS) || discovered <= 0) return [];
+  return [
+    {
+      key: "pumpportal",
+      text:
+        `PumpPortal stream: no launch for ${formatAge(age * 1000)} ` +
+        `(${block?.connected === 1 ? "connected" : "disconnected"}) while ${discovered} coins were found ` +
+        "elsewhere - new launches are missing the stream's first-seconds inputs and its Mayhem flag",
+      side: true,
+    },
+  ];
+}
+
 /** Helius's requests and failed requests over one stretch of ApiUsage, every process together. */
 export interface ProviderErrorWindow {
   requests: number;
@@ -896,6 +924,8 @@ export type ScanLatencyState = {
 /** One completed scan cycle's figures (readScanCycle); each null when the cycle had none. */
 export type ScanCycleTimes = {
   runAt: Date;
+  /** The cycle's `pumpPortal` block (PumpPortalStream.health), when the stream is on. */
+  pumpPortal?: Record<string, unknown> | null;
   /** Start to the contenders decided (decidedMs). */
   ms: number | null;
   /** The fast path's median crossing-to-decision time since the last cycle. */
@@ -1233,6 +1263,7 @@ async function readScanCycle(): Promise<ScanCycleTimes | null> {
     ms: decidedMs(meta?.stagesMs),
     fastMs: figure("entryFastPath", "crossToDecisionMsMedian"),
     earlyMs: figure("earlyDecisions", "msMedian"),
+    pumpPortal: objectField(meta, "pumpPortal"),
   };
 }
 
@@ -1847,6 +1878,10 @@ async function watchOnce(
     ...findCreditProblems(creditsOut),
     // With credits out every billed call is refused, and the notice above already says why.
     ...(creditsOut ? [] : findHeliusErrorProblems(heliusErrors)),
+    ...findPumpPortalProblems(
+      scanCycle?.pumpPortal ?? null,
+      flows.find((f) => f.key === "discovery")?.recent ?? 0,
+    ),
     ...findCanaryProblems(canary, now, env.TRADE_CANARY_INTERVAL_MINUTES),
     ...findTradeOutcomeProblems(trades),
     ...agedOut.problems,

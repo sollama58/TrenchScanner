@@ -643,6 +643,9 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     // (worker pumpRelay.ts; check-in 2026-10-29).
     "pumpRelay",
     "launchPoller",
+    // PumpPortal's stream as the cycle found it: connected (1 or 0), connects since boot, seconds
+    // since its last launch and trade, tradesRefused (program audit 2026-11-28, FD-5).
+    "pumpPortal",
     "curveCandles",
     "candleBackfill",
     "candleChainFill",

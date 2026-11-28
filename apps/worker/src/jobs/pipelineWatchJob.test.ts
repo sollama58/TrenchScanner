@@ -21,6 +21,7 @@ import {
   findCapacityProblems,
   findCreditProblems,
   findHeliusErrorProblems,
+  findPumpPortalProblems,
   findLowFlowProblems,
   findProblems,
   findSideJobProblems,
@@ -267,6 +268,26 @@ describe("pipeline watch: what counts as stalled", () => {
     expect(out[0]!.side).toBe(true);
     expect(out[0]!.text).toContain("Helius failed 8% of requests in the last 30 minutes (400 of 5,000)");
     expect(notificationText(out, [], out)).toMatch(/^<b>⚠️ TrenchScanner scanner jobs need a look<\/b>/);
+  });
+
+  it("flags PumpPortal's stream going quiet while launches are found elsewhere (audit 2026-11-28, FD-5)", () => {
+    // No block: the stream is off, or the worker predates it.
+    expect(findPumpPortalProblems(null, 40)).toEqual([]);
+    // A launch a few seconds ago.
+    expect(
+      findPumpPortalProblems({ connected: 1, connects: 1, launchAgeSec: 4, tradesRefused: 1 }, 40),
+    ).toEqual([]);
+    // No trades on an unfunded key is how it runs: not judged.
+    expect(findPumpPortalProblems({ connected: 1, launchAgeSec: 4, tradesRefused: 1 }, 40)).toEqual([]);
+    // Quiet, and nothing found anywhere: a quiet market, or the discovery flow's own notice.
+    expect(findPumpPortalProblems({ connected: 0, launchAgeSec: 900 }, 0)).toEqual([]);
+    const down = findPumpPortalProblems({ connected: 0, connects: 3, launchAgeSec: 900 }, 40);
+    expect(down.map((p) => p.key)).toEqual(["pumpportal"]);
+    expect(down[0]!.side).toBe(true);
+    expect(down[0]!.text).toContain("PumpPortal stream: no launch for 15 min (disconnected) while 40 coins");
+    // Connected and still delivering nothing (a lost subscription) is the same notice.
+    expect(findPumpPortalProblems({ connected: 1, launchAgeSec: 300 }, 1)[0]!.text).toContain("(connected)");
+    expect(notificationText(down, [], down)).toMatch(/^<b>⚠️ TrenchScanner scanner jobs need a look<\/b>/);
   });
 
   it("puts quiet flows down to a Helius credits outage in or near their window, not to a stall", () => {

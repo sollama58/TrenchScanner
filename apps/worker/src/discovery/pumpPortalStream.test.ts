@@ -303,3 +303,84 @@ describe("PumpPortalStream idle watchdog", () => {
     }
   });
 });
+
+describe("PumpPortalStream health (audit 2026-11-28, FD-5)", () => {
+  const MINT = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
+  /** A WebSocket stand-in the test opens, feeds and closes by hand. */
+  class HandSocket extends EventTarget {
+    static last: HandSocket | null = null;
+    constructor() {
+      super();
+      HandSocket.last = this;
+    }
+    send() {}
+    close() {}
+    opened() {
+      this.dispatchEvent(new Event("open"));
+    }
+    message(data: unknown) {
+      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(data) }));
+    }
+    dropped() {
+      this.dispatchEvent(new Event("close"));
+    }
+  }
+
+  it("says how long since a launch, with no trade time on a stream that sends launches only", async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = new PumpPortalStream(
+        "wss://example.invalid",
+        HandSocket as unknown as new (url: string) => WebSocket,
+      );
+      stream.start();
+      expect(stream.health()).toMatchObject({ connected: 0, connects: 0, launchAgeSec: 0 });
+      const socket = HandSocket.last!;
+      socket.opened();
+      socket.message({ mint: MINT, txType: "create", traderPublicKey: MINT, pool: "pump" });
+      await vi.advanceTimersByTimeAsync(40_000);
+      // Launches arrive, trades never do: connected, a launch 40 s ago, and no trade time at all.
+      const launchesOnly = stream.health();
+      expect(launchesOnly).toMatchObject({ connected: 1, connects: 1, launchAgeSec: 40, tradesRefused: 0 });
+      expect(launchesOnly).not.toHaveProperty("tradeAgeSec");
+      // Only numbers: /health/worker drops anything else.
+      expect(Object.values(launchesOnly).every((v) => typeof v === "number")).toBe(true);
+
+      socket.message({
+        mint: MINT,
+        txType: "buy",
+        traderPublicKey: MINT,
+        solAmount: 1,
+        tokenAmount: 10,
+        pool: "pump",
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(stream.health()).toMatchObject({ launchAgeSec: 60, tradeAgeSec: 20 });
+
+      // The connection drops and the launches stop: the age keeps counting, disconnected.
+      socket.dropped();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(stream.health()).toMatchObject({ connected: 0, launchAgeSec: 61 });
+      stream.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts a quiet start from start(), so a stream that never connects reads as old", async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = new PumpPortalStream(
+        "wss://example.invalid",
+        HandSocket as unknown as new (url: string) => WebSocket,
+        { tradeFlow: false },
+      );
+      stream.start();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(stream.health()).toMatchObject({ connected: 0, launchAgeSec: 30 });
+      stream.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -205,6 +205,12 @@ export class PumpPortalStream {
    * key was funded since: either trades then arrive (and confirm), or the refusal comes back.
    */
   private retrySubscriptionsOnce = false;
+  /** For health(): when start() ran, whether the socket is open, and what it last delivered. */
+  private startedAt = 0;
+  private open = false;
+  private connects = 0;
+  private lastLaunchAt = 0;
+  private lastTradeAt = 0;
 
   constructor(
     private readonly url: string,
@@ -254,6 +260,24 @@ export class PumpPortalStream {
     return this.tradesRefused;
   }
 
+  /**
+   * How the stream stands, for the scan heartbeat and pipeline-watch (program audit 2026-11-28,
+   * FD-5). The stream was on no heartbeat: a connection down for hours only logged its
+   * reconnects, and new launches then arrive from the other sources without the stream's
+   * first-seconds inputs or its Mayhem flag. Numbers only, so /health/worker can carry it.
+   * `launchAgeSec` counts from start() until the first launch arrives; `tradeAgeSec` is absent
+   * until a trade has (a refused trade subscription never delivers one).
+   */
+  health(now: number = Date.now()): Record<string, number> {
+    return {
+      connected: this.open ? 1 : 0,
+      connects: this.connects,
+      launchAgeSec: Math.max(0, Math.round((now - (this.lastLaunchAt || this.startedAt || now)) / 1000)),
+      ...(this.lastTradeAt ? { tradeAgeSec: Math.max(0, Math.round((now - this.lastTradeAt) / 1000)) } : {}),
+      tradesRefused: this.tradesRefused ? 1 : 0,
+    };
+  }
+
   /** Opens the connection. A no-op (logged once) when the runtime has no WebSocket. */
   start(): void {
     if (!this.ctor) {
@@ -261,6 +285,7 @@ export class PumpPortalStream {
       return;
     }
     this.stopped = false;
+    this.startedAt = Date.now();
     this.connect();
     this.timers.push(setInterval(() => this.checkIdle(), IDLE_CHECK_INTERVAL_MS));
     if (this.book) {
@@ -278,6 +303,7 @@ export class PumpPortalStream {
     this.reconnectTimer = null;
     this.socket?.close();
     this.socket = null;
+    this.open = false;
   }
 
   /** Everything buffered since the last drain, oldest first, and empties the buffer. */
@@ -338,6 +364,7 @@ export class PumpPortalStream {
       const flow = typeof msg === "object" && msg !== null ? parseFlowMessage(msg, at) : null;
       if (flow && "trade" in flow) {
         this.book.trade(flow.trade);
+        this.lastTradeAt = at;
         this.tradesConfirmed = true;
         this.tradesRefused = false;
         return;
@@ -346,6 +373,7 @@ export class PumpPortalStream {
     }
     const event = parsePumpPortalMessage(raw, new Date(at));
     if (!event) return;
+    if (event.kind === "create") this.lastLaunchAt = at;
     if (event.isMayhemMode !== undefined && !this.mayhemFlags.has(event.mintAddress)) {
       this.mayhemFlags.set(event.mintAddress, event.isMayhemMode);
       // Insertion order: the oldest launches go first.
@@ -375,6 +403,7 @@ export class PumpPortalStream {
     if (!socket || this.stopped || now - this.lastActivityAt < IDLE_TIMEOUT_MS) return;
     logger.warn("stream silent, reconnecting", { silentForMs: now - this.lastActivityAt });
     this.socket = null;
+    this.open = false;
     try {
       socket.close();
     } catch {
@@ -396,6 +425,10 @@ export class PumpPortalStream {
     this.lastActivityAt = Date.now();
     socket.addEventListener("open", () => {
       this.lastActivityAt = Date.now();
+      if (this.socket === socket) {
+        this.open = true;
+        this.connects += 1;
+      }
       // One connection, both subscriptions - PumpPortal asks clients not to open one per topic.
       socket.send(JSON.stringify({ method: "subscribeNewToken" }));
       socket.send(JSON.stringify({ method: "subscribeMigration" }));
@@ -428,6 +461,7 @@ export class PumpPortalStream {
       // A socket checkIdle already replaced closing late must not start a second connection.
       if (this.socket !== socket) return;
       this.socket = null;
+      this.open = false;
       if (!this.stopped) this.scheduleReconnect();
     });
   }
