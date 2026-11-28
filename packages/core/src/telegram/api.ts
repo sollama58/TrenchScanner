@@ -552,9 +552,16 @@ export class TelegramApi {
       // the 4xx range that isn't the chat refusing the bot or a rate limit) is worth the retry
       // as text: the alert is the text, the picture is decoration.
       if (!photoRefused(withPhoto.code)) return withPhoto;
+      // The picture's type and size are logged (audit 2026-11-28, TG-7): 2% of photo sends are
+      // still refused, and the first-choice read is uploaded whatever its type. Whether checking
+      // its type first would save the round trip, or drop pictures Telegram takes today, is
+      // decided from these lines, not guessed.
       logger.warn("telegram refused the photo, sending the alert as text", {
         url,
         description: withPhoto.description,
+        contentType: fetched.contentType,
+        bytes: fetched.bytes.byteLength,
+        host: hostOf(fetched.sourceUrl),
       });
     }
     return this.sendMessage(chatId, message.html, sendOpts);

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakeTelegramApi } from "./fakeApi.js";
 import { TelegramApi, isPublicAddress, neverSent, newPhotoCache } from "./api.js";
 
@@ -288,5 +288,29 @@ describe("neverSent", () => {
     const result = await aborted.sendMessage(1, "hi");
     expect(result).toMatchObject({ ok: false, code: 0, description: "timed out" });
     expect("undelivered" in result).toBe(false);
+  });
+});
+
+describe("a photo Telegram refuses (audit 2026-11-28, TG-7)", () => {
+  it("goes out as text, and the log says what the picture was", async () => {
+    const webp = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 5]);
+    const api = new FakeTelegramApi(async () => image(200, "image/webp", webp));
+    api.answers.set("sendPhoto", { ok: false, code: 400, description: "Bad Request: IMAGE_PROCESS_FAILED" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await api.sendAlert(5, { html: "<b>hi</b>", imageUrl: "https://cdn.example/a.webp" });
+      expect(result.ok).toBe(true);
+      expect(api.sent().map((m) => m.photo)).toEqual(["upload", null]);
+      const line = warn.mock.calls.map((c) => String(c[0])).find((l) => l.includes("refused the photo"));
+      expect(line).toBeDefined();
+      expect(JSON.parse(line!).meta).toMatchObject({
+        description: "Bad Request: IMAGE_PROCESS_FAILED",
+        contentType: "image/webp",
+        bytes: webp.byteLength,
+        host: "cdn.example",
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
