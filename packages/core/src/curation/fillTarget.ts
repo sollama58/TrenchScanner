@@ -7,12 +7,14 @@
  * measured between a call and a real buy landing), plus FILL_PENALTY_FRACTION. When that price is
  * a curve-tape print inside FILL_TAPE_LATEST_MS it is the tape's 5-second time-weighted price (the
  * same smoothing the labels use) and the fill is marked "tape". Otherwise it is the watcher's
- * minute sample and is marked "minute".
+ * minute sample and is marked "minute". With no price by FILL_LATEST_MS there is no fill and no
+ * verdict.
  *
  * This is graded BESIDE the labels in labels.ts, not instead of them: the 2x-in-15-minutes label
  * is what the models learn and are scored on, and nothing here writes to it. Kept pure, like
  * labels.ts, so it can be tested without a database or a price feed.
  */
+import { smoothedCurvePrices } from "./labels.js";
 
 /** How long after the call the simulated buy lands. FDSA_LAB_FRICTIONS.entryDelaySec is the same 16 s. */
 export const FILL_DELAY_MS = 16_000;
@@ -20,6 +22,12 @@ export const FILL_DELAY_MS = 16_000;
 export const FILL_PENALTY_FRACTION = 0.01;
 /** A tape print later than this after the call is no longer "the fill at 16 seconds". */
 export const FILL_TAPE_LATEST_MS = 60_000;
+/**
+ * The first price seen later than this after the call is not a fill: the worker was down or the
+ * coin had no price through the minutes a buyer would have bought in, and a price from later is a
+ * different trade. The call then has no verdict on this target (three minute samples fit inside).
+ */
+export const FILL_LATEST_MS = 180_000;
 /** The window the 2x has to land in, measured from the call (not from the fill). */
 export const FILL_WINDOW_MINUTES = 30;
 /** The multiple of the fill that wins. */
@@ -70,7 +78,7 @@ export function initialFillAggregates(anchorAt: Date): FillAggregates {
  * `fromTape` says the price is a smoothed curve-tape print rather than the minute sample.
  *
  * A price before the fill delay is ignored. The first one after it is the fill and decides
- * nothing else. Every later price inside the window can stop the trade or win it, the stop first:
+ * nothing else; one later than FILL_LATEST_MS is no fill. Every later price inside the window can stop the trade or win it, the stop first:
  * one price cannot be both, and a price at or under the stop is a loss.
  */
 export function applyFillTick(
@@ -85,6 +93,7 @@ export function applyFillTick(
   if (!(elapsedMs >= FILL_DELAY_MS) || elapsedMs > FILL_WINDOW_MINUTES * 60_000) return updates;
 
   if (agg.fillPriceUsd === null) {
+    if (elapsedMs > FILL_LATEST_MS) return updates;
     updates.fillPriceUsd = priceUsd * (1 + FILL_PENALTY_FRACTION);
     updates.fillAt = at;
     updates.fillSource = fromTape && elapsedMs <= FILL_TAPE_LATEST_MS ? "tape" : "minute";
@@ -139,4 +148,51 @@ export function gradeFillFromTicks(
   const agg = initialFillAggregates(anchorAt);
   for (const t of ticks) Object.assign(agg, applyFillTick(agg, t.priceUsd, t.at, t.fromTape));
   return { agg, labels: computeFillLabels(agg) };
+}
+
+/** A stored candle, as much of it as the backfill reads (candles/candleChunk.ts StoredBar). */
+export interface FillBar {
+  /** The bar's start, ms. */
+  t: number;
+  /** Its close. Any unit: the rule only compares prices of one coin with each other. */
+  c: number;
+}
+
+/**
+ * The ticks a call's stored candles give the fill target, oldest first: the history backfill's
+ * stand-in for the watcher's ticks.
+ *
+ * - 1-second bars are read the way the watcher reads the curve tape: each close is the price from
+ *   the bar's end, and the ticks are the 5-second time-weighted price (smoothedCurvePrices) at every moment it
+ *   can turn. They count as tape prices.
+ * - Minute bars stand in only outside the stretches the 1-second tape covered (`fineCovers`), one
+ *   tick at each bar's end, like the watcher's minute sample.
+ *
+ * `scale` turns a bar's unit into dollars per token for the stored fill price.
+ */
+export function fillTicksFromBars(
+  anchorAt: Date,
+  fineBars: readonly FillBar[],
+  minuteBars: readonly FillBar[],
+  fineCovers: readonly { from: number; to: number }[],
+  scale = 1,
+): { priceUsd: number; at: Date; fromTape: boolean }[] {
+  const anchorMs = anchorAt.getTime();
+  const untilMs = anchorMs + FILL_WINDOW_MINUTES * 60_000;
+  const steps = fineBars
+    .filter((b) => b.c > 0 && Number.isFinite(b.c))
+    .map((b) => ({ at: b.t + 1_000, price: b.c }))
+    .sort((a, b) => a.at - b.at);
+  const ticks: { priceUsd: number; at: Date; fromTape: boolean }[] = [];
+  for (const p of smoothedCurvePrices({ basis: null, changes: steps }, anchorMs, untilMs)) {
+    ticks.push({ priceUsd: p.price * scale, at: new Date(p.at), fromTape: true });
+  }
+  const covered = (ms: number) => fineCovers.some((c) => ms >= c.from && ms <= c.to);
+  for (const b of minuteBars) {
+    const end = b.t + 60_000;
+    if (!(b.c > 0) || !Number.isFinite(b.c) || end <= anchorMs || end > untilMs || covered(end)) continue;
+    ticks.push({ priceUsd: b.c * scale, at: new Date(end), fromTape: false });
+  }
+  // A tape tick before a minute tick of the same moment: the finer reading is the fill.
+  return ticks.sort((a, b) => a.at.getTime() - b.at.getTime() || Number(b.fromTape) - Number(a.fromTape));
 }

@@ -109,6 +109,7 @@ import {
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
+import { runFillTargetBackfill } from "./jobs/fillTargetBackfill.js";
 import { runExitPlanRescore } from "./jobs/exitPlanRescore.js";
 import { runCandlePeaksJob } from "./jobs/candlePeaks.js";
 import { minuteCandleReader } from "./jobs/minuteCandleReader.js";
@@ -1127,6 +1128,10 @@ async function main() {
           const walletScores = await runWalletScoreBackfill();
           // The one-time clean-winner reading backfill (winnerFollowBackfill.ts), same lock: database only.
           const winnerFollow = await runWinnerFollowBackfill();
+          // The one-time fill-target backfill (fillTargetBackfill.ts), same lock: database only.
+          const fillTarget = await runFillTargetBackfill({
+            fineRetentionDays: env.CANDLE_FINE_RETENTION_DAYS,
+          });
           return {
             ...meta,
             candleSources: regradeCandles.takeStats(),
@@ -1135,6 +1140,7 @@ async function main() {
             ...(bundled ? { bundledSupplyBackfill: bundled } : {}),
             ...(walletScores ? { walletScoreBackfill: walletScores } : {}),
             ...(winnerFollow ? { winnerFollowBackfill: winnerFollow } : {}),
+            ...(fillTarget ? { fillTargetBackfill: fillTarget } : {}),
           };
         }),
       1,

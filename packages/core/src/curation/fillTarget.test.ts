@@ -3,6 +3,7 @@ import {
   applyFillTick,
   computeFillLabels,
   FILL_NET_FACTOR,
+  fillTicksFromBars,
   gradeFillFromTicks,
   initialFillAggregates,
 } from "./fillTarget.js";
@@ -60,6 +61,13 @@ describe("the fill target", () => {
     expect(late.labels).toEqual({ fillWin: false, fillReturnPct: expect.closeTo(pct(12 / 10.1), 8) });
   });
 
+  it("takes no fill from a first price later than three minutes after the call", () => {
+    expect(gradeFillFromTicks(ANCHOR, [minute(180, 10), minute(240, 30)]).labels?.fillWin).toBe(true);
+    const late = gradeFillFromTicks(ANCHOR, [tape(10, 10), minute(181, 10), minute(240, 30)]);
+    expect(late.agg.fillPriceUsd).toBeNull();
+    expect(late.labels).toBeNull();
+  });
+
   it("has no verdict when no price was seen between the fill delay and the window's end", () => {
     expect(gradeFillFromTicks(ANCHOR, [tape(10, 10), minute(1801, 30)]).labels).toBeNull();
     expect(computeFillLabels(initialFillAggregates(ANCHOR))).toBeNull();
@@ -76,5 +84,53 @@ describe("the fill target", () => {
     expect(applyFillTick(agg, 0, at(20), true)).toEqual({});
     const won = gradeFillFromTicks(ANCHOR, [tape(16, 10), tape(100, 21)]).agg;
     expect(applyFillTick(won, 1, at(200), true)).toEqual({});
+  });
+});
+
+describe("fill ticks from stored candles", () => {
+  const ms = (seconds: number) => ANCHOR.getTime() + seconds * 1000;
+  const bar = (seconds: number, c: number) => ({ t: ms(seconds), c });
+
+  it("reads 1-second bars as the 5-second time-weighted price from each bar's end", () => {
+    // 10 from the bar ending 2 s before the call, 20 from the one ending at 20 s.
+    const ticks = fillTicksFromBars(
+      ANCHOR,
+      [bar(-3, 10), bar(19, 20)],
+      [],
+      [{ from: ms(-10), to: ms(1800) }],
+    );
+    // At 20 s the print is not in its own average yet; 5 s later it has filled the window.
+    expect(ticks.map((t) => [(t.at.getTime() - ANCHOR.getTime()) / 1000, t.priceUsd, t.fromTape])).toEqual([
+      [3, 10, true],
+      [20, 10, true],
+      [25, 20, true],
+    ]);
+    const { agg } = gradeFillFromTicks(ANCHOR, ticks);
+    expect(agg.fillAt).toEqual(at(20));
+    expect(agg.fillSource).toBe("tape");
+  });
+
+  it("uses minute bars only outside the stretch the 1-second tape covered, at each bar's end", () => {
+    const ticks = fillTicksFromBars(
+      ANCHOR,
+      [bar(19, 10)],
+      [bar(0, 11), bar(60, 12), bar(120, 13), bar(1800, 99)],
+      [{ from: ms(0), to: ms(90) }],
+      0.5,
+    );
+    expect(ticks.map((t) => [(t.at.getTime() - ANCHOR.getTime()) / 1000, t.priceUsd, t.fromTape])).toEqual([
+      [20, 5, true],
+      [25, 5, true],
+      [120, 6, false],
+      [180, 6.5, false],
+    ]);
+  });
+
+  it("grades a coin with minute bars alone from the first bar's end, marked as the minute sample", () => {
+    const ticks = fillTicksFromBars(ANCHOR, [], [bar(0, 10), bar(60, 25)], []);
+    const { agg, labels } = gradeFillFromTicks(ANCHOR, ticks);
+    expect(agg.fillSource).toBe("minute");
+    expect(agg.fillPriceUsd).toBeCloseTo(10.1);
+    expect(labels?.fillWin).toBe(true);
   });
 });
