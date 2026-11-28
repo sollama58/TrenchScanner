@@ -134,6 +134,17 @@ const PUMPFUN_MAX_CALLS_PER_COIN = 60;
 // 8 s: no 429 in 21 runs at 12 s (audit 2026-10-19), and the swap host's shared budget is 240 a minute.
 const PUMPFUN_SPACING_MS = 8_000;
 const PUMPFUN_PAUSE_ON_429_MS = 60_000;
+/**
+ * How long the Pump.fun lane stands down after its trades route answers 410 Gone, before one coin
+ * asks again. Pump.fun retired the route on 2026-11-16 (program audit 2026-11-28, owner decision
+ * "Fix it, and read the backlog"). Until this, the lane went on taking called coins: each failed
+ * in one call and was shelved for a day (RETRY_UNKNOWN_COIN_MS), a busy coin the moment Helius
+ * handed it on, so Helius never read them. On 11-27 it had taped 232 called coins and 1,355 sat
+ * failed (1,102 "pumpfun", 202 "helius:busy", 51 "helius:failed"), and the winner-follow inputs the
+ * tape feeds had halved. With the lane down every called coin is Helius's: from the launch, or
+ * newest first once it is too busy; the shelved coins come back as their retry times pass.
+ */
+export const PUMPFUN_GONE_MS = 6 * 3_600_000;
 /** Of every this many coins the Pump.fun lane starts, one is an uncalled sample. */
 const SAMPLE_EVERY = 4;
 /** While more called coins than this wait, the Pump.fun lane takes no uncalled sample. */
@@ -275,6 +286,8 @@ interface LaneState {
   heliusNewest: Progress | null;
   pumpFun: Progress | null;
   pumpFunPausedUntil: number;
+  /** Until when the Pump.fun lane stands down: its trades route answered 410 (PUMPFUN_GONE_MS). */
+  pumpFunGoneUntil: number;
   coinsStarted: number;
 }
 
@@ -283,6 +296,7 @@ const state: LaneState = {
   heliusNewest: null,
   pumpFun: null,
   pumpFunPausedUntil: 0,
+  pumpFunGoneUntil: 0,
   coinsStarted: 0,
 };
 const handoffs = new Map<string, Handoff>();
@@ -295,6 +309,7 @@ export function resetTradeTapeState(): void {
   state.heliusNewest = null;
   state.pumpFun = null;
   state.pumpFunPausedUntil = 0;
+  state.pumpFunGoneUntil = 0;
   state.coinsStarted = 0;
   handoffs.clear();
   handoffsRestored = false;
@@ -1264,6 +1279,17 @@ async function runPumpFunLane(
         state.pumpFunPausedUntil = now() + PUMPFUN_PAUSE_ON_429_MS;
         return;
       }
+      if (err instanceof HttpError && err.status === 410) {
+        // The route is gone, which says nothing about this coin: it is not marked failed, and
+        // goes back to the waiting coins for Helius to read.
+        if (now() >= state.pumpFunGoneUntil)
+          logger.error("Pump.fun's trades route is gone (410): the tape's Pump.fun lane stands down", {
+            forMs: PUMPFUN_GONE_MS,
+          });
+        state.pumpFunGoneUntil = now() + PUMPFUN_GONE_MS;
+        state.pumpFun = null;
+        return;
+      }
       p.errors += 1;
       logger.warn("pump.fun trades read failed", { mint: p.coin.mint, error: String(err) });
       if (p.errors >= 3) {
@@ -1305,6 +1331,10 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     state.helius = null;
     state.heliusNewest = null;
   }
+  // The Pump.fun lane stands down while its trades route is gone (PUMPFUN_GONE_MS): a read held in
+  // it would keep its coin from Helius.
+  const pumpFunOn = opts.pumpFunCallsPerRun > 0 && now() >= state.pumpFunGoneUntil;
+  if (!pumpFunOn) state.pumpFun = null;
   // A coin carried over from the last run stays with its lane, and out of the lists for new picks.
   const inProgress = new Set(LANES.map((l) => state[l]?.coin.tokenId));
   const called = waiting.filter((c) => !inProgress.has(c.tokenId));
@@ -1343,7 +1373,7 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
           now,
         )
       : Promise.resolve(),
-    opts.pumpFunCallsPerRun > 0
+    pumpFunOn
       ? runPumpFunLane(
           deps,
           called,
@@ -1380,6 +1410,8 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     // False means Helius can't serve the read here (no key, or the method stood down): the tape
     // then runs on Pump.fun alone, a few coins an hour.
     heliusUsable: deps.helius.gtfaUsable,
+    // True while the Pump.fun lane stands down on its retired trades route (PUMPFUN_GONE_MS).
+    pumpFunGone: now() < state.pumpFunGoneUntil,
     ...counts,
     // Closing reads (tradeTapeClosing.ts): coins closed or failed, sellers found, wallets updated, credits.
     ...closing,

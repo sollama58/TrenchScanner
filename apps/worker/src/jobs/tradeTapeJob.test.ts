@@ -14,6 +14,7 @@ import {
   heliusNewestPagesPerRun,
   heliusPagesLeft,
   mintShareSlot,
+  PUMPFUN_GONE_MS,
   pendingCalledCoins,
   resetTradeTapeState,
   runTradeTapeJob,
@@ -582,6 +583,89 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
       source: "helius",
     });
   });
+  it("stands the Pump.fun lane down on a 410 and leaves its coin to Helius, unmarked", async () => {
+    const older = await seedCalled("gone-older", null);
+    const newer = await seedCalled("gone-newer", null);
+    const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+    const asked: string[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m) => {
+        asked.push(m);
+        return {
+          status: "ok",
+          paginationToken: null,
+          txs: [
+            {
+              blockTime: LAUNCH / 1000,
+              transaction: { signatures: ["c"], message: { accountKeys: [dev, "ata"] } },
+              meta: {
+                err: null,
+                preTokenBalances: [],
+                postTokenBalances: [
+                  { accountIndex: 1, mint: m, owner: dev, uiTokenAmount: { amount: "1000000", decimals: 6 } },
+                ],
+                preBalances: [2e9, 0],
+                postBalances: [1e9, 0],
+              },
+            },
+          ],
+        };
+      },
+    };
+    // Pump.fun as it answers since 2026-11-16: the coin lookup works, the trades route is gone.
+    let origins = 0;
+    let trades = 0;
+    const pumpFun: TradeTapeDeps["pumpFun"] = {
+      coinOrigin: async () => {
+        origins += 1;
+        return { creator: "dev", createdAt: new Date(LAUNCH) };
+      },
+      coinTrades: async () => {
+        trades += 1;
+        throw new HttpError(410, "x");
+      },
+    };
+    let now = NOW;
+    const run = () =>
+      runTradeTapeJob(
+        { helius, pumpFun },
+        { heliusPagesPerRun: 1, pumpFunCallsPerRun: 4, spacingMs: 0, now: () => now },
+      );
+    // Run 1: Helius reads one coin; the Pump.fun lane takes the other, meets the 410 and lets go.
+    const first = await run();
+    expect(first).toMatchObject({ pumpFunGone: true, failed: 0 });
+    expect(trades).toBe(1);
+    const tapes = async () =>
+      (
+        await prisma.tokenTradeTape.findMany({
+          where: { tokenId: { in: [older.token.id, newer.token.id] } },
+          select: { status: true, source: true },
+        })
+      ).map((t) => `${t.status}/${t.source}`);
+    // No failed mark on the coin the dead lane held: it is still waiting.
+    expect(await tapes()).toEqual(["done/helius"]);
+    // Run 2: the lane is down, so it asks nothing, and Helius reads the coin it let go.
+    now += MIN;
+    const second = await run();
+    expect(second).toMatchObject({ pumpFunGone: true, pumpFunCalls: 0 });
+    expect([origins, trades]).toEqual([1, 1]);
+    expect((await tapes()).sort()).toEqual(["done/helius", "done/helius"]);
+    expect(new Set(asked)).toEqual(new Set([older.token.mintAddress, newer.token.mintAddress]));
+    // After the stand-down one coin asks again (and would be let go again on another 410).
+    await seedCalled("gone-later", null);
+    await seedCalled("gone-latest", null);
+    now += PUMPFUN_GONE_MS;
+    await run();
+    expect(trades).toBe(2);
+    // And Helius reads that one too on the next run: nothing is left waiting.
+    now += MIN;
+    const last = await run();
+    expect(last).toMatchObject({ pumpFunGone: true, pumpFunCalls: 0, pendingCalledCoins: 1, done: 1 });
+    expect(trades).toBe(2);
+  });
+
   it("hands a busy coin off early, then reads it newest first to meet the pages it kept", async () => {
     const busy = await seedCalled("busy", null);
     const mint = busy.token.mintAddress;

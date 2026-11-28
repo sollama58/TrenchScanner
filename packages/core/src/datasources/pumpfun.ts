@@ -411,7 +411,7 @@ export class PumpFunClient {
    * One page of a coin's trades, newest first, starting before `cursor` (pumpFunCursorBefore for a
    * point in time, or the last page's nextCursor) - the trade tape's free source. Rate-limited
    * hard (429 after a burst, Retry-After 10-50 s), so callers space their calls. Null when Pump.fun
-   * has no such coin; throws on a transport failure (a 429 included).
+   * has no such coin; throws on a transport failure (a 429 included) and on a 410, the route gone.
    */
   async coinTrades(
     mintAddress: string,
@@ -431,11 +431,9 @@ export class PumpFunClient {
       );
       return tradesFromPumpFun(body);
     } catch (err) {
-      // 410: Pump.fun retired this route on 2026-11-16 ("This endpoint has been deprecated and is
-      // no longer available", program audit 2026-11-28). Read as "no such coin", which is what the
-      // trade tape's lane already got from its coin lookup while that route was gone too, so the
-      // lane behaves as it did until its own change lands (the owner's decision: Helius credits).
-      if (err instanceof HttpError && (err.status === 404 || err.status === 410)) return null;
+      // A 410 is thrown, not read as "no such coin": Pump.fun retired this route on 2026-11-16
+      // and the trade tape stands its lane down on it (tradeTapeJob.ts, program audit 2026-11-28).
+      if (err instanceof HttpError && err.status === 404) return null;
       throw err;
     }
   }
