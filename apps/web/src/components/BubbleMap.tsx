@@ -2488,8 +2488,6 @@ export function BubbleMapSection({
   const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);
   const side = useSideToggle(graph);
-  // Every name, hidden ones too: a KOL's always shows, and an exchange's says it is a service.
-  const kols = useKols(graph, side.groups, graphNames, showTransfers);
   const label = tokenLabel(token);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
     // Still on its way: the map's place is held at its size, so it fills in without a jump.

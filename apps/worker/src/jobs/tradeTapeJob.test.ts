@@ -847,7 +847,6 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
 
   it("stores a busy coin's kept launch side with its partial newest-first read, across a restart", async () => {
     const busy = await seedCalled("busy-gap", null);
-    const mint = busy.token.mintAddress;
     const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
     const early = "EarLyBuyer1111111111111111111111111111111111";
     const page = (

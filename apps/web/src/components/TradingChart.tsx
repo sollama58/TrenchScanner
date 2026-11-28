@@ -166,8 +166,6 @@ const TIME_AXIS_PX = 28;
 /** The widest a candle draws when zoomed in (px), and the narrowest when zoomed out. */
 const MAX_BAR_PX = 48;
 const MIN_BAR_PX = 0.5;
-/** A view opens with candles about this wide (px), on its newest candles when they all won't fit. */
-const OPEN_BAR_PX = 4;
 /** Scrolled to within this many candles (or a quarter of the view) of the oldest, the page before it is read. */
 const OLDER_EDGE_BARS = 20;
 /** The space past the last candle (px), and the predicted path's zone there. */

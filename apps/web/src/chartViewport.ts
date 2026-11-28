@@ -1,6 +1,6 @@
 import { openingSpanMs } from "./priceChart";
 
-/** A picked timeframe opens with candles about this wide on screen (TradingChart OPEN_BAR_PX). */
+/** A picked timeframe opens with candles about this wide on screen (TradingChart opens its views through openingLogicalRange). */
 const OPEN_BAR_PX = 4;
 
 /**
@@ -11,7 +11,7 @@ export function openingLogicalRange(
   barCount: number,
   plotW: number,
   tfMs: number,
-  extent: { t0: number; t1: number },
+  _extent: { t0: number; t1: number },
 ): { from: number; to: number } {
   const fit = Math.max(8, Math.floor(plotW / OPEN_BAR_PX));
   const spanBars = Math.min(barCount, Math.max(fit, Math.ceil(openingSpanMs(tfMs, plotW) / tfMs)));
