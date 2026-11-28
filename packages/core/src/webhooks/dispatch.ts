@@ -238,7 +238,7 @@ const CALL_SELECT = {
   modelName: true,
   confidence: true,
   tier: true,
-  calibratedPct: true,
+  shownPct: true,
   reasons: true,
   anchorPriceUsd: true,
   anchorMcapUsd: true,
@@ -260,7 +260,11 @@ export function alertPayload(call: CallRow): Prisma.InputJsonObject {
     modelName: call.modelName,
     confidence: call.confidence,
     tier: call.tier,
-    calibratedPct: call.calibratedPct,
+    // The rate the card quotes (CuratedAlert.shownPct), as the API, the extension and Telegram
+    // send under this name. This sent the call's own band, CuratedAlert.calibratedPct, which
+    // liveRankRates.ts keeps for the FDSA screen and no card may quote: a partner printed 35.9%
+    // where our card printed the pooled rate (program audit 2026-11-28, TG-3).
+    calibratedPct: call.shownPct,
     reasons: call.reasons,
     narrativeVerdict: call.narrativeVerdict,
     anchorPriceUsd: call.anchorPriceUsd,

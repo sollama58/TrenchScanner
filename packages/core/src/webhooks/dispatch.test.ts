@@ -214,6 +214,15 @@ describe.skipIf(!dbAvailable)("runWebhookDispatch", () => {
     }));
   };
 
+  it("quotes the rate the card shows, not the call's own band", async () => {
+    const c = await call("wh-rules");
+    await prisma.curatedAlert.update({ where: { id: c.id }, data: { calibratedPct: 35.9, shownPct: 22 } });
+    const { sent, summary } = await run();
+    expect(summary.delivered).toBe(1);
+    const data = (JSON.parse(sent[0]!.body) as { data: { calibratedPct: number | null } }).data;
+    expect(data.calibratedPct).toBe(22);
+  });
+
   it("sends the default feed's calls once, signed", async () => {
     const mine = await call("wh-rules");
     await call("wh-trees");
