@@ -44,7 +44,8 @@ const logger = createLogger("live-curve");
  * by RPC every VERIFY_EVERY_MS; when the read differs from what the stream delivered and nothing
  * arrives within VERIFY_GRACE_MS to explain it, the cover is dropped (RPC reads it from the next
  * round), the read is recorded as a tick, and the stream resubscribes that key. `readAt` is the last
- * real delivery or matching check, never the ask's time. A socket silent for COVER_STALL_MS covers
+ * real delivery or matching check, or a moment since that check at which the socket was speaking
+ * (CARRY_SILENCE_MS), never the ask's time. A socket silent for COVER_STALL_MS covers
  * nothing, so a stall falls back to RPC reads at once rather than after the reconnect's minute.
  *
  * Discovery (LaunchLab and CPMM pool scans, the PumpSwap pool lookup after bonding) runs in its own
@@ -90,8 +91,20 @@ export const MAX_FOLLOWED = 400;
  * prices its card as before).
  */
 export const MAX_CARD_FOLLOWED = 300;
-/** A covered curve or pool is checked by RPC this often (1 credit per 100 accounts a check). */
-export const VERIFY_EVERY_MS = 10_000;
+/**
+ * A covered curve or pool is checked by RPC this often (1 credit per 100 accounts a check).
+ * A minute since 2026-11-28 (program audit DS-7, owner decision "Cut both"): at 10 s the checks
+ * were ~26k credits a day and had found one mismatch in 1,398. Between checks a quiet coin's
+ * price is vouched for by the socket itself while it is plainly alive (CARRY_SILENCE_MS), so the
+ * chart's Live pill and the cards' Now do not lapse. One account whose updates stop while the
+ * socket goes on speaking now shows a flat "Live" line for up to a minute, not 10 s.
+ */
+export const VERIFY_EVERY_MS = 60_000;
+/**
+ * Between checks, a covered price counts as current only while Helius has said something on the
+ * socket within this long (the slot feed speaks every ~0.4 s).
+ */
+export const CARRY_SILENCE_MS = 3_000;
 /**
  * A check that differs from the stream waits this long for a delivery to explain it (the change
  * was in flight on the socket) before the cover counts as broken.
@@ -129,7 +142,9 @@ export const MAX_WAIT_MS = 8_000;
 const SEED_WAIT_MS = 2_500;
 
 type Stream = Pick<HeliusAccountStream, "start" | "stop" | "watch" | "unwatch" | "coveredSince"> &
-  Partial<Pick<HeliusAccountStream, "takeStats" | "resubscribe" | "stalledForMs" | "slotTime">>;
+  Partial<
+    Pick<HeliusAccountStream, "takeStats" | "resubscribe" | "stalledForMs" | "slotTime" | "silentForMs">
+  >;
 
 /** The chart socket's traffic since this process started, summed over every socket it opened. */
 export interface LiveCurveStreamTotals {
@@ -1032,6 +1047,8 @@ export class LiveCurves {
    * The stream check (audit item 3): every covered curve and pool due a check (VERIFY_EVERY_MS
    * since its last RPC read or check) is read again by RPC, batched (100 accounts a call). A match
    * confirms the price as current then; a difference is held for VERIFY_GRACE_MS (settleSuspects).
+   * One not yet due a check is carried: its last price is current as of now while the socket is
+   * speaking, which costs nothing.
    */
   private async verify(): Promise<void> {
     const reader = this.deps.reader;
@@ -1041,16 +1058,21 @@ export class LiveCurves {
       Math.max(verifiedAt ?? 0, readAt ?? 0);
     const curves: [string, Followed][] = [];
     const pools: [string, Followed, FollowedPool][] = [];
+    const speaking = (this.stream.silentForMs?.(now) ?? Infinity) <= CARRY_SILENCE_MS;
     for (const [mint, f] of this.followed) {
       if (f.none || !this.streamCovers(mint, f)) continue;
       const pool = poolOf(f);
       if (pool) {
         // Half a slot in (PAIR_WAIT_MS): the vaults would read as differing; checked next time.
-        if (pool.suspect || pool.timer || now - lastCheck(pool.verifiedAt, pool.readAt) < VERIFY_EVERY_MS)
-          continue;
-        pools.push([mint, f, pool]);
-      } else if (!f.complete && !f.suspect && now - lastCheck(f.verifiedAt, f.readAt) >= VERIFY_EVERY_MS) {
-        curves.push([mint, f]);
+        if (pool.suspect || pool.timer) continue;
+        if (now - lastCheck(pool.verifiedAt, pool.readAt) >= VERIFY_EVERY_MS) pools.push([mint, f, pool]);
+        else if (speaking) this.recordPool(mint, f, pool, now);
+      } else if (!f.complete && !f.suspect) {
+        if (now - lastCheck(f.verifiedAt, f.readAt) >= VERIFY_EVERY_MS) curves.push([mint, f]);
+        else if (speaking) {
+          const last = f.ticks[f.ticks.length - 1];
+          if (last) this.recordMcap(mint, f, last[1], now);
+        }
       }
     }
     let verified = 0;
@@ -1199,7 +1221,8 @@ export class LiveCurves {
 
   /**
    * Adds a price at `at` to `f`'s tape (if it changed); whether it did. Every call is a real read
-   * (a delivery, an RPC read or a matching check), so it also moves the price's known-current time.
+   * (a delivery, an RPC read or a matching check) or the stream's cover carried between checks
+   * (verify), so it also moves the price's known-current time.
    */
   private recordMcap(mint: string, f: Followed, mcap: number, at: number): boolean {
     const last = f.ticks[f.ticks.length - 1];

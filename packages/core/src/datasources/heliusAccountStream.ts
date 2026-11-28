@@ -290,6 +290,15 @@ export class HeliusAccountStream {
     return silent >= this.coverStallMs ? silent : 0;
   }
 
+  /**
+   * How long since Helius last said anything on the open socket (ms; the slot feed speaks every
+   * ~0.4 s), Infinity when the socket is not open. Finer than stalledForMs, for a caller that
+   * vouches for a quiet account only while the socket is plainly alive (the chart's live tail).
+   */
+  silentForMs(now: number = Date.now()): number {
+    return this.socket?.readyState === 1 ? Math.max(0, now - this.lastActivityAt) : Infinity;
+  }
+
   private meter(bytes: number, connections: number, kind: StreamMessageKind = "control", key?: string): void {
     if (this.meterFeature === null) return;
     const feature = this.meterLabelOf
