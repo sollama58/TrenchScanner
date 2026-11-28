@@ -1,4 +1,5 @@
 import type { InlineKeyboard } from "./api.js";
+import { winTargetRule, winTargetSpec } from "../curation/winTarget.js";
 import {
   DEFAULT_STYLE,
   DIVIDER,
@@ -287,11 +288,18 @@ export function formatTrenchboard(stats: BoardStats, now = Date.now()): string {
         ? `💵 Avg return  <b>${signedPct(stats.avgReturnPct)}</b>  over ${stats.settled} settled`
         : "💵 Avg return  <b>–</b>  (none settled yet)",
     );
-    if (stats.pending > 0) lines.push(`⏳ ${stats.pending} still in their 15-minute window`);
+    if (stats.pending > 0)
+      lines.push(`⏳ ${stats.pending} still in their ${winTargetSpec().windowMinutes}-minute window`);
     if (stats.best)
       lines.push(`🚀 Best  <b>${escapeHtml(label(stats.best))}</b>  ${signedPct(stats.best.peakPct)}`);
   }
-  lines.push("", "<i>A win is a clean 2x within 15 minutes; the return is the exit plan's.</i>");
+  // The rule the board's verdicts and returns follow (WIN_TARGET_RULE, curation/winTarget.ts).
+  lines.push(
+    "",
+    winTargetRule() === "fill30"
+      ? "<i>A win is 2x on a real fill within 30 minutes, before a 30% stop; the return is that trade's after costs.</i>"
+      : "<i>A win is a clean 2x within 15 minutes; the return is the exit plan's.</i>",
+  );
   if (stats.recordedSince) lines.push(`<i>Counting from ${sinceText(stats.recordedSince)}.</i>`);
   lines.push(updatedText(now));
   return lines.join("\n");

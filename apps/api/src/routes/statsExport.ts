@@ -147,6 +147,16 @@ const OUTCOME_COLUMNS = [
   "hit10xIn1h",
   "disqualified",
   "labelValue",
+  // The fill target's grade beside the classic one (core's curation/fillTarget.ts, 2026-11-28):
+  // 2x on a real fill within 30 minutes before a 30% stop, and the trade's return after costs.
+  "fillPriceUsd",
+  "fillAt",
+  "fillSource",
+  "fillHit2xAt",
+  "fillStoppedAt",
+  "fillExitPriceUsd",
+  "fillWin",
+  "fillReturnPct",
 ] as const;
 
 function outcomeWhere(q: ExportQuery, since: Date, until: Date): Prisma.CandidateOutcomeWhereInput {
@@ -714,6 +724,11 @@ const ALERT_COLUMNS = [
   // The coin's ATH since its first alert, by any model or filter (PeakWatch), and when.
   "coinAthMcapUsd",
   "coinAthAt",
+  // The fill target's verdict copied beside the classic one (curation/fillTarget.ts, 2026-11-28).
+  "fillPriceUsd",
+  "fillSource",
+  "fillWin",
+  "fillReturnPct",
 ] as const;
 
 /** The alert columns read from the alert's token rather than the alert row. */
