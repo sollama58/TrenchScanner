@@ -20,6 +20,7 @@ import {
   findCanaryProblems,
   findCapacityProblems,
   findCreditProblems,
+  findLowFlowProblems,
   findProblems,
   findSideJobProblems,
   findTradeOutcomeProblems,
@@ -58,15 +59,50 @@ const flow = (key: string, recent: number, baseline: number): FlowCheck => ({
 
 describe("pipeline watch: what counts as stalled", () => {
   it("flags a flow that produced nothing in its window but did the day before", () => {
-    const problems = findProblems([flow("tokensage", 0, 4_000), flow("decisions", 12, 900)], [], NOW);
-    expect(problems.map((p) => p.key)).toEqual(["tokensage"]);
+    const problems = findProblems([flow("discovery", 0, 4_000), flow("decisions", 12, 900)], [], NOW);
+    expect(problems).toEqual([expect.objectContaining({ key: "discovery" })]);
+    // A stall of the alert path: it starts the clock to the banner and the restart.
+    expect(problems[0]!.side).toBeUndefined();
   });
 
   it("puts a quiet TokenSage flow full of failed answers down to TokenSage: notify, no restart", () => {
     const [p] = findProblems([{ ...flow("tokensage", 0, 4_000), failed: 37 }], [], NOW);
     expect(p).toMatchObject({ key: "tokensage", side: true });
     expect(p!.text).toContain("TokenSage answered 37 as failed");
-    expect(findProblems([{ ...flow("tokensage", 0, 4_000), failed: 0 }], [], NOW)[0]?.side).toBeUndefined();
+  });
+
+  // Program audit 2026-11-28, FD-4: with TokenSage down (no answers at all, so no failed ones)
+  // the quiet flow counted as a scanner stall, and the scanner restarted itself at ten minutes
+  // for an outage that was not its own.
+  it("puts a TokenSage flow at zero down to TokenSage even with no failed answers", () => {
+    for (const f of [flow("tokensage", 0, 4_000), { ...flow("tokensage", 0, 4_000), failed: 0 }]) {
+      const [p] = findProblems([f], [], NOW);
+      expect(p).toMatchObject({ key: "tokensage", side: true });
+      expect(p!.text).toContain("TokenSage is not answering");
+    }
+  });
+
+  it("notices a flow running at a fraction of its usual output", () => {
+    // 4,000 a day is about 42 a quarter hour; 60 in the same quarter hour yesterday.
+    const low = { ...flow("tokensage", 5, 4_000), dayAgo: 60 };
+    expect(findLowFlowProblems([low])).toEqual([
+      expect.objectContaining({
+        key: "tokensage:low",
+        side: true,
+        text: expect.stringContaining("5 in the last 15 min"),
+      }),
+    ]);
+    // Under a fifth of yesterday's window but not of the day's average (a busy window a day ago), and
+    // the other way round (a quiet hour of the day): one odd reference alone raises nothing.
+    expect(findLowFlowProblems([{ ...flow("tokensage", 10, 4_000), dayAgo: 200 }])).toEqual([]);
+    expect(findLowFlowProblems([{ ...flow("tokensage", 7, 9_600), dayAgo: 30 }])).toEqual([]);
+    // A quiet stage's fifth is a handful: not judged.
+    expect(findLowFlowProblems([{ ...flow("modelAlerts", 1, 300), dayAgo: 20 }])).toEqual([]);
+    // Zero is the stall rule's, and a flow whose day-ago window was not read is not judged.
+    expect(findLowFlowProblems([{ ...flow("tokensage", 0, 4_000), dayAgo: 60 }])).toEqual([]);
+    expect(findLowFlowProblems([flow("tokensage", 5, 4_000)])).toEqual([]);
+    // Healthy.
+    expect(findLowFlowProblems([{ ...flow("decisions", 40, 4_000), dayAgo: 60 }])).toEqual([]);
   });
 
   it("leaves a flow that isn't in use alone", () => {
@@ -969,6 +1005,16 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
       ),
     );
 
+  /**
+   * A stall of the alert path itself: the scan has not run for an hour. A quiet TokenSage flow was
+   * the stall these tests used until it stopped being one (program audit 2026-11-28, FD-4).
+   */
+  const scanQuietAt = (at: number) =>
+    prisma.systemHeartbeat.update({
+      where: { job: "scan" },
+      data: { lastRunAt: new Date(at - 60 * MIN), lastSuccessAt: new Date(at - 60 * MIN) },
+    });
+
   beforeEach(async () => {
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
     // Trainer rows other test files left behind would read as overdue trainer jobs here.
@@ -1194,6 +1240,7 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
       },
     });
     await jobsRanAt(now);
+    await scanQuietAt(now);
     // A stall already warned about, with a restart 5 minutes ago: this run is "capped" and tells the admins.
     const first = (await runPipelineWatch(env, { now }).catch((e: unknown) => e)) as JobFailure;
     const lastRestartAt = new Date(now - 5 * MIN).toISOString();
@@ -1280,6 +1327,36 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
     }
   });
 
+  // Program audit 2026-11-28, FD-4: TokenSage down used to count as a scanner stall, with the
+  // visitors' banner at five minutes and a restart at ten that mended nothing.
+  it("tells of TokenSage going quiet without a banner or a restart", async () => {
+    const t0 = Date.now();
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.tokenNarrative.create({
+      data: {
+        mintAddress: `${TAG}-q`,
+        depth: "basic",
+        status: "complete",
+        checkedAt: new Date(t0 - 60 * MIN),
+      },
+    });
+    const restart = vi.fn();
+    for (const now of [t0, t0 + 5 * MIN, t0 + 11 * MIN]) {
+      await jobsRanAt(now);
+      const out = await runPipelineWatch(env, { now, restart }).catch((e: unknown) => e);
+      expect(out).toBeInstanceOf(JobFailure);
+      expect((out as JobFailure).message).toContain("TokenSage is not answering");
+      expect((out as JobFailure).meta).toMatchObject({ warned: 0 });
+      await prisma.systemHeartbeat.upsert({
+        where: { job: "pipeline-watch" },
+        create: { job: "pipeline-watch", lastRunAt: new Date(now), meta: (out as JobFailure).meta as object },
+        update: { lastRunAt: new Date(now), meta: (out as JobFailure).meta as object },
+      });
+    }
+    expect(restart).not.toHaveBeenCalled();
+    expect(await prisma.announcement.count({ where: { createdBy: WATCH_ANNOUNCER, endedAt: null } })).toBe(0);
+  });
+
   it("warns visitors, restarts once, and takes the banner down when it flows again", async () => {
     const t0 = Date.now();
     await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
@@ -1293,8 +1370,9 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
     });
     const restart = vi.fn();
     // The scheduler stores a failed run's meta on the heartbeat; do the same between runs.
-    const run = async (now: number) => {
+    const run = async (now: number, scanQuiet = true) => {
       await jobsRanAt(now);
+      if (scanQuiet) await scanQuietAt(now);
       const out = await runPipelineWatch(env, { now, restart }).catch((e: unknown) => e);
       const meta = out instanceof JobFailure ? out.meta : (out as Record<string, unknown>);
       await prisma.systemHeartbeat.upsert({
@@ -1327,7 +1405,7 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
         checkedAt: new Date(t0 + 15 * MIN),
       },
     });
-    expect(await run(t0 + 16 * MIN)).toMatchObject({ stalled: 0, warned: 0 });
+    expect(await run(t0 + 16 * MIN, false)).toMatchObject({ stalled: 0, warned: 0 });
     expect(await banners()).toHaveLength(0);
   });
 
