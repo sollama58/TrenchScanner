@@ -519,7 +519,13 @@ export async function registerStatsRoutes(
         return;
       }
       const { since, until } = exportWindow(q);
-      const stream = startExport(q, since, until, partner ? { maxInFlight: 1 } : {});
+      // A partner's paths are the calls' paths, not the banked training sample (statsExport.ts calledOnly).
+      const stream = startExport(
+        partner ? { ...q, calledOnly: true } : q,
+        since,
+        until,
+        partner ? { maxInFlight: 1 } : {},
+      );
       if (!stream) {
         reply.code(429).send({ error: "export_busy" });
         return;

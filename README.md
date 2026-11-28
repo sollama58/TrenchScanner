@@ -56,7 +56,7 @@ The same token reads the dashboard Admin tab's operational reports under `/stats
 - `GET /stats/hit-rates`: the rules, targets, the models' graded calls, confidence bands and winner runs. Other users' filters, the AI reviewer's setup, shadow emissions and banking samples are left out.
 - `GET /stats/models`: the champion, the default models, the ranking and the lift curve.
 - `GET /stats/candles/<mint>?tf=1m&limit=1500&before=<ms>`: the chart's bars (`{t,o,h,l,c,vol}`, USD price on today's supply) and the paging cursor `next`. These are the minute closes to replay exits on: the `paths` export's ticks are scan snapshots, irregular and thinned by retention.
-- `GET /stats/export?dataset=alerts|paths`: the calls and their snapshot price paths. Not the other datasets (outcomes carries every model input, the training data), and never the last free export slot.
+- `GET /stats/export?dataset=alerts|paths`: the calls and their snapshot price paths (a partner's `paths` holds only rows a call was made on, not the banked training sample). Not the other datasets (outcomes carries every model input, the training data), and never the last free export slot.
 - `/stats/webhook`: its own alert webhook (below).
 
 Everything else answers a partner 404 (`/stats/ops` 401). Calls are rate-limited per address, as for the operator.
