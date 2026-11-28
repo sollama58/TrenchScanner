@@ -5,7 +5,12 @@ import {
   prisma,
   Prisma,
   loadEnv,
+  AGREEMENT_CONTESTANT,
   AGREEMENT_MODEL_KIND,
+  BLEND_CONTESTANT,
+  BLEND_MODEL_KIND,
+  TOP_SLICE_CONTESTANT,
+  TOP_SLICE_MODEL_KIND,
   SHARP_AGREEMENT_CONTESTANT,
   GEMS_CONTESTANT,
   GEMERALD_GATE,
@@ -1040,6 +1045,125 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     const banked = row.seatScores as Record<string, number>;
     // Both members call: the agreement score sits at 2 of 2 and above.
     expect(banked[SHARP_AGREEMENT_CONTESTANT]).toBeGreaterThanOrEqual(2 / 3);
+  });
+
+  /**
+   * The live decision of the three combiner roles beside the consensus (program audit 2026-11-28,
+   * CH-3). Production runs one Top Slice, two Agreement and one Blend seat, and nothing ran their
+   * branches of decideCurations with a seat that may call: the threshold compare, the reasons and
+   * the served fields could be edited wrong with the worker suite still green. Two always-yes
+   * members score 0.993 on every moment; `quantiles` is each member's shipped table, so
+   * [0.2, 0.5, 0.8] ranks that score at the top and [0.995, 0.996, 0.997] at the bottom.
+   */
+  async function seedMembers(quantiles: number[], callRank: number | null = 0.5) {
+    const linearId = await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
+    const treesId = await activeModel("trees", CURATOR_MODEL_KIND, alwaysYesParams());
+    const member = (contestant: string, modelId: string) => ({
+      contestant,
+      modelId,
+      quantiles,
+      ...(callRank === null ? {} : { callRank }),
+    });
+    return [member("linear", linearId), member("trees", treesId)];
+  }
+
+  async function combinerAlert(mint: string, seat: string) {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${mint}` } });
+    const scored = curatableFixture(token.mintAddress);
+    const sample = await recordCandidateSample(token.id, scored, env);
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, sample, env);
+    const contends = cycle.byModel.has(seat);
+    await emitCuratedCycle(cycle, env);
+    const alert = await prisma.curatedAlert.findFirst({ where: { tokenId: token.id, model: seat } });
+    const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: sample!.id } });
+    return { contends, alert, banked: (row.seatScores ?? {}) as Record<string, number> };
+  }
+
+  it("the Blend calls when its members' mean rank clears its threshold, naming who backs it", async () => {
+    const members = await seedMembers([0.2, 0.5, 0.8]);
+    const blendId = await activeModel(BLEND_CONTESTANT, BLEND_MODEL_KIND, {
+      kind: BLEND_MODEL_KIND,
+      members,
+      threshold: 0.9,
+    });
+    const { contends, alert, banked } = await combinerAlert("blend-calls", BLEND_CONTESTANT);
+    expect(contends).toBe(true);
+    expect(alert?.source).toBe(blendId);
+    expect(alert?.reasons[0]).toBe("backed by Formula, Trees");
+    // Both members rank at the top of their tables: the mean rank is the score, in percent.
+    expect(alert?.confidence).toBeGreaterThan(90);
+    expect(banked[BLEND_CONTESTANT]).toBeGreaterThan(0.9);
+  });
+
+  it("the Blend does not call a moment its members rank at the bottom, and still banks its score", async () => {
+    const members = await seedMembers([0.995, 0.996, 0.997]);
+    await activeModel(BLEND_CONTESTANT, BLEND_MODEL_KIND, {
+      kind: BLEND_MODEL_KIND,
+      members,
+      threshold: 0.9,
+    });
+    const { contends, alert, banked } = await combinerAlert("blend-holds", BLEND_CONTESTANT);
+    expect(contends).toBe(false);
+    expect(alert).toBeNull();
+    expect(banked[BLEND_CONTESTANT]).toBeLessThan(0.9);
+    // The members themselves still call on their own ledgers.
+    expect(banked.linear).toBeGreaterThan(0.99);
+  });
+
+  it("the Agreement calls when enough members call, and says how many and who", async () => {
+    const members = await seedMembers([0.2, 0.5, 0.8]);
+    const agreementId = await activeModel(AGREEMENT_CONTESTANT, AGREEMENT_MODEL_KIND, {
+      kind: AGREEMENT_MODEL_KIND,
+      members,
+      // Two of two calling: (2 + rank) / 3.
+      threshold: 2 / 3,
+    });
+    const { contends, alert } = await combinerAlert("agreement-calls", AGREEMENT_CONTESTANT);
+    expect(contends).toBe(true);
+    expect(alert?.source).toBe(agreementId);
+    expect(alert?.reasons[0]).toBe("2 of 2 models alert on it: Formula, Trees");
+  });
+
+  it("the Agreement does not call when its members hold no cutoff to call at", async () => {
+    // No callRank: a member whose exam set no cutoff never counts as calling, however high it ranks.
+    const members = await seedMembers([0.2, 0.5, 0.8], null);
+    await activeModel(AGREEMENT_CONTESTANT, AGREEMENT_MODEL_KIND, {
+      kind: AGREEMENT_MODEL_KIND,
+      members,
+      threshold: 2 / 3,
+    });
+    const { contends, alert, banked } = await combinerAlert("agreement-holds", AGREEMENT_CONTESTANT);
+    expect(contends).toBe(false);
+    expect(alert).toBeNull();
+    // Nobody calling: the score is the rank part alone, under one member's worth.
+    expect(banked[AGREEMENT_CONTESTANT]).toBeLessThan(1 / 3 + 1e-9);
+  });
+
+  it("Top Slice calls a moment inside a member's top slice, and not one outside every slice", async () => {
+    const slice = (members: Awaited<ReturnType<typeof seedMembers>>, sliceProbability: number) => ({
+      kind: TOP_SLICE_MODEL_KIND,
+      members: members.map((m) => ({ ...m, sliceRank: 0.95, sliceProbability })),
+      // One member in its slice.
+      threshold: 1 / 3,
+    });
+    // The members score 0.993: inside a slice that starts at 0.99.
+    let members = await seedMembers([0.2, 0.5, 0.8]);
+    const topSliceId = await activeModel(TOP_SLICE_CONTESTANT, TOP_SLICE_MODEL_KIND, slice(members, 0.99));
+    const inside = await combinerAlert("top-slice-calls", TOP_SLICE_CONTESTANT);
+    expect(inside.contends).toBe(true);
+    expect(inside.alert?.source).toBe(topSliceId);
+    expect(inside.alert?.reasons[0]).toBe("top of its alerts for Formula, Trees");
+
+    // The same score against a slice that starts at 0.999: in nobody's slice, so no call.
+    await retireAll();
+    resetCuratorModelCache();
+    members = await seedMembers([0.2, 0.5, 0.8]);
+    await activeModel(TOP_SLICE_CONTESTANT, TOP_SLICE_MODEL_KIND, slice(members, 0.999));
+    const outside = await combinerAlert("top-slice-holds", TOP_SLICE_CONTESTANT);
+    expect(outside.contends).toBe(false);
+    expect(outside.alert).toBeNull();
+    expect(outside.banked[TOP_SLICE_CONTESTANT]).toBe(0);
   });
 
   it("a seat the pass mark benched records its would-be call but files nothing", async () => {
