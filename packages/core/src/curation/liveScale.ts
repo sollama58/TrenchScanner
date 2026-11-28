@@ -181,6 +181,11 @@ export interface LiveScales {
    */
   rankRates?: ReadonlyMap<string, readonly RankRateBand[]>;
   /**
+   * The same bands counted on the rule the pages report, present only while that is not the
+   * classic rule (WIN_TARGET_RULE). Only the card's quoted rate reads them.
+   */
+  reportedRankRates?: ReadonlyMap<string, readonly RankRateBand[]>;
+  /**
    * The same scales read on the fast path's own decision rows (CandidateOutcome.sampleKind
    * "entry"): the seats decide there on moments seconds into the band, which they score lower and
    * win less often on than cycle moments (model audit 2026-10-26), so a cutoff rank travels to

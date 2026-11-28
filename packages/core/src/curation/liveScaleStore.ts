@@ -7,7 +7,13 @@ import { CONTESTANTS } from "./contestants.js";
 import { gatesById, loadModelGates } from "./modelGateStore.js";
 import { LIVE_SCORE_WINDOW_HOURS, type LiveScales } from "./liveScale.js";
 import { maskTokenSageXReuseLoss } from "./features.js";
-import { buildRankRates, RANK_RATE_WINDOW_HOURS, type RankRateRow } from "./liveRankRates.js";
+import {
+  buildRankRates,
+  buildReportedRankRates,
+  RANK_RATE_WINDOW_HOURS,
+  type RankRateRow,
+} from "./liveRankRates.js";
+import { winTargetRule, wonUnder } from "./winTarget.js";
 import { buildEntryProof } from "./entryProof.js";
 
 /** Rows read per feature query: a retrain re-reads the whole window's feature vectors once. */
@@ -104,7 +110,7 @@ export async function loadLiveScales(
   rescorer.prune(allRows, models);
   const scales = rescorer.build(rows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
   const graded = await loadGradedRows(now, "event", outages).catch(() => undefined);
-  const out: LiveScales = graded ? { ...scales, rankRates: buildRankRates(graded) } : scales;
+  const out: LiveScales = graded ? { ...scales, ...rankRatesOf(graded) } : scales;
   if (entryRows.length === 0) return out;
   const entry = rescorer.build(entryRows, models, since, highConvictionRank, LIVE_CONVICTION_MIN_SAMPLES);
   // The same graded entry rows give the entry rank rates and the record a seat must clear to call
@@ -113,7 +119,7 @@ export async function loadLiveScales(
   return {
     ...out,
     entry: entryGraded
-      ? { ...entry, rankRates: buildRankRates(entryGraded), proof: buildEntryProof(entryGraded) }
+      ? { ...entry, ...rankRatesOf(entryGraded), proof: buildEntryProof(entryGraded) }
       : entry,
   };
 }
@@ -137,13 +143,23 @@ async function loadGradedRows(
       hit2xIn1h: { not: null },
       seatScores: { not: Prisma.DbNull },
     },
-    select: { anchorAt: true, seatScores: true, hit2xIn1h: true, disqualified: true },
+    select: { anchorAt: true, seatScores: true, hit2xIn1h: true, disqualified: true, fillWin: true },
   });
   const rows = outages.empty ? read : read.filter((r) => !outages.taintsRow(r.anchorAt, 0));
   return rows.map((r) => ({
     seatScores: r.seatScores,
     won: r.hit2xIn1h === true && r.disqualified !== true,
+    // The card's quote alone follows the reported rule; every cutoff and tier reads `won`.
+    ...(winTargetRule() === "classic" ? {} : { wonReported: wonUnder(r) === true }),
   }));
+}
+
+/** The seats' bands on the classic label, and on the reported rule while that is another one. */
+function rankRatesOf(graded: readonly RankRateRow[]): Pick<LiveScales, "rankRates" | "reportedRankRates"> {
+  return {
+    rankRates: buildRankRates(graded),
+    ...(winTargetRule() === "classic" ? {} : { reportedRankRates: buildReportedRankRates(graded) }),
+  };
 }
 
 /** Each seat's newest active model - the one the worker's roster scores it with. */

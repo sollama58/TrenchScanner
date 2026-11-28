@@ -1,10 +1,14 @@
-import { prisma } from "../db.js";
+import { Prisma, prisma } from "../db.js";
+import { winTargetRule, wonSql } from "../curation/winTarget.js";
 
 /** A filter's graded alerts over the last TRACK_RECORD_DAYS - see loadFilterTrackRecords. */
 export interface FilterTrackRecord {
   /** Alerts whose verdict is in. */
   graded: number;
-  /** Doubled within 15 minutes without first falling through the 50% stop. */
+  /**
+   * Won on the rule the pages report (WIN_TARGET_RULE): by default, doubled within 15 minutes
+   * without first falling through the 50% stop.
+   */
   won2x: number;
   /** Reached 4x within 30 minutes, stop respected. */
   won4x: number;
@@ -33,12 +37,15 @@ export async function loadFilterTrackRecords(
   const since = new Date(Date.now() - TRACK_RECORD_DAYS * 86_400_000);
   const userIds = [...new Set(filters.map((f) => f.userId))];
   const filterIds = filters.map((f) => f.id);
+  // The 2x count follows the rule the pages report (WIN_TARGET_RULE, curation/winTarget.ts); on the
+  // classic rule it is the test this read always ran.
+  const won = winTargetRule() === "classic" ? Prisma.sql`"hit2xIn1h" AND NOT "disqualified"` : wonSql();
   const rows = await prisma.$queryRaw<
     { filterId: string; graded: bigint; won2x: bigint; won4x: bigint; won10x: bigint; ten_x_graded: bigint }[]
   >`
     SELECT "filterId",
            count(*) AS graded,
-           count(*) FILTER (WHERE "hit2xIn1h" AND NOT "disqualified") AS won2x,
+           count(*) FILTER (WHERE ${won}) AS won2x,
            count(*) FILTER (WHERE "hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE "hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE "hit10xIn1h" IS NOT NULL

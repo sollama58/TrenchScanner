@@ -23,6 +23,9 @@ import {
   emptyRecord,
   enabledContestants,
   liveCallRecords,
+  describeWinTarget,
+  winTargetRule,
+  type WinTargetRule,
   liveMarketLift,
   liveCatchRates,
   feedCatch,
@@ -350,6 +353,12 @@ export interface LeaderboardEntry {
   scoreExplained: string;
   /** Its live record on high-conviction calls alone (CuratedAlert.tier = "high"); null with none graded. */
   highConviction: RecordSummary | null;
+  /**
+   * Its live calls on the rule the pages report, when that is not the classic one (Leaderboard.reported):
+   * those graded on it, how many won, and the average return per trade after costs. Null with none
+   * graded; absent on the classic rule. The score above is never drawn from it.
+   */
+  reported?: { graded: number; wins: number; hitRatePct: number; returnPct: number } | null;
   /** Evolving seats only: the recipe holding the seat now, and where it came from. */
   lane: { generation: number; parentName: string | null; bornAt: Date } | null;
   /**
@@ -383,6 +392,13 @@ export interface Leaderboard {
    * on the same market definition as `lifts` (baselineRates).
    */
   baseline: GradedRates;
+  /**
+   * Present while the pages report another rule than the classic one (WIN_TARGET_RULE): its name,
+   * the rule in a sentence, and the market baseline counted on it. Each entry then carries its own
+   * `reported` record. The scores, the lifts, the catch rates and `baseline` stay on the classic
+   * 2x label, which is what the models learn and what seats are ranked on.
+   */
+  reported?: { rule: WinTargetRule; win: string; baseline: GradedRates };
   /** The runners over the window and how many any seat caught: the ones the whole board let slip. */
   runners: LiveCatch;
   /**
@@ -540,6 +556,19 @@ export function readerBoard(
   };
 }
 
+/** A seat's record on the reported rule, as the board shows it; null with nothing graded on it. */
+function reportedRecord(
+  fill: { graded: number; wins: number; sumReturnPct: number } | undefined,
+): NonNullable<LeaderboardEntry["reported"]> | null {
+  if (!fill || fill.graded === 0) return null;
+  return {
+    graded: fill.graded,
+    wins: fill.wins,
+    hitRatePct: Math.round((fill.wins / fill.graded) * 1000) / 10,
+    returnPct: Math.round((fill.sumReturnPct / fill.graded) * 10) / 10,
+  };
+}
+
 export async function buildLeaderboard(
   env: Env,
   days: number,
@@ -554,11 +583,17 @@ export async function buildLeaderboard(
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
   const [state, marketRows] = await Promise.all([contestState(env), market ? market(since) : null]);
+  const rule = winTargetRule();
+  const baselineTargets = {
+    hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
+    hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
+  };
   const [live, liveHigh, history, probation, lifts, baseline, catches] = await Promise.all([
     liveCallRecords(
       state.roster.map((c) => c.id),
       since,
       state.lanes,
+      { fill: rule === "fill30" },
     ),
     liveCallRecords(
       state.roster.map((c) => c.id),
@@ -592,15 +627,8 @@ export async function buildLeaderboard(
       state.lanes,
       marketRows ?? undefined,
     ),
-    baselineRates(
-      since,
-      {
-        hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
-        hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
-      },
-      undefined,
-      marketRows,
-    ),
+    // On the classic label, like the scores it is read beside; `reported` carries the other rule's.
+    baselineRates(since, baselineTargets, undefined, marketRows, "classic"),
     liveCatchRates(
       state.roster.map((c) => c.id),
       since,
@@ -648,6 +676,7 @@ export async function buildLeaderboard(
         const record = liveHigh.get(spec.id);
         return record && record.graded > 0 ? summarizeRecord(record, targets) : null;
       })(),
+      ...(rule === "classic" ? {} : { reported: reportedRecord(live.get(spec.id)?.fill) }),
       lane: (() => {
         const lane = laneBySlot.get(spec.id);
         return lane
@@ -690,6 +719,15 @@ export async function buildLeaderboard(
       hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
     },
     baseline,
+    ...(rule === "classic"
+      ? {}
+      : {
+          reported: {
+            rule,
+            win: describeWinTarget(rule),
+            baseline: await baselineRates(since, baselineTargets, undefined, marketRows, rule),
+          },
+        }),
     runners: catches.field,
     catchLedger: catches.ledger,
     scoring: {

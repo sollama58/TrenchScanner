@@ -1236,6 +1236,14 @@ function LeaderboardPanel({
           {board.runners.runners - board.runners.caught} slipped by every model.
         </p>
       )}
+      {board.reported && (
+        <p className="muted small">
+          The second line under each 2x rate is the same alerts on the reported target ({board.reported.win}),
+          with the average return per trade after costs. Filtered cycle moments:{" "}
+          <span className="num">{pct(board.reported.baseline.hitRate2xPct, 1)}</span>. Scores and ranks are
+          drawn on the 2x label the models learn.
+        </p>
+      )}
       <div className="table-wrap">
         <table className="leaderboard">
           <thead>
@@ -1370,6 +1378,15 @@ function LeaderboardPanel({
                     title={rateTitle(live.winRatePct, live.graded)}
                   >
                     {pct(live.winRatePct)}
+                    {e.reported && (
+                      // The rule the pages report, when it is not the 2x label the score is drawn on.
+                      <small
+                        className="faint reported-rate"
+                        title={`${e.reported.wins} of ${e.reported.graded} live alerts won on the reported target, after costs`}
+                      >
+                        {pct(e.reported.hitRatePct, 1)} · {signedPct(e.reported.returnPct, 1)} a trade
+                      </small>
+                    )}
                   </td>
                   <td
                     className={`r num ${liftTone(e.vsMarket?.lift ?? null)}`}

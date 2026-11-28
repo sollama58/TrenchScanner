@@ -6201,6 +6201,12 @@ select:focus {
   display: block;
   margin-top: 4px;
 }
+/* A seat's record on the reported win target, under its 2x rate (Leaderboard.reported). */
+.reported-rate {
+  display: block;
+  margin-top: 2px;
+  white-space: nowrap;
+}
 .score-guide {
   margin-top: 12px;
 }

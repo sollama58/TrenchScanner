@@ -2,8 +2,10 @@ import {
   prisma,
   REPORTED_LABEL_RULE,
   walletSafetyCutsSql,
+  winTargetRule,
   wonUnder,
   type MarketRow,
+  type WinTargetRule,
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
 
@@ -110,7 +112,11 @@ export interface MarketCounts {
  * hit2x and not disqualified, and the 10x tier is settled once hit2x is known and either the 10x
  * verdict is in or the call was no clean double.
  */
-export function marketCounts(rows: readonly MarketRow[]): MarketCounts {
+export function marketCounts(
+  rows: readonly MarketRow[],
+  /** The rule the 2x count follows; the reported one unless a caller needs the classic label. */
+  rule: WinTargetRule = winTargetRule(),
+): MarketCounts {
   let graded = 0;
   let won2x = 0;
   let won4x = 0;
@@ -128,7 +134,7 @@ export function marketCounts(rows: readonly MarketRow[]): MarketCounts {
     graded += 1;
     const clean = r.hit2x && r.disqualified !== true;
     // The 2x count follows the reported rule (WIN_TARGET_RULE); the 10x tier stays the classic one.
-    if (wonUnder({ hit2xIn1h: r.hit2x, disqualified: r.disqualified, fillWin: r.fillWin })) won2x += 1;
+    if (wonUnder({ hit2xIn1h: r.hit2x, disqualified: r.disqualified, fillWin: r.fillWin }, rule)) won2x += 1;
     if (r.hit10x !== null || !clean) tenXGraded += 1;
     // A call still riding its trailing share counts at its latest reading, as the SQL's
     // COALESCE("simReturnPct", "openReturnPct").

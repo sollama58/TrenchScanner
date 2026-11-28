@@ -97,6 +97,12 @@ export interface CallRecord {
   runnersSeen?: number;
   /** Of those, the tokens it called at a winning moment. */
   runnersCaught?: number;
+  /**
+   * The same calls on the fill target (curation/fillTarget.ts): those with a fill verdict, how
+   * many won, and the sum of their returns after costs in percent. Only on a live record read for
+   * a page that reports that rule (liveCallRecords' `fill`); no score reads it.
+   */
+  fill?: { graded: number; wins: number; sumReturnPct: number };
 }
 
 /** labelValue is log2 of the peak multiple for clean wins: the 4x goal is labelValue >= 2. */

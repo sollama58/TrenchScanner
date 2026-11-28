@@ -4,6 +4,7 @@ import {
   liveCatch,
   marketRunners,
   prisma,
+  winTargetRule,
   recordScore,
   COMPOSITE_WEIGHTS,
   scoreBand,
@@ -176,6 +177,12 @@ export interface FilterLeaderboardEntry {
   /** Clean 10x within an hour of the alert (the third tier; shown, not scored). */
   won10x: number;
   winRatePct: number | null;
+  /**
+   * The same alerts on the rule the pages report when that is not the classic one (WIN_TARGET_RULE):
+   * those graded on it, how many won, the hit rate and the average return per trade after costs.
+   * Null with none graded; absent on the classic rule. The score is never drawn from it.
+   */
+  reported?: { graded: number; wins: number; hitRatePct: number; returnPct: number } | null;
   goalRatePct: number | null;
   tenXRatePct: number | null;
   proven2xPct: number | null;
@@ -235,6 +242,9 @@ type Tally = {
   won10x: bigint;
   ten_x_graded: bigint;
   sum_run: number | null;
+  fill_graded: bigint;
+  fill_wins: bigint;
+  fill_sum: number | null;
 };
 
 export async function buildFilterLeaderboard(env: Env, now = new Date()): Promise<CachedBoard> {
@@ -278,7 +288,9 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
              m."peak1hReturnPct" AS peak,
              COALESCE(m."peak24hReturnPct", co."peak24hReturnPct",
                       (co."peak24hPriceUsd" / NULLIF(co."anchorPriceUsd", 0) - 1) * 100) AS run,
-             m."maxDrawdown1hPct" AS dd
+             m."maxDrawdown1hPct" AS dd,
+             m."fillWin" AS fill_win,
+             m."fillReturnPct" AS fill_ret
       FROM spans s
       JOIN "Match" m
         ON m."filterId" = s."filterId"
@@ -295,11 +307,17 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
            -- The 10x rate's denominator: losses plus clean winners whose tier has settled.
            count(*) FILTER (WHERE c.hit2x IS NOT NULL
                               AND (c.hit10x IS NOT NULL OR NOT (c.hit2x AND NOT c.dq))) AS ten_x_graded,
-           COALESCE(sum(${RUN_DOUBLINGS}) FILTER (WHERE c.hit2x IS NOT NULL), 0)::float8 AS sum_run
+           COALESCE(sum(${RUN_DOUBLINGS}) FILTER (WHERE c.hit2x IS NOT NULL), 0)::float8 AS sum_run,
+           count(c.fill_win) AS fill_graded,
+           count(*) FILTER (WHERE c.fill_win) AS fill_wins,
+           COALESCE(sum(c.fill_ret) FILTER (WHERE c.fill_win IS NOT NULL), 0)::float8 AS fill_sum
     FROM calls c
     GROUP BY c.key`,
   ]);
   const tallyOf = new Map(tallies.map((t) => [t.key, t]));
+  // The board's scores and ranks stay on the classic 2x label (a rank decides what a deletion
+  // keeps). While the pages report another rule, each record also carries its count on that rule.
+  const reportedRule = winTargetRule();
 
   // Every record the board can list: each shared filter's current settings, and its earlier
   // versions still inside the window.
@@ -364,6 +382,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     const won10x = Number(t?.won10x ?? 0);
     const tenXGraded = Number(t?.ten_x_graded ?? 0);
     const sumRun = Number(t?.sum_run ?? 0);
+    const fillGraded = Number(t?.fill_graded ?? 0);
     const record = {
       calls: graded,
       graded,
@@ -400,6 +419,19 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       avgRunDoublings: graded > 0 ? round2(sumRun / graded) : null,
       provenRunDoublings: graded > 0 ? round2(provenRate(sumRun, graded)) : null,
       catch: catches.get(r.key) ?? { runners: 0, caught: 0, pct: null },
+      ...(reportedRule === "classic"
+        ? {}
+        : {
+            reported:
+              fillGraded > 0
+                ? {
+                    graded: fillGraded,
+                    wins: Number(t?.fill_wins ?? 0),
+                    hitRatePct: round1((Number(t?.fill_wins ?? 0) / fillGraded) * 100),
+                    returnPct: round1(Number(t?.fill_sum ?? 0) / fillGraded),
+                  }
+                : null,
+          }),
       recordSince: r.from.toISOString(),
       isActive: r.filter.isActive && !superseded,
       retired: r.filter.deletedAt !== null,

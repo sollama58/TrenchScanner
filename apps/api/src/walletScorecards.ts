@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MIN_BUY_SOL_PER_TOKEN, OVERSOLD_TOKENS, prisma } from "@trenchscanner/core";
+import { MIN_BUY_SOL_PER_TOKEN, OVERSOLD_TOKENS, prisma, wonSql } from "@trenchscanner/core";
 import { readKolRows, knownSideName } from "./kolRoster.js";
 import { SharedCache } from "./sharedCache.js";
 import { READ_KEEPS_WARM_MS } from "./marketLighthouse.js";
@@ -340,7 +340,7 @@ export async function buildWalletScorecards(
             bool_or(a."firstBuyAt" <= tp."anchorAt") AS early,
             bool_or(a."launchSniper") AS sniper, bool_or(a."fastExit") AS fast_exit,
             CASE WHEN co."hit2xIn1h" IS NULL THEN NULL
-                 ELSE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false) END AS hit2x,
+                 ELSE ${wonSql(["co."]).sql} END AS hit2x,
             co."hit4xIn1h" AS hit4x, co."hit10xIn1h" AS hit10x,
             COALESCE(co."hit10xIn1h" IS NOT NULL
                      OR NOT (co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)), false) AS ten_x_graded,
@@ -360,7 +360,7 @@ export async function buildWalletScorecards(
   >`
     SELECT count(*) AS coins,
            count(co."hit2xIn1h") AS graded,
-           count(*) FILTER (WHERE co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["co."])}) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL

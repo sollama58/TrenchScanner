@@ -40,6 +40,7 @@ import {
   calibratedWinRate,
   calibratedWinRateAtRank,
   servedRate,
+  reportedShownPct,
   EMPTY_LIVE_SCALES,
   loadLiveScales,
   onLiveMembers,
@@ -777,14 +778,21 @@ function servedFields(
       ? calibratedWinRate(params.calibration, probability)
       : calibratedWinRateAtRank(params.calibration, rankAmong(liveScores, probability));
   const ranked = liveScores ?? usableLiveScores(live.scores, seat);
+  const rank = ranked === undefined ? 0 : rankAmong(ranked, probability);
   const served =
     ranked === undefined
       ? servedRate(rate, undefined, 0, rule)
-      : servedRate(rate, live.rankRates?.get(seat), rankAmong(ranked, probability), rule);
+      : servedRate(rate, live.rankRates?.get(seat), rank, rule);
   const out: Pick<CurationDecision, "tier" | "calibratedPct" | "shownPct"> = {};
   if (served.tier !== undefined) out.tier = served.tier;
   if (served.calibratedPct !== null) out.calibratedPct = served.calibratedPct;
-  if (served.shownPct !== null) out.shownPct = served.shownPct;
+  // The quote follows the rule the pages report (WIN_TARGET_RULE): the bands exist only while
+  // that is not the classic rule, and without them this is the classic quote.
+  const shownPct =
+    ranked === undefined
+      ? served.shownPct
+      : reportedShownPct(served, live.reportedRankRates?.get(seat), rank);
+  if (shownPct !== null) out.shownPct = shownPct;
   return out;
 }
 

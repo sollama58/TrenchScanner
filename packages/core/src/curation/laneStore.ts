@@ -62,6 +62,9 @@ interface LiveRow {
   sim_calls: bigint;
   sum_sim: number | null;
   sum_run: number | null;
+  fill_graded?: bigint;
+  fill_wins?: bigint;
+  fill_sum?: number | null;
 }
 
 /**
@@ -142,8 +145,10 @@ export async function liveCallRecords(
   /**
    * tier: only calls of this tier (CuratedAlert.tier), e.g. "high" for the high-conviction record.
    * until: only calls made before this moment (the window's end; open-ended without it).
+   * fill: also count the record on the fill target (CallRecord.fill), for a page that reports it
+   *   (WIN_TARGET_RULE). Nothing that scores a seat asks for it.
    */
-  opts: { tier?: string; until?: Date } = {},
+  opts: { tier?: string; until?: Date; fill?: boolean } = {},
 ): Promise<Map<string, CallRecord>> {
   const tier = opts.tier ?? null;
   const until = opts.until?.toISOString() ?? null;
@@ -178,7 +183,9 @@ export async function liveCallRecords(
              COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
              COALESCE(a."peak24hReturnPct", co."peak24hReturnPct") AS run,
              COALESCE(a."maxDrawdown1hPct", co."maxDrawdown1hPct") AS dd,
-             COALESCE(a."simReturnPct", co."simReturnPct") AS sim
+             COALESCE(a."simReturnPct", co."simReturnPct") AS sim,
+             COALESCE(a."fillWin", co."fillWin") AS fill_win,
+             COALESCE(a."fillReturnPct", co."fillReturnPct") AS fill_ret
       FROM "CuratedAlert" a
       -- A seat's record is its current lane's calls only: after a takeover the emitter's cached
       -- roster can still call a few minutes under the retired lane's name and recipe. ('-' = a seat
@@ -202,7 +209,10 @@ export async function liveCallRecords(
                ELSE 0 END)::float8 AS sum_label,
            count(sim) FILTER (WHERE hit2x IS NOT NULL) AS sim_calls,
            sum(sim) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_sim,
-           sum(${RUN_DOUBLINGS}) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_run
+           sum(${RUN_DOUBLINGS}) FILTER (WHERE hit2x IS NOT NULL)::float8 AS sum_run,
+           count(*) FILTER (WHERE fill_win IS NOT NULL) AS fill_graded,
+           count(*) FILTER (WHERE fill_win) AS fill_wins,
+           sum(fill_ret) FILTER (WHERE fill_win IS NOT NULL)::float8 AS fill_sum
     FROM calls
     GROUP BY model`;
   const byModel = new Map(rows.map((r) => [r.model, r]));
@@ -219,6 +229,15 @@ export async function liveCallRecords(
       simCalls: Number(r?.sim_calls ?? 0),
       sumSimReturnPct: r?.sum_sim ?? 0,
       sumRun: r?.sum_run ?? 0,
+      ...(opts.fill
+        ? {
+            fill: {
+              graded: Number(r?.fill_graded ?? 0),
+              wins: Number(r?.fill_wins ?? 0),
+              sumReturnPct: r?.fill_sum ?? 0,
+            },
+          }
+        : {}),
     });
   }
   return out;
