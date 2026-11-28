@@ -336,7 +336,8 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
 
   it("sets the fill target's fill from the first price past the fill delay, and decides nothing on it", async () => {
     const token = await createToken("fill-open");
-    const anchorAt = new Date(Date.now() - 5 * MINUTE);
+    // Inside the three minutes a first price still counts as the fill.
+    const anchorAt = new Date(Date.now() - 2 * MINUTE);
     const row = await seedRow(token.id, anchorAt, 1.0, { labelRule: 3 });
 
     await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.2 }), env);
@@ -361,6 +362,18 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(stopped.fillStoppedAt).not.toBeNull();
     expect(stopped.fillExitPriceUsd).toBeCloseTo(1.5);
     expect(stopped.fillWin).toBeNull();
+  });
+
+  it("takes no fill from a first price later than three minutes after the call", async () => {
+    const token = await createToken("fill-late");
+    const row = await seedRow(token.id, new Date(Date.now() - 5 * MINUTE), 1.0, { labelRule: 3 });
+
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.2 }), env);
+
+    const late = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(late.hit2xAt).not.toBeNull();
+    expect(late.fillPriceUsd).toBeNull();
+    expect(late.fillSource).toBeNull();
   });
 
   it("writes the fill target's verdict at the close, beside the label, and copies it to the alert", async () => {
