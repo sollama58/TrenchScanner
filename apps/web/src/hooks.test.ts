@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyPollResult,
   everyWhileVisible,
+  pollIsFailing,
   pollIsStale,
   pollMountMaxAge,
   pollTickMaxAge,
@@ -148,5 +149,19 @@ describe("pollTickMaxAge", () => {
   it("lets a timed tick reuse another view's read from the last half interval, never for a chart", () => {
     expect(pollTickMaxAge("/curated/models?days=30", 120_000)).toBe(60_000);
     expect(pollTickMaxAge("/tokens/abc/chart", 15_000)).toBe(0);
+  });
+});
+
+describe("pollIsFailing (audit 2026-11-28, WB-65)", () => {
+  const every = 60_000;
+  it("marks numbers a failing refresh has left more than two polls old", () => {
+    expect(pollIsFailing(true, 1_000, every, 1_000 + 2 * every + 1)).toBe(true);
+    expect(pollIsFailing(true, 1_000, every, 1_000 + 3_600_000)).toBe(true);
+  });
+  it("leaves one missed poll, a working refresh and an empty view unmarked", () => {
+    expect(pollIsFailing(true, 1_000, every, 1_000 + 2 * every)).toBe(false);
+    expect(pollIsFailing(false, 1_000, every, 1_000 + 3_600_000)).toBe(false);
+    expect(pollIsFailing(true, null, every, 3_600_000)).toBe(false);
+    expect(pollIsFailing(true, 0, every, 3_600_000)).toBe(false);
   });
 });

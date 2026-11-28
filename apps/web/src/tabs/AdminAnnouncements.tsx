@@ -8,7 +8,10 @@ import { Load, Panel, Table, Tag, when } from "./adminShared";
 /** Mirrors ANNOUNCEMENT_MAX_LENGTH in apps/api/src/routes/announcements.ts. */
 const MAX_LENGTH = 500;
 
-const EXPIRY_OPTIONS = [
+/** What the form opens on: a day. "Until I end it" is still there to pick. */
+export const DEFAULT_EXPIRY_HOURS = 24;
+
+export const EXPIRY_OPTIONS = [
   { hours: 0, label: "Until I end it" },
   { hours: 1, label: "1 hour" },
   { hours: 6, label: "6 hours" },
@@ -45,7 +48,9 @@ export function AnnouncementsAdmin() {
   const q = usePolling<Announcements>("/admin/announcements", 60_000);
   const [message, setMessage] = useState("");
   const [severity, setSeverity] = useState<"info" | "warning">("info");
-  const [hours, setHours] = useState(0);
+  // A banner ends on its own unless the admin picks otherwise (audit WB-41, WB-70): the form
+  // opened on "Until I end it", and a banner about a one-day problem stayed up for weeks.
+  const [hours, setHours] = useState(DEFAULT_EXPIRY_HOURS);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
 

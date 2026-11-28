@@ -131,6 +131,7 @@ function Bar({ left, leftMini, base = "/curated", positions }: MarketBarProps & 
       prices={prices.data}
       trench={trench.data}
       trenchFailed={!trench.data && trench.error !== null}
+      old={prices.failing === true || trench.failing === true}
     />
   );
   const miniProps = { watch: leftMini, prices: prices.data, trench: trench.data, positions };
@@ -271,17 +272,23 @@ function WatchlistPlaceholder({ guest }: { guest: boolean }) {
 
 // ---------- Middle: prices and the trenches ----------
 
-function MiddleCell({
+/** What the dimmed bar says on hover while its refresh is failing. */
+export const OLD_NUMBERS_TITLE = "Couldn't refresh. These are the last numbers that loaded.";
+
+export function MiddleCell({
   prices,
   trench,
   trenchFailed,
+  old = false,
 }: {
   prices: MarketPrices | null;
   trench: TrenchAnswer | null;
   trenchFailed: boolean;
+  /** The refresh is failing and these are the last good numbers (hooks.ts pollIsFailing). */
+  old?: boolean;
 }) {
   return (
-    <div className="mkt-cell mkt-mid">
+    <div className={`mkt-cell mkt-mid${old ? " stale" : ""}`} title={old ? OLD_NUMBERS_TITLE : undefined}>
       <div className="mkt-prices" role="list" aria-label="Prices">
         {(prices?.prices ?? PLACEHOLDER_TICKERS).map((p) => (
           <Ticker key={p.symbol} p={p} loading={!prices} />
