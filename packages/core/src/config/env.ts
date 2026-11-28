@@ -1367,6 +1367,12 @@ const envSchema = z.object({
   // 2026-11-02, FDSA AI audit): at medium every decide answered in 4-6 s for about $0.035, some
   // 500 output tokens, the JSON and little else; high is the smallest step that buys deliberation
   // and still fits the window (about 1.5-2x the cost per decide).
+  // What buys (owner decision 2026-11-28, program audit AI-1): "decide" is the Opus decide above;
+  // "screen" buys every shortlisted alert on the desk's default exit plan with no decide call.
+  // Over 30 days the decide's trades won 26.4% and its passes 25.0%, the shortlist 26.2%: the
+  // lift is the screen's, and the call sat 11 s in front of every entry. Exit revisions are a
+  // separate stage and run either way.
+  FDSA_ENTRY_SOURCE: z.enum(["decide", "screen"]).default("decide"),
   FDSA_DECIDE_MODEL: z.string().default("claude-opus-5-5"),
   FDSA_DECIDE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("high"),
   FDSA_DECIDE_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),

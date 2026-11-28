@@ -29,6 +29,8 @@ import {
   FDSA_PROMPT_VERSIONS,
   FDSA_MODEL_SCREEN_MODEL,
   FDSA_MODEL_SCREEN_VERSION,
+  FDSA_SCREEN_ENTRY_VERSION,
+  FDSA_DEFAULT_EXIT_PLAN,
   type CurationDecision,
   type Env,
   type FdsaAnswerMeta,
@@ -511,6 +513,8 @@ export async function fdsaHeartbeat(env: Env): Promise<Record<string, string | n
     maxSignalAgeSeconds: desk?.maxSignalAgeSeconds ?? null,
     // What the screen is, the score it needs to shortlist now, and whether that is ranked on the last day.
     screenSource: env.FDSA_SCREEN_SOURCE,
+    // What buys: the Opus decide, or the screen alone (FDSA_ENTRY_SOURCE).
+    entrySource: env.FDSA_ENTRY_SOURCE,
     screenLine: line?.line ?? null,
     screenLineRanked: line?.ranked ?? null,
     // The 2x odds a decide needs to trade now, and whether it is ranked on the last day.
@@ -822,7 +826,7 @@ export async function reviewFdsaAlert(alert: FdsaAlert, env: Env): Promise<FdsaR
     );
     if (verdict.decision !== "shortlist") return { ...out("dropped"), screen: verdict };
     stats.shortlisted += 1;
-    const decided = await decideFdsaAlert(alert, env, base, desk, verdict, models);
+    const decided = await enterFdsaAlert(alert, env, base, desk, verdict, models);
     return { screen: verdict, ...decided };
   }
 
@@ -865,8 +869,69 @@ export async function reviewFdsaAlert(alert: FdsaAlert, env: Env): Promise<FdsaR
   if (screen.verdict.decision !== "shortlist") return { ...out("dropped"), screen: screen.verdict };
   stats.shortlisted += 1;
 
-  const decided = await decideFdsaAlert(alert, env, base, desk, screen.verdict, models);
+  const decided = await enterFdsaAlert(alert, env, base, desk, screen.verdict, models);
   return { screen: screen.verdict, ...decided };
+}
+
+/** What a shortlisted alert goes to: the decide stage, or straight to a buy (FDSA_ENTRY_SOURCE). */
+function enterFdsaAlert(
+  alert: FdsaAlert,
+  env: Env,
+  base: RowBase,
+  desk: DeskState,
+  screen: FdsaScreenVerdict,
+  models: FdsaModelContext | null,
+): Promise<Omit<FdsaReviewOutcome, "screen">> {
+  return env.FDSA_ENTRY_SOURCE === "screen"
+    ? buyFromScreen(alert, base, screen)
+    : decideFdsaAlert(alert, env, base, desk, screen, models);
+}
+
+/**
+ * A shortlisted alert bought with no decide call (owner decision 2026-11-28, program audit AI-1):
+ * the desk buys "trade" decide rows, so this writes one, under the scanner model's sentinel and its
+ * own version, with the screen's odds and the desk's default exit plan. No call, no cost, and
+ * nothing waits: the row is there for the next paper pass.
+ */
+async function buyFromScreen(
+  alert: FdsaAlert,
+  base: RowBase,
+  screen: FdsaScreenVerdict,
+): Promise<Omit<FdsaReviewOutcome, "screen">> {
+  const v: FdsaDecideVerdict = {
+    decision: "trade",
+    probability2x: screen.score,
+    probability4x: 0,
+    conviction: 0,
+    exitPlan: FDSA_DEFAULT_EXIT_PLAN,
+    reasoning:
+      "Bought on the screen alone: the alert is in the top share of the last day's by the scanner model's odds. No decide call was made; the exit plan is the desk's default.",
+    risks: [],
+  };
+  stats.decided += 1;
+  stats.trades += 1;
+  sample(stats.alertToVerdictMs, Date.now() - alert.alertAt.getTime());
+  const id = await storeReview(
+    base,
+    "decide",
+    FDSA_MODEL_SCREEN_MODEL,
+    "none",
+    // The decide brief is the call's input; with no call there is none to keep.
+    "",
+    null,
+    {
+      decision: v.decision,
+      probability2x: v.probability2x,
+      exitPlan: v.exitPlan as unknown as Prisma.InputJsonObject,
+      reasoning: v.reasoning,
+      risks: v.risks,
+    },
+    null,
+    false,
+    FDSA_SCREEN_ENTRY_VERSION,
+  );
+  logger.info("FDSA bought from the screen", { mint: alert.mint, score: screen.score });
+  return { decide: v, decideReviewId: id, stoppedAt: null };
 }
 
 /** The decide stage on a shortlisted alert. */

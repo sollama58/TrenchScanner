@@ -15,6 +15,8 @@ import {
   FDSA_PROMPT_VERSIONS,
   FDSA_MODEL_SCREEN_MODEL,
   FDSA_MODEL_SCREEN_VERSION,
+  FDSA_SCREEN_ENTRY_VERSION,
+  readFdsaExitPlan,
   DEFAULT_FDSA_DESK_CONFIG,
   HIGH_CONVICTION_TIER,
   LAUNCHER_TEXT_GUARD_MODEL,
@@ -509,6 +511,59 @@ describe.skipIf(!dbAvailable)("FDSA review pipeline", () => {
       await prisma.fdsaReview.deleteMany({ where: { tokenId: seedToken.id } });
     }
   });
+  it("buys a shortlisted alert with no decide call when the screen is the entry (owner decision 2026-11-28)", async () => {
+    vi.setSystemTime(new Date("2001-03-25T12:00:00Z"));
+    const screenEnv: Env = { ...env, FDSA_SCREEN_SOURCE: "model", FDSA_ENTRY_SOURCE: "screen" };
+    const seedToken = await prisma.token.create({ data: { mintAddress: `${TAG}-entry-seed`, symbol: "S" } });
+    const pcts = [...Array<number>(54).fill(12), 30, 30, 30, 34, 34, 41];
+    await prisma.curatedAlert.createMany({
+      data: pcts.map((calibratedPct, i) => ({
+        tokenId: seedToken.id,
+        source: "catcher",
+        model: "catcher",
+        confidence: 50 + i,
+        calibratedPct,
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 10_000,
+        createdAt: new Date(),
+      })),
+    });
+    const withOdds = (calibratedPct: number) =>
+      ({ ...decision, source: "catcher", calibratedPct }) as CurationDecision;
+    try {
+      const top = { ...(await alertFor()), decision: withOdds(34) };
+      const bought = await reviewFdsaAlert(top, screenEnv);
+      // No reply was queued: any call would have thrown on the empty queue.
+      expect(replies).toHaveLength(0);
+      expect(bought.stoppedAt).toBeNull();
+      expect(bought.screen).toMatchObject({ decision: "shortlist", score: 0.34 });
+      expect(bought.decide).toMatchObject({ decision: "trade", probability2x: 0.34 });
+      const row = await prisma.fdsaReview.findUniqueOrThrow({ where: { id: bought.decideReviewId! } });
+      expect(row).toMatchObject({
+        stage: "decide",
+        decision: "trade",
+        model: FDSA_MODEL_SCREEN_MODEL,
+        promptVersion: FDSA_SCREEN_ENTRY_VERSION,
+        effort: "none",
+        probability2x: 0.34,
+        costUsd: null,
+        error: null,
+      });
+      // The plan the desk will run: the default, which the desk reads as usable.
+      expect(readFdsaExitPlan(row.exitPlan)).toEqual(readFdsaExitPlan(FDSA_DEFAULT_EXIT_PLAN));
+      expect(readFdsaExitPlan(row.exitPlan)).not.toBeNull();
+      // An alert under the line is dropped as before, and nothing is bought.
+      const low = { ...(await alertFor()), decision: withOdds(12) };
+      const dropped = await reviewFdsaAlert(low, screenEnv);
+      expect(dropped).toMatchObject({ stoppedAt: "dropped", decide: null });
+      expect(await prisma.fdsaReview.count({ where: { tokenId: low.tokenId, stage: "decide" } })).toBe(0);
+      expect(await fdsaHeartbeat(screenEnv)).toMatchObject({ entrySource: "screen" });
+    } finally {
+      await prisma.curatedAlert.deleteMany({ where: { tokenId: seedToken.id } });
+      await prisma.token.delete({ where: { id: seedToken.id } });
+    }
+  });
+
   it("screens on the scanner model's own odds against the last day's alerts, with no call (owner decision 2026-11-02)", async () => {
     vi.setSystemTime(new Date("2001-03-22T12:00:00Z"));
     const modelEnv: Env = { ...env, FDSA_SCREEN_SOURCE: "model" };
