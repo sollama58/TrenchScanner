@@ -228,6 +228,62 @@ describe("fetchJson refusal breaker", () => {
   });
 });
 
+describe("fetchJson removed-route breaker", () => {
+  it("holds back a route the provider removed, not a coin it does not have", async () => {
+    const { createServer } = await import("node:http");
+    const hits: string[] = [];
+    let v2Back = false;
+    const server = createServer((req, res) => {
+      hits.push(req.url ?? "");
+      res.setHeader("content-type", "application/json");
+      if (req.url?.startsWith("/coins-v2/") && !v2Back) {
+        // Pump.fun's answer for the route it removed on 2026-11-16.
+        res.statusCode = 404;
+        res.end(JSON.stringify({ statusCode: 404, message: `Cannot GET ${req.url}`, error: "Not Found" }));
+      } else if (req.url?.startsWith("/v2/coins/")) {
+        res.statusCode = 410;
+        res.end(JSON.stringify({ statusCode: 410, message: "This endpoint has been deprecated" }));
+      } else if (req.url === "/coins-v3/" + "M".repeat(44)) {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ statusCode: 404, message: "Coin not found for address: M" }));
+      } else {
+        res.end("{}");
+      }
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    const { port } = server.address() as { port: number };
+    const base = `http://127.0.0.1:${port}`;
+    const { PumpFunGate, GONE_PAUSE_MS } = await import("./pumpfunGate.js");
+    let now = 0;
+    const gate = new PumpFunGate("test", 6_000, 100, 30_000, () => now);
+    const get = (path: string) => fetchJson(base + path, { retries: 0, gate });
+    try {
+      // The removed route: asked once, then failed unsent with the same status for every coin.
+      await expect(get("/coins-v2/" + "A".repeat(44))).rejects.toMatchObject({ status: 404 });
+      await expect(get("/coins-v2/" + "B".repeat(44))).rejects.toMatchObject({ status: 404 });
+      await expect(get("/v2/coins/" + "A".repeat(44) + "/trades")).rejects.toMatchObject({ status: 410 });
+      await expect(get("/v2/coins/" + "B".repeat(44) + "/trades")).rejects.toMatchObject({ status: 410 });
+      expect(hits).toHaveLength(2);
+
+      // A coin the provider does not have is a 404 about that coin: the route stays open.
+      await expect(get("/coins-v3/" + "M".repeat(44))).rejects.toMatchObject({ status: 404 });
+      await expect(get("/coins-v3/" + "M".repeat(44))).rejects.toMatchObject({ status: 404 });
+      expect(hits).toHaveLength(4);
+
+      // After the pause one request asks again; a 2xx frees the route.
+      now = GONE_PAUSE_MS;
+      v2Back = true;
+      await expect(get("/coins-v2/" + "A".repeat(44))).resolves.toEqual({});
+      await expect(get("/coins-v2/" + "B".repeat(44))).resolves.toEqual({});
+      expect(hits).toHaveLength(6);
+      expect(gate.takeStats()).toMatchObject({ gone: 2, heldBackGone: 2 });
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+});
+
 describe("fetchJson error bodies", () => {
   it("keeps a 4xx body on the error only when asked", async () => {
     vi.stubGlobal(

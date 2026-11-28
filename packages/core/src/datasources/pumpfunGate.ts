@@ -20,6 +20,10 @@ export interface PumpFunGateStats {
    * one (check-in 2026-10-29); this shows it.
    */
   challenged: number;
+  /** Times an endpoint answered that its route no longer exists (a 410, or a router's 404). */
+  gone: number;
+  /** Requests failed with that answer without being sent, while their endpoint was held as removed. */
+  heldBackGone: number;
 }
 
 /**
@@ -46,6 +50,8 @@ export class PumpFunGate {
   private readonly refusedStreak = new Map<string, number>();
   /** Endpoints whose probe is out: the next 403 from them is the probe's answer. */
   private readonly probing = new Set<string>();
+  /** Per endpoint (endpointOf): a removed route's status, and until when it is not asked again. */
+  private readonly goneUntil = new Map<string, { status: number; until: number }>();
 
   constructor(
     private readonly name: string,
@@ -157,6 +163,58 @@ export class PumpFunGate {
       logger.info("Pump.fun answered again", { host: this.name, endpoint: key });
   }
 
+  /**
+   * The status to fail `url` with, unsent, while its endpoint is held as a removed route; null when
+   * it is not, or when the hold has run out and this request goes to ask again.
+   *
+   * Pump.fun removed `/coins-v2/<mint>`, its candles, its trades and king-of-the-hill on
+   * 2026-11-16 (program audit 2026-11-28). Each answered 404 or 410 at once, which no caller and
+   * neither breaker here counted as a failure, so every lookup kept being sent: 52,000 a day. A
+   * removed route does not come back in minutes, so it is asked again only every GONE_PAUSE_MS,
+   * and the caller gets the same status meanwhile, so nothing it does changes.
+   */
+  goneRecently(url: string): number | null {
+    if (this.goneUntil.size === 0) return null;
+    const key = endpointOf(url);
+    const held = this.goneUntil.get(key);
+    if (!held) return null;
+    const now = this.now();
+    if (now >= held.until) {
+      // One request asks again; the rest keep failing unsent until it is answered.
+      this.goneUntil.set(key, { status: held.status, until: now + PROBE_MS });
+      return null;
+    }
+    this.stats.heldBackGone += 1;
+    return held.status;
+  }
+
+  /** The endpoint answered that its route no longer exists: hold it back for GONE_PAUSE_MS. */
+  gone(url: string, status: number): void {
+    const key = endpointOf(url);
+    if (!this.goneUntil.has(key)) {
+      logger.error("Pump.fun removed a route - holding that endpoint back", {
+        host: this.name,
+        endpoint: key,
+        status,
+        pauseMs: GONE_PAUSE_MS,
+      });
+    }
+    this.stats.gone += 1;
+    this.goneUntil.set(key, { status, until: this.now() + GONE_PAUSE_MS });
+  }
+
+  /** A removed route answered a request again: it is back. */
+  back(url: string): void {
+    if (this.goneUntil.size === 0) return;
+    const key = endpointOf(url);
+    if (this.goneUntil.delete(key)) logger.info("Pump.fun route is back", { host: this.name, endpoint: key });
+  }
+
+  /** The endpoints held as removed routes right now, for a heartbeat or an alarm. */
+  goneEndpoints(): string[] {
+    return [...this.goneUntil.keys()];
+  }
+
   /** Counts since the last call, then reset. */
   takeStats(): PumpFunGateStats {
     const out = this.stats;
@@ -166,7 +224,16 @@ export class PumpFunGate {
 }
 
 function emptyStats(): PumpFunGateStats {
-  return { requests: 0, throttled: 0, heldBack: 0, refused: 0, heldBackRefused: 0, challenged: 0 };
+  return {
+    requests: 0,
+    throttled: 0,
+    heldBack: 0,
+    refused: 0,
+    heldBackRefused: 0,
+    challenged: 0,
+    gone: 0,
+    heldBackGone: 0,
+  };
 }
 
 /**
@@ -206,6 +273,12 @@ export const REFUSED_MAX_PAUSE_MS = 15 * 60_000;
 export function refusedPauseFor(baseMs: number, streak: number): number {
   return Math.min(baseMs * 2 ** Math.max(0, streak - 1), Math.max(baseMs, REFUSED_MAX_PAUSE_MS));
 }
+
+/**
+ * How long a removed route is left alone before one request asks again: six hours, four probes a
+ * day an endpoint and process, against the 42,000 calls a day `/coins-v2/<mint>` took unanswered.
+ */
+export const GONE_PAUSE_MS = 6 * 3_600_000;
 
 /** How long the one request asking after a block has to answer before another may ask. */
 const PROBE_MS = 15_000;
@@ -252,5 +325,12 @@ export function takePumpFunGateStats(): Record<string, number> {
     swapRefused: swap.refused,
     swapHeldBackRefused: swap.heldBackRefused,
     swapChallenged: swap.challenged,
+    // Removed routes (a 410, or a router's 404): answers seen, requests held back unsent, and how
+    // many endpoints are held right now. Non-zero `Held` means Pump.fun changed its API.
+    frontendGone: frontend.gone,
+    frontendHeldBackGone: frontend.heldBackGone,
+    swapGone: swap.gone,
+    swapHeldBackGone: swap.heldBackGone,
+    goneEndpoints: pumpFunFrontendGate.goneEndpoints().length + pumpFunSwapGate.goneEndpoints().length,
   };
 }
