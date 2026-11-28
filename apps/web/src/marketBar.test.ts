@@ -81,3 +81,15 @@ describe("sparkPath", () => {
     expect(sparkPath([4, 8], 100, 50, true).lo).toBe(0);
   });
 });
+
+describe("TRENCH_STATS tooltips", () => {
+  // The graded windows are 15 minutes (2x), 30 minutes (4x) and an hour (10x): curation/labels.ts.
+  it("name the window each rate is graded on", () => {
+    const title = (key: string) => TRENCH_STATS.find((s) => s.key === key)?.title ?? "";
+    expect(title("runners")).toContain("within 15 minutes");
+    expect(title("hit2xPct")).toContain("within 15 minutes");
+    expect(title("hit4xPct")).toContain("within 30 minutes");
+    expect(title("hit10xPct")).toContain("within an hour");
+    for (const key of ["runners", "hit2xPct", "hit4xPct"]) expect(title(key)).not.toMatch(/hour/);
+  });
+});

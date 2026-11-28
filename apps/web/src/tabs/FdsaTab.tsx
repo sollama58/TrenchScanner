@@ -320,7 +320,7 @@ function HitRatePanel({ d }: { d: FdsaPage }) {
       </p>
       {r.trades.graded > 0 && (
         <p className="faint small">
-          {r.trades.wins4x} of them went on to 4x within the hour. The alerts it passed on hit 2x{" "}
+          {r.trades.wins4x} of them went on to 4x within 30 minutes. The alerts it passed on hit 2x{" "}
           {r.passes.rate === null ? "–" : `${Math.round(r.passes.rate * 100)}%`} of the time.
         </p>
       )}
