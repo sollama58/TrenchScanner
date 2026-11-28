@@ -33,8 +33,9 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
     });
     await prisma.curatedAlert.createMany({
       data: [
-        { ...alert("a", 10, true, 400), simReturnPct: 191 },
-        { ...alert("a", 20, false), simReturnPct: -50 },
+        // On the fill target the first lost (stopped out) and the second won: the reverse of the label.
+        { ...alert("a", 10, true, 400), simReturnPct: 191, fillWin: false, fillReturnPct: -32 },
+        { ...alert("a", 20, false), simReturnPct: -50, fillWin: true, fillReturnPct: 94 },
         alert("a", 30, null),
         alert("b", 5, true),
         alert("b", 50, true), // before b's lane was born - excluded
@@ -87,6 +88,13 @@ describe.skipIf(!dbAvailable)("liveCallRecords", () => {
       sumSimReturnPct: 0,
       sumRun: expect.any(Number),
     });
+    // The fill target's count is read only when asked for, beside the same label record.
+    const withFill = await liveCallRecords(models, since, lanes, { fill: true });
+    expect(withFill.get(`${TAG}-a`)).toEqual({
+      ...batched.get(`${TAG}-a`),
+      fill: { graded: 2, wins: 1, sumReturnPct: 62 },
+    });
+    expect(withFill.get(`${TAG}-b`)!.fill).toEqual({ graded: 0, wins: 0, sumReturnPct: 0 });
     // A window with an end leaves out the calls made after it: a's 10-minute-old win.
     const ended = await liveCallRecords(models, since, lanes, { until: at(15) });
     expect(ended.get(`${TAG}-a`)).toMatchObject({ calls: 2, graded: 1, wins: 0 });

@@ -42,6 +42,11 @@ export interface RankRateBand {
 export interface RankRateRow {
   seatScores: unknown;
   won: boolean;
+  /**
+   * Whether it won on the rule the pages report (curation/winTarget.ts), when that is not the
+   * classic one. Only the card's quoted rate reads it (reportedRankRates, reportedShownPct).
+   */
+  wonReported?: boolean;
 }
 
 function bandIndex(rank: number): number {
@@ -221,4 +226,31 @@ export function servedRate(
     shownPct: ownBand ? calibratedPct : pooled === null ? null : toPct(pooled),
     tier: ownBand ? "high" : "standard",
   };
+}
+
+/**
+ * A seat's bands counted on the rule the pages report: the same rows and ranks as buildRankRates,
+ * with each row's `wonReported` as the win. Built only while WIN_TARGET_RULE is not the classic
+ * rule, and read only for the card's quote.
+ */
+export function buildReportedRankRates(rows: readonly RankRateRow[]): Map<string, RankRateBand[]> {
+  return buildRankRates(rows.map((r) => ({ seatScores: r.seatScores, won: r.wonReported ?? r.won })));
+}
+
+/**
+ * What the card quotes when the pages report another rule than the classic one (owner decision
+ * 2026-11-28, card 1): the same choice the classic rule made between the call's own band and the
+ * seat's pooled rate (`served.tier`), with the rate counted on the reported rule. The call's rate
+ * and tier are untouched: the FDSA screen and the high tier read those on the classic label.
+ * Returns the classic quote where the reported bands have too few graded moments.
+ */
+export function reportedShownPct(
+  served: ServedRate,
+  reportedBands: readonly RankRateBand[] | undefined,
+  rank: number,
+): number | null {
+  if (served.shownPct === null || !reportedBands) return served.shownPct;
+  const rate =
+    served.tier === "high" ? measuredRateAtRank(reportedBands, rank) : pooledCalledRate(reportedBands);
+  return rate === null ? served.shownPct : toPct(rate);
 }

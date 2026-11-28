@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildRankRates,
+  buildReportedRankRates,
+  reportedShownPct,
   CARD_BAND_MIN_PCT,
   CARD_RATE_MIN_GRADED_LOWER_BOUND,
   ownBandEarned,
@@ -158,5 +160,33 @@ describe("the lower-bound card rule (owner decision 2026-11-11)", () => {
       shownPct: null,
       tier: undefined,
     });
+  });
+
+  it("quotes the reported rule's rate on the card and leaves the call's rate and tier alone", () => {
+    // The same moments counted on the reported rule: the top band won 30% there, the pool 16%.
+    const reported = bands([200, 60], [300, 60], [500, 80], [1000, 120], [8000, 400]);
+    const high = servedRate(0.3, seat, 0.99);
+    expect(high).toEqual({ calibratedPct: 40, shownPct: 40, tier: "high" });
+    expect(reportedShownPct(high, reported, 0.99)).toBe(30);
+    const standard = servedRate(0.3, seat, 0.96);
+    expect(reportedShownPct(standard, reported, 0.96)).toBe(16);
+    // No reported bands (the classic rule), or too few graded on them: the classic quote stands.
+    expect(reportedShownPct(high, undefined, 0.99)).toBe(40);
+    expect(reportedShownPct(high, bands([10, 1], [10, 1], [10, 1], [9, 1], [8000, 400]), 0.99)).toBe(40);
+    // Nothing quoted on the classic rule stays unquoted.
+    expect(reportedShownPct(servedRate(0.6, undefined, 0.99), reported, 0.99)).toBeNull();
+  });
+
+  it("counts the reported bands on each row's reported verdict, the classic one where none is given", () => {
+    const graded = [
+      ...rows(1000, 20).map((r) => ({ ...r, wonReported: false })),
+      { seatScores: { trees: 2000 }, won: false, wonReported: true },
+      { seatScores: { trees: 2001 }, won: true },
+    ];
+    const classic = buildRankRates(graded).get("trees")!;
+    const reported = buildReportedRankRates(graded).get("trees")!;
+    expect(classic.reduce((s, b) => s + b.wins, 0)).toBe(21);
+    expect(reported.reduce((s, b) => s + b.wins, 0)).toBe(2);
+    expect(reported.map((b) => b.graded)).toEqual(classic.map((b) => b.graded));
   });
 });

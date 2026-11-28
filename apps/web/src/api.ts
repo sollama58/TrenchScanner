@@ -1327,6 +1327,8 @@ export interface FilterBoardEntry {
   /** 10x within an hour (absent from older API builds). */
   won10x?: number;
   winRatePct: number | null;
+  /** The same alerts on the rule the pages report, when that is not the classic one; null with none graded. */
+  reported?: { graded: number; wins: number; hitRatePct: number; returnPct: number } | null;
   goalRatePct: number | null;
   tenXRatePct?: number | null;
   proven2xPct: number | null;
@@ -1604,6 +1606,11 @@ export interface LeaderboardEntry {
   scoreExplained?: string;
   /** Its live record on high-conviction calls alone; null with none graded. */
   highConviction?: RecordSummary | null;
+  /**
+   * Its live alerts on the rule the pages report when that is not the classic one: graded, won,
+   * hit rate and average return per trade after costs. Null with none graded; absent otherwise.
+   */
+  reported?: { graded: number; wins: number; hitRatePct: number; returnPct: number } | null;
   model: {
     id: string;
     trainedAt: string;
@@ -1643,6 +1650,8 @@ export interface Leaderboard {
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   /** The random-pick baseline over the same window ("event" moments; absent from older API builds). */
   baseline?: GradedRates;
+  /** Present while the pages report another rule than the classic one: its name, sentence and baseline. */
+  reported?: { rule: string; win: string; baseline: GradedRates };
   /** Runners over the window and how many any model caught (absent from older API builds). */
   runners?: LiveCatch;
   /**

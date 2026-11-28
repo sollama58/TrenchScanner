@@ -8,6 +8,7 @@ import {
   curatedTargets,
   HEURISTIC_CURATOR_SOURCE,
   STACKED_MODEL_KIND,
+  setWinTargetRule,
 } from "@trenchscanner/core";
 import {
   buildLeaderboard,
@@ -174,6 +175,9 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
         hit4xIn1h: true,
         disqualified: false,
         labelValue: 2,
+        // On the fill target this one was stopped out and the next one won: the reverse.
+        fillWin: false,
+        fillReturnPct: -32,
       },
     });
     const base = {
@@ -188,7 +192,15 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
       data: [
         { ...base, candidateOutcomeId: outcome.id },
         // Training row pruned: graded from the copies, its return from the copied 1h peak.
-        { ...base, hit2xIn1h: true, hit4xIn1h: false, disqualified: true, peak1hReturnPct: 150 },
+        {
+          ...base,
+          hit2xIn1h: true,
+          hit4xIn1h: false,
+          disqualified: true,
+          peak1hReturnPct: 150,
+          fillWin: true,
+          fillReturnPct: 94,
+        },
         // Still in its window.
         { ...base },
       ],
@@ -204,6 +216,26 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     expect(rules.composite.live).toMatchObject({ calls: 3, graded: 2, winRatePct: 50, goalRatePct: 50 });
     expect(rules.composite.live.avgReturnDoublings).toBe(1);
     expect(board.entries.map((e) => e.rank)).toEqual(board.entries.map((_, i) => i + 1));
+
+    // On the classic rule the board carries nothing about the fill target.
+    expect(board.reported).toBeUndefined();
+    expect("reported" in rules).toBe(false);
+    // With WIN_TARGET_RULE=fill30 each seat gains its record on that rule, and its score, its
+    // rank and the baseline beside them do not move: seats are still scored on the 2x label.
+    setWinTargetRule("fill30");
+    try {
+      const fill = await buildLeaderboard(env, 30);
+      const fillRules = fill.entries.find((e) => e.id === "rules")!;
+      expect(fillRules.reported).toEqual({ graded: 2, wins: 1, hitRatePct: 50, returnPct: 31 });
+      expect(fill.entries.find((e) => e.id === "trees")?.reported).toBeNull();
+      expect(fillRules.composite).toEqual(rules.composite);
+      expect(fill.entries.map((e) => e.id)).toEqual(board.entries.map((e) => e.id));
+      expect(fill.baseline).toEqual(board.baseline);
+      expect(fill.reported).toMatchObject({ rule: "fill30", baseline: { calls: expect.any(Number) } });
+      expect(fill.reported?.win).toContain("within 30 minutes");
+    } finally {
+      setWinTargetRule("classic");
+    }
   });
 
   it("shows an evolved seat under its lane's name, with a live record from its takeover on", async () => {

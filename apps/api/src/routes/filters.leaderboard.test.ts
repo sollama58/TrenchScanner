@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { prisma, loadEnv } from "@trenchscanner/core";
+import { prisma, loadEnv, setWinTargetRule } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
@@ -129,6 +129,35 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     expect(raw).not.toContain(ownerId);
     // The owner sees their own entries flagged.
     expect((await board(ownerCookie)).ranked.every((e) => e.mine)).toBe(true);
+
+    const trackRecordOf = async (id: string) =>
+      (
+        (await call(ownerCookie, "GET", "/filters")).json() as {
+          id: string;
+          trackRecord: { won2x: number } | null;
+        }[]
+      ).find((f) => f.id === id)?.trackRecord;
+    expect(await trackRecordOf(strong)).toMatchObject({ graded: 40, won2x: 30 });
+    // While the pages report the fill target (WIN_TARGET_RULE=fill30) each record also carries
+    // its count on that rule; scores and ranks stay on the 2x label, so the order does not move.
+    await prisma.match.updateMany({
+      where: { filterId: strong },
+      data: { fillWin: false, fillReturnPct: -30 },
+    });
+    expect("reported" in (await board()).ranked[0]!).toBe(false);
+    setWinTargetRule("fill30");
+    try {
+      const fill = (await board()) as unknown as {
+        ranked: { id: string; score: number; reported: object | null }[];
+      };
+      expect(fill.ranked.map((e) => [e.id, e.score])).toEqual(b.ranked.map((e) => [e.id, e.score]));
+      expect(fill.ranked[0]!.reported).toEqual({ graded: 40, wins: 0, hitRatePct: 0, returnPct: -30 });
+      expect(fill.ranked[1]!.reported).toBeNull();
+      // The owner's own track record counts 2x on the reported rule: none of strong's 40 won on it.
+      expect((await trackRecordOf(strong))?.won2x).toBe(0);
+    } finally {
+      setWinTargetRule("classic");
+    }
   });
 
   it("scores the same 2x and 4x records the same, however far the winners ran (run size scores nothing since 2026-10-18)", async () => {

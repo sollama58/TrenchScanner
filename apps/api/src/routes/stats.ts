@@ -11,6 +11,7 @@ import {
   describeWinTarget,
   winTargetRule,
   wonSql,
+  type WinTargetRule,
   GOAL_WINDOW_MINUTES,
   CANDIDATE_EXTENDED_WATCH_HOURS,
   REPORTED_LABEL_RULE,
@@ -310,16 +311,21 @@ export async function baselineRates(
   until?: Date,
   /** The market's rows over the window when the caller holds them (marketRows.ts); read here otherwise. */
   rows?: readonly MarketRow[] | null,
+  /**
+   * The rule the 2x count follows: the reported one (WIN_TARGET_RULE), unless the caller sets it
+   * beside figures on the classic label (the leaderboard's scores).
+   */
+  rule: WinTargetRule = winTargetRule(),
 ): Promise<GradedRates> {
   if (rows) {
     // The baseline never carried a simulated return; leave it off so the answer stays the same shape.
-    const { sim_calls: _calls, sim_sum: _sum, sim_open: _open, ...counts } = marketCounts(rows);
+    const { sim_calls: _calls, sim_sum: _sum, sim_open: _open, ...counts } = marketCounts(rows, rule);
     return withRates(toCounts(counts), targets);
   }
   const [row] = await prisma.$queryRaw<RawCounts[]>`
     SELECT count(*) AS calls,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
-           count(*) FILTER (WHERE ${wonSql(["co."])}) AS won2x,
+           count(*) FILTER (WHERE ${wonSql(["co."], rule)}) AS won2x,
            count(*) FILTER (WHERE co."hit4xIn1h") AS won4x,
            count(*) FILTER (WHERE co."hit10xIn1h") AS won10x,
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL

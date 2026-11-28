@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { post, ApiError, type FilterBoard, type FilterBoardEntry } from "../api";
 import { invalidate } from "../cache";
 import { usePolling, type Loadable } from "../hooks";
-import { pct } from "../format";
+import { pct, signedPct } from "../format";
 import { criteriaLines, MIN_SCORE_LABEL } from "../filterFields";
 import { ScoreExplainer } from "./ScoreExplainer";
 import { ScoreBar } from "./ScoreBar";
@@ -321,7 +321,18 @@ function BoardEntry({
           >
             {pct(e.winRatePct)}
           </strong>{" "}
-          2x ·{" "}
+          2x
+          {e.reported && (
+            <span
+              className="faint"
+              title={`${e.reported.wins} of ${e.reported.graded} alerts won on the reported target (2x in 30 minutes from a real fill, 30% stop), after costs`}
+            >
+              {" "}
+              ({pct(e.reported.hitRatePct, 1)} on the fill target, {signedPct(e.reported.returnPct, 1)} a
+              trade)
+            </span>
+          )}{" "}
+          ·{" "}
           <strong className={`num ${filterRateTone(e.goalRatePct, targets.hitRate4xPct, e.graded)}`}>
             {pct(e.goalRatePct)}
           </strong>{" "}
