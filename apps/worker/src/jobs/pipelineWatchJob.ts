@@ -645,17 +645,21 @@ export function findDisabledChatProblems(disabledChats: number): Problem[] {
  *  - the desk is set to run and the scanner does not say it is off, yet no review has been stored
  *    for FDSA_QUIET_MS while at least FDSA_QUIET_MIN_ALERTS curated alerts arrived (the budget cap,
  *    reviews held after errors, or a dead queue). With few alerts the quiet is the market's.
- *  - every decide stored in the last FDSA_DECIDE_FAIL_WINDOW_MS failed, FDSA_DECIDE_FAIL_MIN or more
- *    of them. From 2026-11-05 01:08 UTC every decide failed on the Anthropic usage limit for three
- *    days (137 shortlisted coins went undecided) and neither notice above fired: the model-score
- *    screen kept storing a review every cycle and a failed decide is stored too, so the desk was
- *    never "quiet" (model system audit 2026-11-07). One notice while the run of failures lasts; it
- *    clears on the first decide that comes back.
+ *  - FDSA_DECIDE_FAIL_MIN or more of the decides stored in the last FDSA_DECIDE_FAIL_WINDOW_MS
+ *    failed and they are at least half of them; the same for revisions. From 2026-11-05 01:08 UTC
+ *    every decide failed on the Anthropic usage limit for three days (137 shortlisted coins went
+ *    undecided) and neither notice above fired: the model-score screen kept storing a review every
+ *    cycle and a failed decide is stored too, so the desk was never "quiet" (model system audit
+ *    2026-11-07). The first rule asked for five decides with every one failed: at about 30 decides
+ *    a day that is some four hours to the first notice, an outage that lets one call in ten through
+ *    (a rate limit) never said anything, and failed revisions were not read at all (program audit
+ *    2026-11-28, AI-6). One notice while the failures last; it clears once fewer than half of the
+ *    window's calls failed.
  */
 export const FDSA_QUIET_MS = 30 * 60_000;
 export const FDSA_QUIET_MIN_ALERTS = 10;
 export const FDSA_DECIDE_FAIL_WINDOW_MS = 6 * 3_600_000;
-export const FDSA_DECIDE_FAIL_MIN = 5;
+export const FDSA_DECIDE_FAIL_MIN = 3;
 
 export interface FdsaCheck {
   /** FdsaDesk.running; null with no desk row (the desk was never set up: nothing to watch). */
@@ -671,6 +675,15 @@ export interface FdsaCheck {
   decidesFailedInWindow: number;
   /** The newest failed decide's error, or null. Provider text: shown shortened, never acted on. */
   lastDecideError: string | null;
+  /** The same three for revisions of an open position's plan. Absent reads as none. */
+  revisesInWindow?: number;
+  revisesFailedInWindow?: number;
+  lastReviseError?: string | null;
+}
+
+/** Enough failed calls, and at least half of the window's: an outage, not the API's bad minute. */
+function callsFailing(total: number, failed: number): boolean {
+  return failed >= FDSA_DECIDE_FAIL_MIN && failed * 2 >= total;
 }
 
 /** Pure: see the note above. */
@@ -687,19 +700,31 @@ export function findFdsaProblems(c: FdsaCheck | null, now: number): Problem[] {
       },
     ];
   }
-  if (c.decidesInWindow >= FDSA_DECIDE_FAIL_MIN && c.decidesFailedInWindow >= c.decidesInWindow) {
-    const hours = Math.round(FDSA_DECIDE_FAIL_WINDOW_MS / 3_600_000);
-    const why = c.lastDecideError === null ? "" : ` (last error: ${shortError(c.lastDecideError)})`;
-    return [
-      {
-        key: "fdsa-decide-failing",
-        text:
-          `FDSA: every decide in the last ${hours} h failed (${c.decidesFailedInWindow} of ${c.decidesInWindow})${why} - ` +
-          "the screen's shortlist goes undecided and the desk trades nothing; the Anthropic usage limit or key is the usual cause",
-        side: true,
-      },
-    ];
+  const hours = Math.round(FDSA_DECIDE_FAIL_WINDOW_MS / 3_600_000);
+  const why = (error: string | null | undefined) =>
+    error === null || error === undefined ? "" : ` (last error: ${shortError(error)})`;
+  const failing: Problem[] = [];
+  if (callsFailing(c.decidesInWindow, c.decidesFailedInWindow)) {
+    failing.push({
+      key: "fdsa-decide-failing",
+      text:
+        `FDSA: ${c.decidesFailedInWindow} of ${c.decidesInWindow} decides in the last ${hours} h failed${why(c.lastDecideError)} - ` +
+        "a failed decide leaves its shortlisted coin undecided and untraded; the Anthropic usage limit or key is the usual cause",
+      side: true,
+    });
   }
+  const revises = c.revisesInWindow ?? 0;
+  const revisesFailed = c.revisesFailedInWindow ?? 0;
+  if (callsFailing(revises, revisesFailed)) {
+    failing.push({
+      key: "fdsa-revise-failing",
+      text:
+        `FDSA: ${revisesFailed} of ${revises} plan revisions in the last ${hours} h failed${why(c.lastReviseError)} - ` +
+        "open positions keep the plan they were opened with",
+      side: true,
+    });
+  }
+  if (failing.length > 0) return failing;
   const quietMs = c.lastReviewAt === null ? Number.POSITIVE_INFINITY : now - c.lastReviewAt.getTime();
   if (quietMs < FDSA_QUIET_MS || c.alertsInWindow < FDSA_QUIET_MIN_ALERTS) return [];
   const since =
@@ -1111,21 +1136,31 @@ async function readFdsaCheck(now: number): Promise<FdsaCheck | null> {
     prisma.fdsaReview.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
     prisma.curatedAlert.count({ where: { createdAt: { gte: new Date(now - FDSA_QUIET_MS) } } }),
     prisma.fdsaReview.findMany({
-      where: { stage: "decide", createdAt: { gte: new Date(now - FDSA_DECIDE_FAIL_WINDOW_MS) } },
+      where: {
+        stage: { in: ["decide", "revise"] },
+        createdAt: { gte: new Date(now - FDSA_DECIDE_FAIL_WINDOW_MS) },
+      },
       orderBy: { createdAt: "desc" },
-      select: { error: true },
+      select: { stage: true, error: true },
     }),
   ]);
   const fdsa = objectField((scan?.meta ?? null) as Record<string, unknown> | null, "fdsa");
-  const failed = decides.filter((d) => d.error !== null && d.error !== "");
+  const isFailed = (d: { error: string | null }) => d.error !== null && d.error !== "";
+  const decideRows = decides.filter((d) => d.stage === "decide");
+  const reviseRows = decides.filter((d) => d.stage === "revise");
+  const failed = decideRows.filter(isFailed);
+  const failedRevises = reviseRows.filter(isFailed);
   return {
     deskRunning: desk.running,
     scannerEnabled: typeof fdsa?.enabled === "boolean" ? fdsa.enabled : null,
     lastReviewAt: last?.createdAt ?? null,
     alertsInWindow,
-    decidesInWindow: decides.length,
+    decidesInWindow: decideRows.length,
     decidesFailedInWindow: failed.length,
     lastDecideError: failed[0]?.error ?? null,
+    revisesInWindow: reviseRows.length,
+    revisesFailedInWindow: failedRevises.length,
+    lastReviseError: failedRevises[0]?.error ?? null,
   };
 }
 

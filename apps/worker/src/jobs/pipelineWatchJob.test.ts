@@ -766,15 +766,16 @@ describe("pipeline watch: the AI desk (audit 2026-11-02, DB-4)", () => {
     expect(problems[0]!.text).toContain("API error 400");
     expect(problems[0]!.text).not.toContain("\n");
     expect(problems[0]!.text.length).toBeLessThan(400);
-    // Under the minimum run, or with one decide that came back, nothing: a single failure is the API's bad minute.
+    // Under the minimum, nothing: a single failure is the API's bad minute.
     expect(
       findFdsaProblems(
         check({ decidesInWindow: FDSA_DECIDE_FAIL_MIN - 1, decidesFailedInWindow: FDSA_DECIDE_FAIL_MIN - 1 }),
         NOW,
       ),
     ).toEqual([]);
+    // Fewer than half failed, nothing: the desk is mostly deciding.
     expect(
-      findFdsaProblems(check({ decidesInWindow: 12, decidesFailedInWindow: 11, lastDecideError: "x" }), NOW),
+      findFdsaProblems(check({ decidesInWindow: 12, decidesFailedInWindow: 5, lastDecideError: "x" }), NOW),
     ).toEqual([]);
     // Off at the scanner still wins: one notice, not two.
     expect(
@@ -788,6 +789,38 @@ describe("pipeline watch: the AI desk (audit 2026-11-02, DB-4)", () => {
         NOW,
       ),
     ).toMatchObject([{ key: "fdsa-off" }]);
+  });
+
+  it("flags a partial outage and failed revisions, which the every-one-failed rule never did (audit 2026-11-28, AI-6)", () => {
+    // 11 of 12 failed is a rate limit letting one call through: under the first rule it said nothing.
+    const partial = findFdsaProblems(
+      check({ decidesInWindow: 12, decidesFailedInWindow: 11, lastDecideError: "429 rate limit" }),
+      NOW,
+    );
+    expect(partial).toMatchObject([{ key: "fdsa-decide-failing", side: true }]);
+    expect(partial[0]!.text).toContain("11 of 12");
+    // Three failed of three: the first rule waited for five, about four hours at 30 decides a day.
+    expect(findFdsaProblems(check({ decidesInWindow: 3, decidesFailedInWindow: 3 }), NOW)).toMatchObject([
+      { key: "fdsa-decide-failing" },
+    ]);
+    // Exactly half counts; one under does not.
+    expect(findFdsaProblems(check({ decidesInWindow: 6, decidesFailedInWindow: 3 }), NOW)).toHaveLength(1);
+    expect(findFdsaProblems(check({ decidesInWindow: 7, decidesFailedInWindow: 3 }), NOW)).toEqual([]);
+    // Revisions are read the same way, under their own key.
+    const revise = findFdsaProblems(
+      check({ revisesInWindow: 4, revisesFailedInWindow: 3, lastReviseError: "overloaded" }),
+      NOW,
+    );
+    expect(revise).toMatchObject([{ key: "fdsa-revise-failing", side: true }]);
+    expect(revise[0]!.text).toContain("3 of 4 plan revisions");
+    expect(findFdsaProblems(check({ revisesInWindow: 4, revisesFailedInWindow: 1 }), NOW)).toEqual([]);
+    // Both at once: two notices.
+    expect(
+      findFdsaProblems(
+        check({ decidesInWindow: 4, decidesFailedInWindow: 4, revisesInWindow: 3, revisesFailedInWindow: 3 }),
+        NOW,
+      ).map((p) => p.key),
+    ).toEqual(["fdsa-decide-failing", "fdsa-revise-failing"]);
   });
 
   it("words the notice under the scanner-jobs heading, not as a stall", () => {
