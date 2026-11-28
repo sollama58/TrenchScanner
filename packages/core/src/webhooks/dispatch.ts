@@ -41,8 +41,13 @@ const logger = createLogger("webhook-dispatch");
 
 /** Held for the length of a pass, so only one process is ever sending. */
 export const WEBHOOK_DISPATCH_LOCK = "webhook-dispatch";
-/** The wait before each retry; one attempt more than there are delays. */
-export const WEBHOOK_RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000, 600_000] as const;
+/**
+ * The wait before each retry; one attempt more than there are delays. They sum to 520 s, inside
+ * MAX_ALERT_AGE_MS: a sixth delay of 10 minutes put a seventh attempt 1,120 s after the first,
+ * past the 900 s after which an alert is failed unsent, so the 7 attempts partners were told of
+ * (`signing.maxAttempts`) were never more than 6 (program audit 2026-11-28, TG-9).
+ */
+export const WEBHOOK_RETRY_DELAYS_MS = [10_000, 30_000, 60_000, 120_000, 300_000] as const;
 export const WEBHOOK_MAX_ATTEMPTS = WEBHOOK_RETRY_DELAYS_MS.length + 1;
 /** Failed attempts in a row before a webhook is paused rather than retried forever. */
 export const WEBHOOK_MAX_FAILURES = 50;

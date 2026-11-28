@@ -12,9 +12,11 @@ import {
   webhookExchange,
   webhookUrlProblem,
   WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_MAX_FAILURES,
   type WebhookSendResult,
 } from "./dispatch.js";
+import { MAX_ALERT_AGE_MS } from "../telegram/dispatch.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `webhook-test-${Date.now()}`;
@@ -269,6 +271,14 @@ describe.skipIf(!dbAvailable)("runWebhookDispatch", () => {
     const [d] = await prisma.partnerWebhookDelivery.findMany({ where: { webhookId } });
     expect(d).toMatchObject({ status: "delivered", attempts: 2, lastStatus: 200 });
     expect(WEBHOOK_MAX_ATTEMPTS).toBeGreaterThan(2);
+  });
+
+  it("promises no attempt that would fall after the alert's news window (audit 2026-11-28, TG-9)", () => {
+    // The last attempt goes out this long after the first; later than MAX_ALERT_AGE_MS it is
+    // failed as expired instead, so the count told to partners must not include it.
+    const lastAttemptAfterMs = WEBHOOK_RETRY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0);
+    expect(lastAttemptAfterMs).toBeLessThan(MAX_ALERT_AGE_MS);
+    expect(WEBHOOK_MAX_ATTEMPTS).toBe(WEBHOOK_RETRY_DELAYS_MS.length + 1);
   });
 
   it("fails an alert past the news window rather than send it late", async () => {
