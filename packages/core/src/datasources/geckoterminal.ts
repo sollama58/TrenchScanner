@@ -109,10 +109,15 @@ export const GECKOTERMINAL_FREE_PER_MINUTE = 15;
 /**
  * How long a 429 from the free API rests its gate. The retry delay alone (half a second) let the
  * backfill knock again at once: on 2026-11-01 14,130 of 22,409 free candle calls were 429s
- * (audit 2026-11-02). Its limit is a minute's, so a rest of half of one; meanwhile a keyed
- * client's backfill spends a paid credit within the day's lane, or waits.
+ * (audit 2026-11-02), and the rest was set to half a minute. That was still inside the provider's
+ * one-minute window, and the limit is the egress address's, shared by the scanner, the trainer,
+ * the api and TokenSage: each came back at 30 seconds and tripped it again for the others, and on
+ * 2026-11-27 4,655 of 8,621 calls failed at only six calls a minute between them (program audit
+ * 2026-11-28, DS-10). So a full window and a little over. A longer Retry-After from the provider
+ * still wins (RateGate.throttled takes the larger). Meanwhile a keyed client's backfill spends a
+ * paid credit within the day's lane, or waits, as before.
  */
-export const GECKOTERMINAL_FREE_RATE_LIMITED_PAUSE_MS = 30_000;
+export const GECKOTERMINAL_FREE_RATE_LIMITED_PAUSE_MS = 65_000;
 
 export class GeckoTerminalClient {
   private readonly baseUrl: string;
