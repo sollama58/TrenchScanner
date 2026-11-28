@@ -6,6 +6,7 @@ import { MIN_RUNNERS_FOR_COVERAGE } from "./CoverageMeter";
 import { BoltIcon, CheckIcon, CloseIcon, RadarIcon, TargetIcon, TrophyIcon } from "./Icons";
 import { multiple, pct } from "../format";
 import { usePolling } from "../hooks";
+import { useWinTarget, winWindowShort } from "../winTarget";
 import { PAGE_DAYS } from "../tabs/modelShared";
 
 /** Graded alerts below which a hit rate shows as "early" rather than as a verdict. */
@@ -34,6 +35,7 @@ export function FeedStatsModal({
   /** The feed's model calls are the high-conviction tier alone (the Live tab's switch). */
   highConviction?: boolean;
 }) {
+  const win = useWinTarget();
   const ref = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -85,7 +87,7 @@ export function FeedStatsModal({
               </div>
               <div className="panel kpi kpi-ring">
                 <RingGauge
-                  label="Hit 2x within 15 min"
+                  label={`Hit 2x within ${winWindowShort(win)}`}
                   value={fs?.hit2xPct ?? null}
                   target={t.hitRate2xPct}
                   graded={fs?.graded ?? 0}

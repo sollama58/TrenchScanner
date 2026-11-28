@@ -4,6 +4,7 @@ import { usePolling } from "../hooks";
 import { multiple, pct, signedPct } from "../format";
 import { ExitPlanInfo } from "./ExitPlanInfo";
 import { exitPlanShort, useExitPlan } from "../exitPlan";
+import { useWinTarget } from "../winTarget";
 import { PnlShare } from "./PnlShare";
 
 const LABELS: Record<number, string> = { 1: "1h", 6: "6h", 24: "24h", 168: "7d" };
@@ -69,6 +70,7 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
   const [hours, setHours] = useState(24);
   const [hover, setHover] = useState<number | null>(null);
   const { plan } = useExitPlan();
+  const winRule = useWinTarget();
   // The shared row's token, not its rank: a poll can re-rank the list under an open preview.
   const [sharing, setSharing] = useState<string | null>(null);
   const [topBy, setTopBy] = useState<TopBy>("all");
@@ -263,8 +265,8 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
         Each alert&apos;s return under the fixed <ExitPlanInfo text="exit plan" />
         {plan ? ` (${exitPlanShort(plan)})` : ""}, averaged by when it alerted. An alert counts once its
         return settles, from 30 minutes to 3 hours after it fires, so the last hour fills in late. The top 3
-        are the alerts that passed (hit 2x before a 50% drop), ranked by Peak, the figure each feed card
-        shows.
+        are the alerts that passed (hit 2x before a {winRule.stopPct}% drop), ranked by Peak, the figure each
+        feed card shows.
       </p>
     </section>
   );

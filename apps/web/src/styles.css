@@ -13566,6 +13566,14 @@ button.link.exit-plan-link {
   font-weight: 700;
   color: var(--good-ink);
 }
+/* The measured rate under a goal: plain ink, so the aim's big green number does not read as a result. */
+.fp-targets .fp-now {
+  color: var(--muted);
+}
+.fp-targets .fp-now .num {
+  font-size: inherit;
+  color: var(--ink);
+}
 .about-body p.fp-note {
   font-size: 12px;
   color: var(--muted);

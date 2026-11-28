@@ -1,4 +1,7 @@
 import { Fragment } from "react";
+import type { MeasuredGoals } from "../measuredGoals";
+import { pct } from "../format";
+import { useWinTarget, winBase, winRuleShort, winWindowLong, winWindowShort } from "../winTarget";
 import { BrainIcon, SlidersIcon } from "./Icons";
 import { ExitPlanDetails } from "./ExitPlanInfo";
 import { PRO_MODE_PERKS } from "./ProModeCard";
@@ -24,7 +27,10 @@ const SECTIONS = [
  * behave; the numbers come from packages/core (rugScreen.ts, config/env.ts, leaderboard.ts) and
  * apps/api/src/marketWeather.ts.
  */
-export function AboutDetails({ targets }: { targets: Targets }) {
+export function AboutDetails({ targets, measured }: { targets: Targets; measured?: MeasuredGoals | null }) {
+  const win = useWinTarget();
+  const fill = win.base === "fill";
+  const mins = winWindowLong(win);
   return (
     <div className="fine-print">
       <nav className="fp-jump" aria-label="Jump to">
@@ -53,11 +59,21 @@ export function AboutDetails({ targets }: { targets: Targets }) {
         <div className="fp-targets">
           <div>
             <span className="num">{targets.hitRate2xPct}%</span>
-            <span>double (2x) within 15 min</span>
+            <span>double (2x) within {winWindowShort(win)}</span>
+            {measured && (
+              <span className="fp-now">
+                last {measured.days} days: <b className="num">{pct(measured.rate2xPct, 1)}</b>
+              </span>
+            )}
           </div>
           <div>
             <span className="num">{targets.hitRate4xPct}%</span>
             <span>reach 4x within 30 min</span>
+            {measured && measured.rate4xPct !== null && (
+              <span className="fp-now">
+                last {measured.days} days: <b className="num">{pct(measured.rate4xPct, 1)}</b>
+              </span>
+            )}
           </div>
           <div>
             <span className="num">25%</span>
@@ -70,7 +86,10 @@ export function AboutDetails({ targets }: { targets: Targets }) {
         </div>
         <p className="fp-note">
           Targets for the share of alerts that hit each mark, and for the share of all runners the models
-          flag.
+          flag. They are aims, not results
+          {measured
+            ? `: under each is what the models' ${measured.graded.toLocaleString()} graded alerts of the last ${measured.days} days did.`
+            : "; the Models tab shows what each model's alerts did."}
         </p>
       </section>
 
@@ -180,9 +199,9 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               An alert from a model you follow, with its name and its score (&quot;Score 87&quot;): a 0-100
               rank score in that model&apos;s own units, not a probability, so it doesn&apos;t compare across
               models. The &quot;≈NN% 2x&quot; beside it is the share of the model&apos;s recent out-of-sample
-              alerts ranked like this one that hit 2x within 15 minutes of the alert, before a 50% stop (the
-              middle of the alerting models&apos; rates when several flag it). If several models flag the same
-              token, it shows once with all of them. Each model alerts on a token at most once a day.
+              alerts ranked like this one that hit {winRuleShort(win)} (the middle of the alerting
+              models&apos; rates when several flag it). If several models flag the same token, it shows once
+              with all of them. Each model alerts on a token at most once a day.
             </p>
           </div>
         </div>
@@ -218,33 +237,42 @@ export function AboutDetails({ targets }: { targets: Targets }) {
       <section id="fp-grading">
         <h3>How alerts are graded</h3>
         <p>
-          Every alert, yours and the models&apos;, is graded the same way, from the price at the moment it
-          alerted. Winners are watched for a day after, so Peak shows how far they really ran.
+          Every alert, yours and the models&apos;, is graded the same way,{" "}
+          {fill
+            ? "from the price a buyer could really get: the price 16 seconds after the alert, plus 1%."
+            : "from the price at the moment it alerted."}{" "}
+          Winners are watched for a day after, so Peak shows how far they really ran.
         </p>
         <dl className="about-terms">
           <dt>◷ Pending</dt>
-          <dd>Still inside its first 15 minutes.</dd>
+          <dd>Still inside its first {mins}.</dd>
           <dt className="fp-good">✓ 2x win</dt>
-          <dd>Doubled within 15 minutes.</dd>
+          <dd>{fill ? `Reached 2x on ${winBase(win)} within ${mins}.` : `Doubled within ${mins}.`}</dd>
           <dt className="fp-good">✓ 2x hit</dt>
-          <dd>Already doubled without falling 50% first, while its 15 minutes are still running.</dd>
+          <dd>
+            Already doubled without falling {win.stopPct}% first, while its {mins} are still running.
+          </dd>
           <dt className="fp-good">✓✓ 4x win</dt>
           <dd>Also reached 4x within 30 minutes.</dd>
           <dt className="fp-good">✓✓✓ 10x win</dt>
           <dd>Also reached 10x within an hour.</dd>
           <dt className="fp-bad">✕ Missed 2x</dt>
-          <dd>The 15 minutes ran out before it doubled.</dd>
+          <dd>The {mins} ran out before it doubled.</dd>
           <dt>↗ Ran later</dt>
           <dd>
-            Missed the 15 minutes without falling 50% in its first 30 minutes, and doubled later in the day.
-            Counts as a miss.
+            Missed the {mins} without falling 50% below the alert price in its first 30 minutes, and doubled
+            later in the day. Counts as a miss.
           </dd>
           <dt className="fp-bad">⊘ Stopped out</dt>
-          <dd>Fell 50% below the alert price, then doubled within its 15 minutes. It counts as a loss.</dd>
+          <dd>
+            {fill
+              ? `Fell ${win.stopPct}% below ${winBase(win)} before it reached 2x. It counts as a loss.`
+              : `Fell ${win.stopPct}% below the alert price, then doubled within its ${mins}. It counts as a loss.`}
+          </dd>
           <dt className="fp-bad">⊘ Stopped out · hit 2x within 24h</dt>
           <dd>
-            Missed the 15 minutes, fell 50% below the alert price in its first 30 minutes, and reached 2x at
-            some point within the day (before or after the fall). Still a loss.
+            Missed the {mins}, fell 50% below the alert price in its first 30 minutes, and reached 2x at some
+            point within the day (before or after the fall). Still a loss.
           </dd>
           <dt>Grading</dt>
           <dd>The window has closed and the result is being worked out.</dd>
@@ -324,7 +352,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <dt>≈41% 2x</dt>
           <dd>
             Of the model&apos;s recent alerts ranked like this one, on data it wasn&apos;t trained on, the
-            share that doubled within 15 minutes. Shown only from 35% up; under that the card quotes the
+            share that doubled within {mins}. Shown only from 35% up; under that the card quotes the
             model&apos;s rate over all its recent alerts and says so. With several models, the middle of their
             rates. Off by default: turn it on in Customize.
           </dd>

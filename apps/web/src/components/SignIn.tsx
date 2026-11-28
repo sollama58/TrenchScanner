@@ -2,7 +2,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import { type Card, type User } from "../api";
 import { cachedGet } from "../cache";
 import { GUEST_DELAY_MINUTES } from "../session";
-import { signedPct } from "../format";
+import { pct, signedPct } from "../format";
+import { type MeasuredGoals, useMeasuredGoals } from "../measuredGoals";
+import { useWinTarget, winWindowShort } from "../winTarget";
 import {
   describeSignInError,
   onWalletsChanged,
@@ -426,11 +428,15 @@ export function LandingShowcase({
   best,
   latest,
   now,
+  measured,
 }: {
   best: { data: ShowcaseBest | null; error: Error | null };
   latest: { data: ShowcaseLatest | null; error: Error | null };
   now: number;
+  /** What the models' alerts did over the last week (measuredGoals.ts), stated under the showcase. */
+  measured?: MeasuredGoals | null;
 }) {
+  const win = useWinTarget();
   const live = best.data ? (best.data.match ?? latest.data?.matches[0] ?? null) : null;
   const isBest = live !== null && live === best.data?.match;
   const waiting = !best.data && !best.error;
@@ -440,7 +446,11 @@ export function LandingShowcase({
   return (
     <section className="landing-example" aria-labelledby="landing-example-title">
       <p className="eyebrow">Alerts</p>
-      <h2 id="landing-example-title">What an alert looks like</h2>
+      {/* "What an alert looks like" headed the day's best alert by peak, which generalised it
+          (program audit 2026-11-28, WB-64). The heading now says which alert it is. */}
+      <h2 id="landing-example-title">
+        {isBest ? "The best alert of the last day" : "What an alert looks like"}
+      </h2>
       <div className="landing-live">
         {live ? (
           <>
@@ -463,6 +473,12 @@ export function LandingShowcase({
                 </>
               )}
             </p>
+            {isBest && measured && (
+              <p className="small muted landing-typical">
+                Typical: <span className="num">{pct(measured.rate2xPct, 1)}</span> of model alerts doubled
+                within {winWindowShort(win)} over the last {measured.days} days.
+              </p>
+            )}
             <div className="cards signin-cards">
               <AlertCard
                 card={live}
@@ -499,5 +515,6 @@ function ShowcaseAlert() {
   const best = usePolling<ShowcaseBest>("/guest/best", 60_000);
   const latest = usePolling<GuestPage>("/guest/feed?page=1", 60_000);
   const now = useNow(15_000);
-  return <LandingShowcase best={best} latest={latest} now={now} />;
+  const measured = useMeasuredGoals(true);
+  return <LandingShowcase best={best} latest={latest} now={now} measured={measured} />;
 }

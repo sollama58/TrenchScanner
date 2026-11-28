@@ -95,6 +95,24 @@ describe("signed-out landing", () => {
     expect(html).not.toContain("trade.padre.gg");
   });
 
+  // Program audit 2026-11-28, WB-64: "What an alert looks like" headed the day's best alert by
+  // peak with nothing saying what a typical alert does.
+  it("heads the best alert as the best, with the typical rate under it", () => {
+    const html = renderToStaticMarkup(
+      <LandingShowcase
+        now={now}
+        best={{ data: { match: namedCard("LIVECOIN"), windowHours: 24 }, error: null }}
+        latest={{ data: { matches: [] }, error: null }}
+        measured={{ days: 7, graded: 3382, rate2xPct: 22.9, rate4xPct: 6.5 }}
+      />,
+    );
+    expect(html).toContain("The best alert of the last day");
+    expect(html).not.toContain("What an alert looks like");
+    expect(html).toMatch(
+      /Typical: <span class="num">22\.9%<\/span> of model alerts doubled within 15 min over the last 7 days/,
+    );
+  });
+
   it("labels a latest-alert fallback as a real delayed alert", () => {
     const html = renderToStaticMarkup(
       <LandingShowcase

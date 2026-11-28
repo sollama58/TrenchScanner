@@ -514,7 +514,7 @@ function Sections({
           <ol className="tsg-steps">
             <li>
               <span>
-                <b>Scan</b> finds a new launch and screens out rugs
+                <b>Scan</b> finds a new launch and screens out the common rug patterns
               </span>
             </li>
             <li>

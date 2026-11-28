@@ -13,6 +13,10 @@ import {
   YoursArt,
 } from "./TourArt";
 import { GUEST_DELAY_MINUTES } from "../session";
+import { useWinTarget, winWindowShort } from "../winTarget";
+import { type MeasuredGoals, useMeasuredGoals } from "../measuredGoals";
+import type { WinTargetView } from "../api";
+import { pct } from "../format";
 import { PRO_MODE_PERKS } from "./ProModeCard";
 
 type Targets = { hitRate2xPct: number; hitRate4xPct: number };
@@ -37,7 +41,9 @@ export function AboutModal({
   const ref = useRef<HTMLDialogElement>(null);
   const [step, setStep] = useState(0);
   const [details, setDetails] = useState(false);
-  const slides = tourSlides(targets, guest);
+  const win = useWinTarget();
+  const measured = useMeasuredGoals(guest);
+  const slides = tourSlides(targets, guest, win, measured);
   const last = slides.length - 1;
   const at = Math.min(step, last);
   const slide = slides[at]!;
@@ -92,7 +98,7 @@ export function AboutModal({
             <button type="button" className="ghost tour-back-link" onClick={() => setDetails(false)}>
               ← Back to the picture tour
             </button>
-            <AboutDetails targets={targets} />
+            <AboutDetails targets={targets} measured={measured} />
           </>
         ) : (
           <>
@@ -149,7 +155,7 @@ interface Slide {
   body: React.ReactNode;
 }
 
-function tourSlides(t: Targets, guest: boolean): Slide[] {
+function tourSlides(t: Targets, guest: boolean, win: WinTargetView, measured: MeasuredGoals | null): Slide[] {
   return [
     {
       title: "We find the few coins worth a look",
@@ -172,8 +178,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
       body: (
         <>
           <p className="tour-lead">
-            Every coin must pass a safety check before you or the models ever see it. Break one rule and
-            it&apos;s out.
+            Every coin is checked against these rules before you or the models see it. A coin that breaks one
+            is out.
           </p>
           <ul className="tour-checks">
             <li>Mint Authority revoked</li>
@@ -189,6 +195,10 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             <li>Under 21 of the top 25 holders were funded from an exchange</li>
             <li>The bonding curve wasn&apos;t bought out within 5 seconds of launch</li>
           </ul>
+          <p className="tour-note">
+            The wallet checks take a paid lookup each, so some may still read &ldquo;Not checked&rdquo; when
+            an alert goes out. That means not looked at yet, not clean.
+          </p>
         </>
       ),
     },
@@ -222,7 +232,7 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
               <li>
                 <b className="good">✓</b>
                 <b className="tier-x num">2x</b>
-                <span>in 15 min</span>
+                <span>in {winWindowShort(win)}</span>
               </li>
               <li>
                 <b className="good">✓✓</b>
@@ -236,9 +246,23 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
               </li>
             </ul>
             <p>
-              Either way, every alert is graded from its price when it alerted. Our goal:{" "}
-              <b>{t.hitRate2xPct}%</b> of alerts double, <b>{t.hitRate4xPct}%</b> reach 4x, and the models
-              catch <b>75%</b> of all the coins that double.
+              Either way, every alert is graded from{" "}
+              {win.base === "fill" ? "a price you could really have bought at" : "its price when it alerted"}.{" "}
+              {measured && (
+                <>
+                  Over the last {measured.days} days <b>{pct(measured.rate2xPct, 1)}</b> of model alerts
+                  doubled within {winWindowShort(win)}
+                  {measured.rate4xPct !== null && (
+                    <>
+                      {" "}
+                      and <b>{pct(measured.rate4xPct, 1)}</b> reached 4x
+                    </>
+                  )}
+                  .{" "}
+                </>
+              )}
+              Our long-term aim: <b>{t.hitRate2xPct}%</b> of alerts double, <b>{t.hitRate4xPct}%</b> reach 4x,
+              and the models catch <b>75%</b> of all the coins that double.
             </p>
           </div>
         </>
