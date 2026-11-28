@@ -147,7 +147,7 @@ import { TapeLogsFeed } from "./jobs/tapeLogsFeed.js";
 import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { startCurveCandles } from "./jobs/curveCandles.js";
 import { seedCandleChainFillSpend, startCandleChainFill } from "./jobs/candleChainFill.js";
-import { SolUsdHistory } from "./jobs/solUsdHistory.js";
+import { coinbaseSolNow, SolUsdHistory } from "./jobs/solUsdHistory.js";
 import { startCandleBackfill } from "./jobs/candleBackfill.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
@@ -891,7 +891,24 @@ async function main() {
   // restarts this process (at most once an hour), with a banner for visitors first. Every minute,
   // so those warnings land on time.
   schedule("pipeline-watch", () =>
-    scheduleInterval("pipeline-watch", () => runPipelineWatch(env), 1, { deadlineMinutes: 10 }),
+    scheduleInterval(
+      "pipeline-watch",
+      () =>
+        runPipelineWatch(env, {
+          // The price the worker uses against Coinbase's, every 5 minutes (FD-6). Never in tests:
+          // both are live calls.
+          ...(process.env.NODE_ENV !== "test"
+            ? {
+                solPrices: async () => {
+                  const [ours, other] = await Promise.all([dexScreener.solUsd(), coinbaseSolNow()]);
+                  return { ours, other };
+                },
+              }
+            : {}),
+        }),
+      1,
+      { deadlineMinutes: 10 },
+    ),
   );
   // Builds a Pro trade (never signed or sent) on SOL->USDC, a graduated coin and a curve coin,
   // pings Sender and the trading RPCs - see runTradeCanary. pipeline-watch tells the admins after

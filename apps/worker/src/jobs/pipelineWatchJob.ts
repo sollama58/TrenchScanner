@@ -530,6 +530,95 @@ export function findPumpPortalProblems(block: Record<string, unknown> | null, di
   ];
 }
 
+/** One reading of SOL's dollar price: the one the worker prices with, and an independent one. */
+export interface SolPriceReading {
+  at: number;
+  /** DexScreener's wrapped-SOL price, what the worker uses; null when the read failed. */
+  ours: number | null;
+  /** Coinbase's newest SOL-USD minute close; null when the read failed. */
+  other: number | null;
+}
+
+/** How often the two prices are read: one cached DexScreener lookup and one keyless Coinbase call. */
+export const SOL_PRICE_CHECK_EVERY_MS = 5 * 60_000;
+/** The two prices this far apart, two readings running, is a wrong price. They usually agree within 0.5%. */
+export const SOL_PRICE_MAX_DIFF = 0.03;
+/** Our price the same to the last digit for this long while the other moved is a frozen price. */
+export const SOL_PRICE_FROZEN_MS = 10 * 60_000;
+/** The other source has to have moved this much for "frozen" to mean anything. */
+const SOL_PRICE_MOVED = 0.001;
+/** Readings kept: enough to span SOL_PRICE_FROZEN_MS with one to spare. */
+const SOL_PRICE_READINGS_KEPT = 4;
+
+type BothPrices = { at: number; ours: number; other: number };
+
+/**
+ * SOL's dollar price wrong or frozen (program audit 2026-11-28, FD-6). The worker had one source
+ * for it, DexScreener's wrapped-SOL price, tested only for being above zero, and it prices every
+ * bonding-curve coin in dollars: the 7k to 1M band, the candles and the labels' curve scale. A
+ * constant error cancels in a 2x label, which is a ratio; a step inside a window or a price that
+ * stops while SOL moves does not. `readings` are oldest first. Notify-only: nothing restarts for it.
+ */
+export function findSolPriceProblems(readings: readonly SolPriceReading[]): Problem[] {
+  const read = (r: SolPriceReading | undefined): BothPrices | null =>
+    r && r.ours !== null && r.other !== null ? { at: r.at, ours: r.ours, other: r.other } : null;
+  const last = read(readings[readings.length - 1]);
+  if (!last) return [];
+  const problems: Problem[] = [];
+  const apart = (r: BothPrices) => Math.abs(r.ours / r.other - 1) > SOL_PRICE_MAX_DIFF;
+  // The newest two readings, both read and both apart: one bad print says nothing.
+  const previous = read(readings[readings.length - 2]);
+  if (previous && apart(previous) && apart(last)) {
+    problems.push({
+      key: "sol-price",
+      text:
+        `SOL price: the worker's (DexScreener) is $${last.ours.toFixed(2)} and Coinbase's $${last.other.toFixed(2)}, ` +
+        `${Math.round(Math.abs(last.ours / last.other - 1) * 100)}% apart for two readings - ` +
+        "curve coins' dollar market caps and the band are off by that much",
+      side: true,
+    });
+  }
+  // Frozen: every reading back to SOL_PRICE_FROZEN_MS ago carries the same price of ours.
+  let first = last;
+  for (let i = readings.length - 2; i >= 0; i -= 1) {
+    const r = read(readings[i]);
+    if (!r || r.ours !== last.ours) break;
+    first = r;
+  }
+  if (last.at - first.at >= SOL_PRICE_FROZEN_MS && Math.abs(last.other / first.other - 1) > SOL_PRICE_MOVED) {
+    problems.push({
+      key: "sol-price-frozen",
+      text:
+        `SOL price: the worker's (DexScreener) has stood at $${last.ours.toFixed(2)} for ` +
+        `${formatAge(last.at - first.at)} while Coinbase's moved from $${first.other.toFixed(2)} to ` +
+        `$${last.other.toFixed(2)} - curve coins are being priced on a stale SOL price`,
+      side: true,
+    });
+  }
+  return problems;
+}
+
+/** The process clock and the database's this far apart is a notice. */
+export const CLOCK_SKEW_ALERT_MS = 5_000;
+
+/**
+ * This process's clock against the database's (FD-6). Windows, ages and "the last 15 minutes" are
+ * all cut with the process clock against rows the database stamped; nothing compared the two.
+ * `skewMs` is ours minus the database's.
+ */
+export function findClockProblems(skewMs: number | null): Problem[] {
+  if (skewMs === null || Math.abs(skewMs) < CLOCK_SKEW_ALERT_MS) return [];
+  return [
+    {
+      key: "clock",
+      text:
+        `Clock: the scanner's is ${Math.round(Math.abs(skewMs) / 1000)} s ${skewMs > 0 ? "ahead of" : "behind"} ` +
+        "the database's - windows and ages are cut that far off",
+      side: true,
+    },
+  ];
+}
+
 /** Helius's requests and failed requests over one stretch of ApiUsage, every process together. */
 export interface ProviderErrorWindow {
   requests: number;
@@ -1104,6 +1193,48 @@ async function databaseBytes(): Promise<number | null> {
   }
 }
 
+/** This process's clock minus the database's, in ms, taken at the middle of the read; null when it fails. */
+async function readClockSkewMs(): Promise<number | null> {
+  try {
+    // The real clock, not the run's `now`: it is the clock itself being checked.
+    const before = Date.now();
+    const [row] = await prisma.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+    const after = Date.now();
+    return row ? (before + after) / 2 - row.now.getTime() : null;
+  } catch (err) {
+    logger.warn("database clock not read", { error: String(err) });
+    return null;
+  }
+}
+
+/** The SOL price readings of this process, oldest first, and when the last was taken. */
+let solReadings: SolPriceReading[] = [];
+let solReadAt = 0;
+
+/** Test hook. */
+export function resetSolPriceReadings(): void {
+  solReadings = [];
+  solReadAt = 0;
+}
+
+/** Takes a SOL price reading when one is due and returns those held. Never rejects. */
+async function solPriceReadings(
+  read: PipelineWatchDeps["solPrices"],
+  now: number,
+): Promise<SolPriceReading[]> {
+  if (!read) return [];
+  if (now - solReadAt >= SOL_PRICE_CHECK_EVERY_MS || now < solReadAt) {
+    solReadAt = now;
+    try {
+      const { ours, other } = await read();
+      solReadings = [...solReadings, { at: now, ours, other }].slice(-SOL_PRICE_READINGS_KEPT);
+    } catch (err) {
+      logger.warn("SOL prices not read", { error: String(err) });
+    }
+  }
+  return solReadings;
+}
+
 /** Helius's requests and errors in the last two half hours, the older first (findHeliusErrorProblems). */
 async function readHeliusErrorWindows(now: number): Promise<ProviderErrorWindow[]> {
   const mid = new Date(now - HELIUS_ERROR_WINDOW_MS);
@@ -1605,6 +1736,11 @@ export interface PipelineWatchDeps {
   adminChats?: () => Promise<bigint[]>;
   /** Test hook: this run's database-down counters, in place of the process's. */
   database?: DatabaseDownWatch;
+  /**
+   * SOL's dollar price as the worker has it and from an independent source (findSolPriceProblems).
+   * Absent, the price is not checked.
+   */
+  solPrices?: () => Promise<{ ours: number | null; other: number | null }>;
 }
 
 /**
@@ -1825,6 +1961,8 @@ async function watchOnce(
     held,
     fdsa,
     heliusErrors,
+    clockSkewMs,
+    solPrices,
   ] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
@@ -1841,6 +1979,8 @@ async function watchOnce(
     heldChats(now),
     readFdsaCheck(now),
     readHeliusErrorWindows(now),
+    readClockSkewMs(),
+    solPriceReadings(deps.solPrices, now),
   ]);
   const agedOut = findAgedOutProblems(before.agedOut, agedOutSinceBoot, now);
   const scanLatency = findScanLatencyProblems(before.scanLatency, scanCycle, before.keys);
@@ -1878,6 +2018,8 @@ async function watchOnce(
     ...findCreditProblems(creditsOut),
     // With credits out every billed call is refused, and the notice above already says why.
     ...(creditsOut ? [] : findHeliusErrorProblems(heliusErrors)),
+    ...findSolPriceProblems(solPrices),
+    ...findClockProblems(clockSkewMs),
     ...findPumpPortalProblems(
       scanCycle?.pumpPortal ?? null,
       flows.find((f) => f.key === "discovery")?.recent ?? 0,

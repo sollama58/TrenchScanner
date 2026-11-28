@@ -35,6 +35,23 @@ export const coinbaseSolMinutes: SolMinuteReader = async (fromMs, toMs) => {
   return parseCoinbaseMinutes(body);
 };
 
+/**
+ * Coinbase's newest SOL-USD minute close, or null: the price pipeline-watch holds DexScreener's
+ * against (program audit 2026-11-28, FD-6). One keyless call. Never rejects.
+ */
+export async function coinbaseSolNow(
+  read: SolMinuteReader = coinbaseSolMinutes,
+  now: number = Date.now(),
+): Promise<number | null> {
+  try {
+    const minutes = await read(now - 5 * MINUTE_MS, now);
+    if (minutes.size === 0) return null;
+    return minutes.get(Math.max(...minutes.keys())) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Exported for tests. Coinbase's candle list as minute start (ms) to close, the bad rows left out. */
 export function parseCoinbaseMinutes(body: unknown): Map<number, number> {
   const out = new Map<number, number>();
