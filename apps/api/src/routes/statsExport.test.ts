@@ -258,6 +258,7 @@ const SCREEN_READINGS = {
   cexFundedPct: 12.5,
 };
 const WINDOW = `since=${at(-1).toISOString()}&until=${at(600).toISOString()}`;
+const PARTNER_TOKEN = "export-test-partner-token-0123456789abcdef012";
 
 describe.skipIf(!dbAvailable)("GET /stats/export", () => {
   let app: FastifyInstance;
@@ -511,6 +512,39 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
     // Header + the one snapshot within 120 minutes of the 60-minute anchor (150 min).
     expect(csv).toHaveLength(2);
     expect(csv[1]).toContain(",5400,4,");
+  });
+
+  it("gives a partner the paths of called rows only, and the operator every banked row (AP-2)", async () => {
+    const ids = (text: string) =>
+      text
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l).outcomeId as string);
+    // The operator's export, read without a request (the route allows 12 a minute, and this file uses them).
+    const q = exportQuerySchema.parse({ dataset: "paths", format: "jsonl" });
+    let operator = "";
+    for await (const chunk of exportChunks(q, at(-1), at(600))) operator += chunk;
+    expect(ids(operator).sort()).toEqual([...outcomeIds].sort());
+    // A server of its own: the route allows 12 exports a minute, and this file's other tests use them.
+    const partnerApp = await buildServer({
+      ...loadEnv(),
+      STATS_API_TOKEN: TOKEN,
+      STATS_PARTNER_TOKENS: `export-partner:${PARTNER_TOKEN}`,
+    });
+    const res = await partnerApp.inject({
+      method: "GET",
+      url: `/stats/export?dataset=paths&${WINDOW}`,
+      headers: { authorization: `Bearer ${PARTNER_TOKEN}`, "accept-encoding": "gzip" },
+    });
+    await partnerApp.close();
+    expect(res.statusCode).toBe(200);
+    // The fixture's one call was made on the first row; the other three were banked, never called.
+    expect(ids(gunzipSync(res.rawPayload).toString("utf8"))).toEqual([outcomeIds[0]]);
+    // The flag is the route's, not the caller's: the query schema does not read it.
+    expect(exportQuerySchema.parse({ dataset: "paths", calledOnly: "true" })).not.toHaveProperty(
+      "calledOnly",
+    );
   });
 
   it("returns each token's safety-screen verdicts and prices from first sight", async () => {

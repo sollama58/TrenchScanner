@@ -20,7 +20,8 @@ export type StatsCaller = { kind: "operator" } | { kind: "partner"; name: string
 
 /**
  * What a partner may read: the results (hit rates, the model board), prices (minute candles,
- * trimmed to the bars) and the calls themselves (the alerts and paths exports). Not the outcomes
+ * trimmed to the bars) and the calls themselves (the alerts export, and the paths export for the
+ * rows a call was made on: statsExport.ts calledOnly). Not the outcomes
  * export (every model input on every row: the training data), not ai-reviews, shadow, screen,
  * narratives, wallets, wallet-activity, tape, top-models or the send logs, and nothing operational.
  */

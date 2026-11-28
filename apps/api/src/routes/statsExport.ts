@@ -82,7 +82,16 @@ export const exportQuerySchema = z
     message: `window must be at most ${MAX_EXPORT_WINDOW_DAYS} days`,
   });
 
-export type ExportQuery = z.infer<typeof exportQuerySchema>;
+export type ExportQuery = z.infer<typeof exportQuerySchema> & {
+  /**
+   * paths: only the rows a curated alert was called on. Never read from the query string: the
+   * route sets it for a partner (owner decision 2026-11-28, "Calls only"). A partner's reads are
+   * the calls, and without this the paths export was every banked training row of every sample
+   * kind for up to 180 days: when and on which token each one was banked, the users' filter
+   * matches among them (program audit 2026-11-28, AP-2).
+   */
+  calledOnly?: boolean;
+};
 
 type Rec = Record<string, unknown>;
 
@@ -145,6 +154,7 @@ function outcomeWhere(q: ExportQuery, since: Date, until: Date): Prisma.Candidat
     anchorAt: { gte: since, lt: until },
     ...(q.sampleKind && { sampleKind: { in: q.sampleKind } }),
     ...(q.finalizedOnly && { finalizedAt: { not: null } }),
+    ...(q.calledOnly && { curatedAlerts: { some: {} } }),
   };
 }
 
