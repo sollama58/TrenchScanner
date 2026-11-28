@@ -7,6 +7,7 @@ import {
   LiveCurves,
   MAX_FOLLOWED,
   READ_EVERY_MS,
+  CARRY_SILENCE_MS,
   VERIFY_EVERY_MS,
   VERIFY_GRACE_MS,
 } from "./liveCurve.js";
@@ -70,6 +71,8 @@ function setup(
   const states = [...(opts.states ?? [state(5e10)])];
   const watched = new Set<string>();
   let covered: number | null = null;
+  /** How long the socket has said nothing (HeliusAccountStream.silentForMs); speaking by default. */
+  let silent = 0;
   /** The slot feed's time for each slot (HeliusAccountStream.slotTime). */
   const slotTimes = new Map<number, number>();
   let onAccount: ((key: string, data: string, slot: number | null) => void) | null = null;
@@ -89,6 +92,7 @@ function setup(
             unwatch: (key: string) => void watched.delete(key),
             coveredSince: (key: string) => (watched.has(key) ? covered : null),
             resubscribe: (key: string) => void resubscribed.push(key),
+            silentForMs: () => silent,
             slotTime: (slot: number | null) => (slot === null ? null : (slotTimes.get(slot) ?? null)),
           };
         }
@@ -125,6 +129,7 @@ function setup(
     tick: (ms: number) => (now += ms),
     at: () => now,
     cover: (since: number | null) => (covered = since),
+    silentFor: (ms: number) => (silent = ms),
     poolReads,
     resubscribed,
     health,
@@ -576,6 +581,17 @@ describe("SolPrice", () => {
   });
 });
 
+/**
+ * Lets `ms` pass with the chart still asking (a curve nobody asks about for 30 s is let go), and
+ * no round run: nothing is read, checked or carried meanwhile.
+ */
+async function passWhileAsked(t: ReturnType<typeof setup>, ms: number): Promise<void> {
+  for (let left = ms; left > 0; left -= 10_000) {
+    t.tick(Math.min(left, 10_000));
+    await t.curves.read(MINT, 0);
+  }
+}
+
 describe("LiveCurves stream checks (audit 2026-10-19, item 3)", () => {
   it("keeps readAt at the last real read: an ask doesn't move it, a matching check does", async () => {
     const t = setup({ stream: true });
@@ -585,7 +601,7 @@ describe("LiveCurves stream checks (audit 2026-10-19, item 3)", () => {
     t.tick(5_000);
     expect((await t.curves.read(MINT, 0)).readAt).toBe(seededAt);
     // Quiet coin, healthy stream: the check every VERIFY_EVERY_MS matches and moves readAt.
-    t.tick(VERIFY_EVERY_MS - 5_000);
+    await passWhileAsked(t, VERIFY_EVERY_MS - 5_000);
     await t.curves.round();
     expect(t.reads).toHaveLength(2);
     expect(await t.curves.read(MINT, 0)).toMatchObject({ source: "stream", readAt: t.at() });
@@ -597,13 +613,51 @@ describe("LiveCurves stream checks (audit 2026-10-19, item 3)", () => {
     t.curves.stop();
   });
 
+  it("carries a quiet coin's price between checks while the socket speaks, without a read", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    await t.curves.read(MINT, 0);
+    // Every second of a quiet minute: known current as of each round, and no RPC read made.
+    for (let s = 0; s < 30; s++) {
+      t.tick(1_000);
+      await t.curves.round();
+      expect(await t.curves.read(MINT, 0)).toMatchObject({ source: "stream", readAt: t.at() });
+    }
+    expect(t.reads).toHaveLength(1);
+    expect((await t.curves.read(MINT, 0)).ticks).toHaveLength(1);
+    // The cards' Now stays on the curve through it.
+    expect((await t.curves.quotes([MINT], 0)).get(MINT)?.at).toBe(t.at());
+    expect(t.health.snapshot().stream).toMatchObject({ verified: 0, mismatches: 0 });
+    t.curves.stop();
+  });
+
+  it("does not carry a price while the socket has gone quiet", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    await t.curves.read(MINT, 0);
+    t.tick(1_000);
+    await t.curves.round();
+    const spokeAt = t.at();
+    // Nothing from Helius for longer than CARRY_SILENCE_MS: the price is not vouched for.
+    t.silentFor(CARRY_SILENCE_MS + 1);
+    t.tick(4_000);
+    await t.curves.round();
+    expect((await t.curves.read(MINT, 0)).readAt).toBe(spokeAt);
+    t.silentFor(200);
+    t.tick(1_000);
+    await t.curves.round();
+    expect((await t.curves.read(MINT, 0)).readAt).toBe(t.at());
+    expect(t.reads).toHaveLength(1);
+    t.curves.stop();
+  });
+
   it("drops a cover the stream silently lost, records the read and resubscribes", async () => {
     const t = setup({ stream: true });
     t.cover(t.at());
     await t.curves.read(MINT, 0);
     // A trade the stream never delivered.
     t.next(state(7e10));
-    t.tick(VERIFY_EVERY_MS);
+    await passWhileAsked(t, VERIFY_EVERY_MS);
     const checkedAt = t.at();
     await t.curves.round();
     // Held for the grace: the change may still be on its way.
@@ -633,7 +687,7 @@ describe("LiveCurves stream checks (audit 2026-10-19, item 3)", () => {
     t.cover(t.at());
     await t.curves.read(MINT, 0);
     t.next(state(7e10));
-    t.tick(VERIFY_EVERY_MS);
+    await passWhileAsked(t, VERIFY_EVERY_MS);
     await t.curves.round();
     t.tick(300);
     t.push(curveData(1_000_000_000_000_000n, 70_000_000_000n));
@@ -654,7 +708,7 @@ describe("LiveCurves stream checks (audit 2026-10-19, item 3)", () => {
     t.cover(t.at());
     expect(await t.curves.read(MINT, 0)).toMatchObject({ venue: "pool", source: "stream" });
     t.nextAmounts(1.9e14, 9e10);
-    t.tick(VERIFY_EVERY_MS);
+    await passWhileAsked(t, VERIFY_EVERY_MS);
     await t.curves.round();
     t.tick(VERIFY_GRACE_MS);
     await t.curves.round();
