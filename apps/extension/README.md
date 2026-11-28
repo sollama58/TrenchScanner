@@ -326,3 +326,40 @@ Measured on a synthetic busy Pulse board (90 rows, 40 price ticks every 50 ms, a
   opacity or transform of a layer drawn once, and looks the same; all of them, and the plain halo,
   cost about 0.3% on a still page. They still loop; reduced motion
   still stops them, and calm motion still stops the halo's sweep.
+
+0.9.6 (2026-10-29, chart audit):
+
+- **Bubble map fixes**: a map read that answers after the page moved to another coin no longer
+  delays the new coin's read; the panel's views stop reading maps they no longer draw; the map tab
+  keeps the last coin while the site redraws; only the latest panel poll schedules the next.
+
+0.9.7 (2026-11-21):
+
+- **The pill stays off card data**: it tries tighter margins, a smaller type, then a picture or
+  icon, and is left out rather than covering text or a button.
+- **Terminal's search**: each result is its own row; the whole menu was one row and was tagged
+  unsafe.
+
+0.9.8 (2026-11-25):
+
+- **Each Terminal card is ringed once**, where 0.9.7 ringed it twice.
+- A content script cut off by an update or reload takes down what it drew.
+
+0.9.9 (audit 2026-11-28, EX-21):
+
+- **The quoted 2x rate says what it is**: "Gems · 20% recent 2x" and "20% of its recent alerts
+  2x'd", the site's words, where the badge, tag and notification printed a bare "Gems 20%".
+
+0.9.10 (audit 2026-11-28, EX-22 to EX-25):
+
+- **Disconnecting removes everything the account left in Chrome**: the settings, display choices,
+  snoozed coins and run marks too, as the privacy page says. They used to stay, and the next
+  account to connect inherited them. The account's own copy comes back when it connects again.
+- **Every API call has a 15 s deadline**: a feed read that never answered held every later one.
+- **The once-a-minute alarm exists only while notifications, the icon's count or run alerts are
+  on.**
+- **At most ten page scans a second** on a board that never stops changing (dev build).
+- This file has an entry for every version from here on: `scripts/check-extension-version.sh`
+  fails a change whose version has none.
+
+None of 0.9.6 to 0.9.10 adds a permission, a host or a stored item.

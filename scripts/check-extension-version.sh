@@ -28,6 +28,13 @@ if [[ "$manifest_version" != "$package_version" ]]; then
   exit 1
 fi
 
+# The README's changelog has an entry for the version (audit 2026-11-28, EX-23): 0.9.6 to 0.9.8
+# shipped with none, and the privacy page and store notes fell four versions behind with them.
+if ! grep -qE "^${manifest_version//./\\.} \\(" "$EXT/README.md"; then
+  echo "::error::$EXT/README.md has no changelog entry starting \"$manifest_version (\". Add one."
+  exit 1
+fi
+
 if ! git fetch --quiet --depth=1 origin "$BASE" 2>/dev/null; then
   echo "no $BASE to compare with; versions agree at $manifest_version"
   exit 0

@@ -39,6 +39,13 @@ const MAX_ANSWERS = 5_000;
  * (user ask 2026-10-26: rings were slow to follow a scroll).
  */
 const LOOKUP_SOON_MS = 30;
+/**
+ * The least time between two scans of the page (audit 2026-11-28, EX-24). A scan reads every link
+ * on the page; a board that adds, removes or recycles rows without pause asked for one on every
+ * animation frame, about 60 a second. The first change after a quiet spell is still scanned on the
+ * next frame; changes that keep coming are scanned ten times a second.
+ */
+export const SCAN_FLOOR_MS = 100;
 const LOOKUP_EVERY_MS = 120;
 /**
  * The safety screen's asks go to TrenchScanner (120 a minute per account), so they go out at most
@@ -163,6 +170,8 @@ export class OverlayEngine {
   private mutation: MutationObserver | null = null;
   private intersection: IntersectionObserver | null = null;
   private frame = 0;
+  private scanTimer: number | undefined;
+  private lastScan = 0;
   private batchTimer: number | undefined;
   private lookupForce = false;
   private lastLookup = 0;
@@ -231,6 +240,9 @@ export class OverlayEngine {
     this.batchTimer = undefined;
     this.retryTimer = undefined;
     cancelAnimationFrame(this.frame);
+    this.frame = 0;
+    window.clearTimeout(this.scanTimer);
+    this.scanTimer = undefined;
     for (const [row, state] of this.rows) {
       state.decoration?.remove();
       this.clearSafety(row, state);
@@ -299,11 +311,20 @@ export class OverlayEngine {
     });
   }
 
-  /** One pass per frame however many mutations arrive. */
+  /** One pass however many mutations arrive: on the next frame, and no sooner than the floor. */
   private schedule(): void {
-    if (this.frame) return;
+    if (this.frame || this.scanTimer !== undefined) return;
+    const wait = this.lastScan + SCAN_FLOOR_MS - Date.now();
+    if (wait > 0) {
+      this.scanTimer = window.setTimeout(() => {
+        this.scanTimer = undefined;
+        this.schedule();
+      }, wait);
+      return;
+    }
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
+      this.lastScan = Date.now();
       this.scan();
     });
   }

@@ -19,6 +19,13 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Every call gives up after this unless it brings its own deadline (audit 2026-11-28, EX-25): a
+ * feed or account read that never answered left the service worker's one shared feed read pending
+ * until Chrome killed the worker, and every later ask waited on it.
+ */
+export const CALL_TIMEOUT_MS = 15_000;
+
 /** The site map's held reads (its holder wait, its live trades) answer within 30 s; past this, given up. */
 const SITE_TIMEOUT_MS = 45_000;
 
@@ -30,7 +37,7 @@ async function call<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const res = await fetch(`${API_BASE}/ext/v1${path}`, {
-    signal,
+    signal: signal ?? AbortSignal.timeout(CALL_TIMEOUT_MS),
     method,
     headers: {
       authorization: `Bearer ${key}`,

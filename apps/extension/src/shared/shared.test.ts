@@ -1,6 +1,7 @@
 import { namedRate, quotedRateLong, quotedRateShort } from "./rate";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { alertNotice, panelAlerts } from "./alerts";
+import { api, CALL_TIMEOUT_MS } from "./api";
 import { base58Length, isMintAddress } from "./mint";
 import { DEFAULT_SETTINGS } from "./settings";
 import { token } from "./testToken";
@@ -200,5 +201,24 @@ describe("the quoted 2x rate's words", () => {
 
   it("prints the name alone when the call carries no rate", () => {
     expect(namedRate("Gems", null)).toBe("Gems");
+  });
+});
+
+describe("API calls (audit 2026-11-28, EX-25)", () => {
+  it("gives a call that brings no deadline of its own a 15 s one", async () => {
+    const signals: unknown[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      signals.push(init?.signal);
+      return new Response(JSON.stringify({ tokens: [] }), { status: 200 });
+    });
+    try {
+      await api.feed("tsx_key");
+      await api.me("tsx_key");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(CALL_TIMEOUT_MS).toBe(15_000);
+    expect(signals).toHaveLength(2);
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
   });
 });
