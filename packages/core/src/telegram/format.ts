@@ -178,12 +178,23 @@ export const ALERT_IMAGE_PX = 640;
 export function alertImage(token: Pick<AlertToken, "imageUrl">): string | null {
   const url = token.imageUrl?.trim() ?? "";
   if (!/^https:\/\/\S+$/.test(url)) return null;
+  return alertGatewayImage(token) ?? url;
+}
+
+/**
+ * The token's logo on Pump.fun's Pinata gateway, resized, or nothing when it is not an IPFS file.
+ * The one form of the logo that is fetched from a host we chose: a device that loads it (a Web
+ * Push icon) tells the launcher's own server nothing.
+ */
+export function alertGatewayImage(token: Pick<AlertToken, "imageUrl">): string | null {
+  const url = token.imageUrl?.trim() ?? "";
+  if (!/^https:\/\/\S+$/.test(url)) return null;
   const cid = ipfsCid(url);
   // Also re-encoded as JPEG there: Telegram takes JPEG and PNG as a photo but balks at the GIFs,
   // WebPs and SVGs launchers upload, and a JPEG is the smallest of the lot.
   return cid
     ? `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${ALERT_IMAGE_PX}&img-height=${ALERT_IMAGE_PX}&img-fit=scale-down&img-format=jpeg`
-    : url;
+    : null;
 }
 
 function ipfsCid(url: string): string | undefined {

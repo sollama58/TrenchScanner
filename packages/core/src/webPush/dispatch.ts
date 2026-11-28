@@ -22,7 +22,7 @@ import {
   REALERT_AFTER_MS,
   type SentAlert,
 } from "../telegram/dispatch.js";
-import type { AlertCard } from "../telegram/format.js";
+import { alertGatewayImage, type AlertCard } from "../telegram/format.js";
 
 /**
  * The scanner worker's web-push-dispatch job: every few seconds, push each subscribed browser or
@@ -200,10 +200,14 @@ export function pushPayloads(cards: AlertCard[], url: string): PushPayload[] {
     ];
   }
   return cards.map((card) => {
-    const image = card.token.imageUrl;
+    // The phone fetches the icon when the notification shows. The launcher's own URL was handed
+    // to it as stored: a full-size original from a host the launcher chose, which also told that
+    // host a subscriber's address and the moment they were alerted (program audit 2026-11-28,
+    // TG-8). Only the resized copy on Pump.fun's gateway now, and no icon when there is none.
+    const icon = alertGatewayImage(card.token);
     return {
       ...describeCard(card),
-      ...(image && /^https:\/\/\S+$/.test(image) ? { icon: image } : {}),
+      ...(icon ? { icon } : {}),
       tag: `ts-alert-${card.token.mintAddress}`,
       url,
     };
