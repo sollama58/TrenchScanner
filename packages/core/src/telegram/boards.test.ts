@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setWinTargetRule } from "../curation/winTarget.js";
 import {
   ACTIVE_ALERTS_MAX,
   boardWindow,
@@ -116,6 +117,21 @@ describe("the trenchboard", () => {
     expect(html).toContain("💵 Avg return  <b>+34%</b>  over 15 settled");
     expect(html).toContain("⏳ 5 still in their 15-minute window");
     expect(html).toContain("🚀 Best  <b>$MOON</b>  +840%");
+  });
+
+  it("names the win rule its verdicts follow", () => {
+    expect(formatTrenchboard(stats)).toContain(
+      "<i>A win is a clean 2x within 15 minutes; the return is the exit plan's.</i>",
+    );
+    setWinTargetRule("fill30");
+    try {
+      const html = formatTrenchboard(stats);
+      expect(html).toContain("⏳ 5 still in their 30-minute window");
+      expect(html).toContain("A win is 2x on a real fill within 30 minutes, before a 30% stop");
+      expect(html).not.toContain("15 minutes");
+    } finally {
+      setWinTargetRule("classic");
+    }
   });
 
   it("says when its numbers were read, since the message stays in the chat", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activePeakPct, alertFor, nowMcapFor } from "./telegramBoards.js";
+import { activePeakPct, alertFor, boardReturn, nowMcapFor, winAt } from "./telegramBoards.js";
 
 describe("alertFor", () => {
   const sentAt = new Date("2026-10-10T22:00:00Z");
@@ -50,5 +50,24 @@ describe("activePeakPct", () => {
     expect(activePeakPct(20, 10_000, 8_000)).toBe(20);
     expect(activePeakPct(20, 10_000, null)).toBe(20);
     expect(activePeakPct(20, null, 50_000)).toBe(20);
+  });
+});
+
+describe("a board row on the fill target", () => {
+  const fill = { target: { returnPct: -32.1 } };
+  const row = { hit2xAt: new Date("2026-11-28T00:05:00Z"), fillHit2xAt: new Date("2026-11-28T00:20:00Z") };
+
+  it("shows the exit plan's return and the classic 2x time while the verdict is the classic one", () => {
+    expect(boardReturn({}, 40)).toBe(40);
+    expect(winAt({}, row)).toEqual(row.hit2xAt);
+    expect(winAt({}, null)).toBeNull();
+  });
+
+  it("shows the fill trade's return after costs and its own 2x time when the verdict is the fill's", () => {
+    expect(boardReturn(fill, 40)).toBe(-32.1);
+    // Not settled yet: no return, rather than the exit plan's beside a fill verdict.
+    expect(boardReturn({ target: { returnPct: null } }, 40)).toBeNull();
+    expect(winAt(fill, row)).toEqual(row.fillHit2xAt);
+    expect(winAt(fill, { hit2xAt: row.hit2xAt })).toBeNull();
   });
 });

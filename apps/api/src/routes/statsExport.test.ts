@@ -596,9 +596,14 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
     // The Narrative seat's note rides along, so it can be graded against the card's outcome.
     expect(json).toMatchObject({ narrativeVerdict: "warns", narrativeNotedAt: at(1).toISOString() });
     expect(lines[0]).toMatch(
-      /,narrativeVerdict,narrativeNotedAt,peakMcapUsd,peakMcapAt,peakCheckedAt,coinAthMcapUsd,coinAthAt$/,
+      /,narrativeVerdict,narrativeNotedAt,peakMcapUsd,peakMcapAt,peakCheckedAt,coinAthMcapUsd,coinAthAt,fillPriceUsd,fillSource,fillWin,fillReturnPct$/,
     );
-    expect(lines[1]).toMatch(new RegExp(`,warns,${at(1).toISOString()},,,,,$`));
+    // The fill target's verdict rides beside the classic one, after every column that was there.
+    expect(json).toMatchObject({ fillWin: null, fillReturnPct: null });
+    expect(csvColumns("outcomes")).toEqual(
+      expect.arrayContaining(["fillPriceUsd", "fillWin", "fillReturnPct"]),
+    );
+    expect(lines[1]).toMatch(new RegExp(`,warns,${at(1).toISOString()},,,,,,,,,$`));
     // The call's ATH, and the coin's since its first alert, ride along for the runner record.
     expect(json).toMatchObject({
       peakMcapUsd: null,

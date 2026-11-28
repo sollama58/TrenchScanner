@@ -95,8 +95,16 @@ interface GradedAlert {
   hit2xAt: Date | null;
 }
 
+/**
+ * The return a board row shows: the fill target's trade after costs when the verdict is its
+ * (outcome.target; null until that trade is out), else the exit plan's simulated return.
+ */
+export function boardReturn(outcome: { target?: { returnPct: number | null } }, simReturnPct: number | null) {
+  return outcome.target ? outcome.target.returnPct : simReturnPct;
+}
+
 /** When the 2x the verdict counts landed: the fill target's when the verdict is its (outcome.target). */
-function winAt(
+export function winAt(
   outcome: { target?: unknown },
   row: { hit2xAt: Date | null; fillHit2xAt?: Date | null } | null,
 ): Date | null {
@@ -212,7 +220,7 @@ async function gradedAlerts(chatRowId: string, since: Date, only?: { tokenId: st
         outcome,
         alertMcapUsd: call.anchorMcapUsd > 0 ? call.anchorMcapUsd : null,
         peakPct: callPeakPct(outcome.peak24hReturnPct, call),
-        returnPct: call.simReturnPct ?? call.candidateOutcome?.simReturnPct ?? null,
+        returnPct: boardReturn(outcome, call.simReturnPct ?? call.candidateOutcome?.simReturnPct ?? null),
         tracking: call.candidateOutcome !== null && call.candidateOutcome.finalized24hAt === null,
         calledAt: call.createdAt,
         hit2xAt: winAt(outcome, call.candidateOutcome),
@@ -233,7 +241,7 @@ async function gradedAlerts(chatRowId: string, since: Date, only?: { tokenId: st
             ? (match.alertMcapUsd ?? match.snapshot.marketCapUsd)
             : null,
         peakPct: matchPeakPct(match, outcome.peak24hReturnPct),
-        returnPct: row?.simReturnPct ?? null,
+        returnPct: boardReturn(outcome, row?.simReturnPct ?? null),
         tracking: row !== null && row.finalized24hAt === null,
         // Priced from a fresh quote: its readings from the first minute lag behind it, as a call's.
         calledAt: match.alertMcapUsd !== null ? match.matchedAt : null,
