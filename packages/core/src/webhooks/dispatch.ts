@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
+import type { ClientRequest, IncomingMessage, RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 import type { Prisma } from "@prisma/client";
@@ -49,8 +50,15 @@ export const WEBHOOK_MAX_FAILURES = 50;
 export const WEBHOOK_TOLERANCE_S = 300;
 /** Delivery rows are kept this long, for GET /stats/webhook/deliveries. */
 export const WEBHOOK_DELIVERY_RETENTION_DAYS = 14;
-/** How long one POST may take, connect to last byte. */
+/**
+ * How long one POST may take, connect to answer: a hard deadline on the whole exchange
+ * (webhookExchange). Until the program audit of 2026-11-28 (AP-1) the only bound was the socket's
+ * idle timeout, which a receiver trickling a byte every few seconds never trips: its send never
+ * settled, the pass never ended, and the job's deadline then restarted the scanner every 10 min.
+ */
 const SEND_TIMEOUT_MS = 10_000;
+/** How much of a refusal's body is read, for the error message. The rest is not consumed. */
+const ANSWER_MAX_CHARS = 300;
 /** Sends out at once, and per pass. */
 const MAX_IN_FLIGHT = 8;
 const MAX_DUE_PER_PASS = 200;
@@ -127,41 +135,86 @@ const publicLookup: LookupFunction = (hostname, options, callback) => {
   });
 };
 
+/** node:https's `request`, or anything shaped like it (node:http's, in tests). */
+export type WebhookRequestFn = (
+  url: URL,
+  options: RequestOptions,
+  onResponse: (res: IncomingMessage) => void,
+) => ClientRequest;
+
+/**
+ * One POST and its answer, settled within `deadlineMs` whatever the receiver does. A 2xx status
+ * is the whole answer: its body is not read. A refusal's body is read up to ANSWER_MAX_CHARS for
+ * the error message, then the response is dropped, so a receiver cannot make the worker drain an
+ * endless or huge body either.
+ */
+export function webhookExchange(
+  request: WebhookRequestFn,
+  url: URL,
+  headers: Record<string, string>,
+  body: string,
+  deadlineMs: number = SEND_TIMEOUT_MS,
+): Promise<WebhookSendResult> {
+  return new Promise<WebhookSendResult>((resolve) => {
+    let settled = false;
+    let onDeadline: () => void = () => finish({ status: null, error: `no answer in ${deadlineMs}ms` });
+    const finish = (result: WebhookSendResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+      req.destroy();
+    };
+    const timer = setTimeout(() => onDeadline(), deadlineMs);
+    const req = request(
+      url,
+      {
+        method: "POST",
+        headers: { ...headers, "content-length": Buffer.byteLength(body).toString() },
+        timeout: deadlineMs,
+      },
+      (res) => {
+        const status = res.statusCode ?? null;
+        if (status !== null && status >= 200 && status < 300) {
+          finish({ status, error: null });
+          res.destroy();
+          return;
+        }
+        let text = "";
+        const refused = () =>
+          finish({ status, error: `HTTP ${status}${text ? `: ${text.slice(0, 200)}` : ""}` });
+        // Past the deadline the status still stands; only the rest of its body is given up.
+        onDeadline = refused;
+        res.setEncoding("utf8");
+        res.on("data", (chunk: string) => {
+          text += chunk.slice(0, ANSWER_MAX_CHARS - text.length);
+          if (text.length >= ANSWER_MAX_CHARS) {
+            refused();
+            res.destroy();
+          }
+        });
+        res.on("end", refused);
+        res.on("close", refused);
+        res.on("error", (err) => finish({ status, error: String(err).slice(0, 200) }));
+      },
+    );
+    req.on("timeout", () => onDeadline());
+    req.on("error", (err) => finish({ status: null, error: String(err).slice(0, 200) }));
+    req.end(body);
+  });
+}
+
 /** The real sender: one POST, no redirects, the answer's body read only for the error message. */
 export const httpsWebhookSender: WebhookSender = async (raw, headers, body) => {
   if (webhookUrlProblem(raw) !== null || !(await isFetchableUrl(new URL(raw)))) {
     return { status: null, error: "url refused (not https on 443 to a public address)" };
   }
-  const url = new URL(raw);
-  return new Promise<WebhookSendResult>((resolve) => {
-    const req = httpsRequest(
-      url,
-      {
-        method: "POST",
-        headers: { ...headers, "content-length": Buffer.byteLength(body).toString() },
-        lookup: publicLookup,
-        timeout: SEND_TIMEOUT_MS,
-      },
-      (res) => {
-        let text = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk: string) => {
-          if (text.length < 300) text += chunk;
-        });
-        res.on("end", () => {
-          const status = res.statusCode ?? null;
-          const ok = status !== null && status >= 200 && status < 300;
-          resolve({ status, error: ok ? null : `HTTP ${status}${text ? `: ${text.slice(0, 200)}` : ""}` });
-        });
-        res.on("error", (err) =>
-          resolve({ status: res.statusCode ?? null, error: String(err).slice(0, 200) }),
-        );
-      },
-    );
-    req.on("timeout", () => req.destroy(new Error(`no answer in ${SEND_TIMEOUT_MS}ms`)));
-    req.on("error", (err) => resolve({ status: null, error: String(err).slice(0, 200) }));
-    req.end(body);
-  });
+  return webhookExchange(
+    (url, options, onResponse) => httpsRequest(url, { ...options, lookup: publicLookup }, onResponse),
+    new URL(raw),
+    headers,
+    body,
+  );
 };
 
 /** The body every delivery POSTs: the event, the delivery's id and when, and the event's data. */
