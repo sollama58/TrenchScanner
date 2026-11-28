@@ -53,6 +53,30 @@ describe.skipIf(!dbAvailable)("trenchScannerEnv", () => {
     expect(JSON.stringify(sys)).not.toContain("cg-one");
   });
 
+  it("adds a row for a key a service has set outside the manifest (DB-3)", async () => {
+    await cleanup();
+    await publishEnvReport("scanner", {});
+    await publishEnvReport("trainer", {
+      CURATOR_CHAMPION_RULE: "lower-bound",
+      TRADING_JUPITER_API_KEY: "jup-secret-value",
+    });
+    const sys = await trenchScannerEnv({ CURATOR_CHAMPION_RULE: "score" });
+    const row = sys.rows.find((r) => r.key === "CURATOR_CHAMPION_RULE")!;
+    expect(row.group).toBe("Set here, not in the manifest");
+    expect(row.cells.trainer).toEqual({ need: null, state: "set", hint: "lower-bound" });
+    expect(row.cells.api).toEqual({ need: null, state: "set", hint: "score" });
+    // The scanner reported, without the key: it does not have it.
+    expect(row.cells.scanner).toEqual({ need: null, state: "missing", hint: null });
+    // The api and the trainer run different rules: said.
+    expect(row.differs).toBe(true);
+    expect(sys.rows.find((r) => r.key === "TRADING_JUPITER_API_KEY")!.cells.trainer).toEqual({
+      need: null,
+      state: "set",
+      hint: null,
+    });
+    expect(JSON.stringify(sys)).not.toContain("jup-secret");
+  });
+
   it("adds a column for any other process that reported", async () => {
     await publishEnvReport("test-env-extra", {});
     const sys = await trenchScannerEnv({});

@@ -1724,6 +1724,9 @@ export function tokenSageEnabled(
 
 export type Env = z.infer<typeof envSchema>;
 
+/** Every key the schema reads: what the env report checks a process's environment against. */
+export const ENV_SCHEMA_KEYS: readonly string[] = Object.keys(envSchema.shape);
+
 const logger = createLogger("env");
 
 let cached: Env | undefined;

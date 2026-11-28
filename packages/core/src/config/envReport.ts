@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { prisma } from "../db.js";
+import { ENV_SCHEMA_KEYS } from "./env.js";
 
 /**
  * Admin > Environment (user ask 2026-10-23): which of the env vars each service is meant to have
@@ -364,10 +365,38 @@ export function describeEnvVar(kind: EnvKind, raw: string | undefined): EnvVarRe
   return { state: "set", hint: `${value.length} chars`, print };
 }
 
-/** Every manifest variable as this process sees it (all of them, so a stray one shows too). */
+/** The group of the rows for keys a process has set that ENV_MANIFEST does not list. */
+export const UNLISTED_ENV_GROUP = "Set here, not in the manifest";
+
+const MANIFEST_KEYS = new Set(ENV_MANIFEST.map((s) => s.key));
+
+/**
+ * What a key outside the manifest may show. Nobody has classed it, so only a name with nothing
+ * credential- or account-like in it carries its value; any other is set or not.
+ */
+export function unlistedEnvKind(key: string): EnvKind {
+  return /KEY|SECRET|TOKEN|PASSWORD|PRIVATE|URL|DSN|WEBHOOK|WALLET|ADDRESS|WITHDRAW|BUCKET|ENDPOINT|CHAT|MNEMONIC|SEED|COOKIE|AUTH|CREDENTIAL/.test(
+    key,
+  )
+    ? "identifier"
+    : "setting";
+}
+
+/**
+ * Every manifest variable as this process sees it (all of them, so a stray one shows too), and
+ * every other key the schema reads that is set here. The manifest follows render.yaml, 98 of the
+ * schema's 316 keys on 2026-11-28, so a value set by hand in the dashboard was in no report: the
+ * owner's CURATOR_CHAMPION_RULE decision of 11-11 could not be confirmed on the trainer, and two
+ * values orphaned on the scanner on 11-21 went unseen (program audit 2026-11-28, DB-3). Only
+ * schema keys: the platform's own variables (PATH, RENDER_*) are not the product's settings.
+ */
 export function envReport(env: NodeJS.ProcessEnv = process.env): Record<string, EnvVarReport> {
   const out: Record<string, EnvVarReport> = {};
   for (const spec of ENV_MANIFEST) out[spec.key] = describeEnvVar(spec.kind, env[spec.key]);
+  for (const key of ENV_SCHEMA_KEYS) {
+    if (MANIFEST_KEYS.has(key) || env[key] === undefined) continue;
+    out[key] = describeEnvVar(unlistedEnvKind(key), env[key]);
+  }
   return out;
 }
 
