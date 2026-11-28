@@ -850,7 +850,7 @@ function toastSection(): HTMLElement {
           ),
         ]
       : []),
-    number("Model odds to 2x at least (%)", t().minOdds, 0, 100, (n) => set({ minOdds: n })),
+    number("Model's quoted 2x rate at least (%)", t().minOdds, 0, 100, (n) => set({ minOdds: n })),
     choice(
       "Where",
       t().position,

@@ -1,3 +1,4 @@
+import { namedRate } from "./rate";
 import { FLAG_IDS, FLAG_LABELS } from "./settings";
 import type { FlagId, OverlaySettings, OverlayToken } from "./types";
 
@@ -134,8 +135,7 @@ export function verdictFor(token: OverlayToken, settings: OverlaySettings): RowV
   else if (settings.rings.riskRing && risky) ring = "risk";
 
   if (model) {
-    const odds = model.calibratedPct === null ? "" : ` ${Math.round(model.calibratedPct)}%`;
-    badge = `${(model.name ?? model.model).slice(0, 14)}${odds}`;
+    badge = namedRate((model.name ?? model.model).slice(0, 14), model.calibratedPct);
   } else if (filter) {
     badge = filter.filterName.slice(0, 18);
   } else if (ring === "risk") {

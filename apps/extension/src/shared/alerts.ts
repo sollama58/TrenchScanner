@@ -1,3 +1,4 @@
+import { namedRate } from "./rate";
 import type { PanelPrefs } from "./tooltip";
 import type { OverlaySettings, OverlayToken } from "./types";
 import { verdictFor, type RowVerdict } from "./verdict";
@@ -23,9 +24,7 @@ export function alertNotice(token: OverlayToken): { title: string; message: stri
   const coin = token.symbol ?? `${token.mint.slice(0, 4)}…${token.mint.slice(-4)}`;
   const call = token.modelCalls[0];
   const match = token.filterMatches[0];
-  const by = call
-    ? `${call.name ?? call.model}${call.calibratedPct === null ? "" : ` ${Math.round(call.calibratedPct)}%`}`
-    : (match?.filterName ?? "Alert");
+  const by = call ? namedRate(call.name ?? call.model, call.calibratedPct) : (match?.filterName ?? "Alert");
   const mcap = token.liveMcapUsd ?? token.stats?.marketCapUsd ?? null;
   const unsafe = token.safety?.passed === false ? " · fails the safety screen" : "";
   return {

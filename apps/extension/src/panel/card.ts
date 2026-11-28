@@ -1,3 +1,4 @@
+import { namedRate } from "../shared/rate";
 import { isMintAddress } from "../shared/mint";
 import type { OverlaySafety, OverlaySettings, OverlayToken, Site } from "../shared/types";
 import { devReading, firstAlert, type RowVerdict } from "../shared/verdict";
@@ -186,8 +187,7 @@ export function tokenCard(
 
   const tags = el("div", "tags");
   for (const call of token.modelCalls) {
-    const odds = call.calibratedPct === null ? "" : ` ${Math.round(call.calibratedPct)}%`;
-    tags.append(el("span", "tag tm", `${call.name ?? call.model}${odds}`));
+    tags.append(el("span", "tag tm", namedRate(call.name ?? call.model, call.calibratedPct)));
   }
   for (const match of token.filterMatches) tags.append(el("span", "tag tf", match.filterName));
   if (token.ai) {

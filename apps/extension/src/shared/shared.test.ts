@@ -1,3 +1,4 @@
+import { namedRate, quotedRateLong, quotedRateShort } from "./rate";
 import { describe, expect, it } from "vitest";
 import { alertNotice, panelAlerts } from "./alerts";
 import { base58Length, isMintAddress } from "./mint";
@@ -36,7 +37,7 @@ describe("row verdicts", () => {
   it("rings model, filter and both, with the model's odds on the badge", () => {
     expect(verdictFor(token({ modelCalls: [call] }), DEFAULT_SETTINGS)).toMatchObject({
       ring: "model",
-      badge: "Runner A 74%",
+      badge: "Runner A · 74% like it 2x",
     });
     expect(verdictFor(token({ filterMatches: [match] }), DEFAULT_SETTINGS)).toMatchObject({
       ring: "filter",
@@ -105,7 +106,7 @@ describe("the alerting call", () => {
     };
     const t = token({ modelCalls: [later, first] });
     const v = verdictFor(t, DEFAULT_SETTINGS);
-    expect(v.badge).toBe("First model 40%");
+    expect(v.badge).toBe("First model · 40% like it 2x");
     expect(alertCall(t)).toBe(first);
     expect(firstAlert(t)?.mcapUsd).toBe(6_000);
   });
@@ -177,5 +178,27 @@ describe("five-minute trends and the dev's record", () => {
       level: "hi",
       family: "Funder paid for 5 creators: 19 launches, 1 won",
     });
+  });
+});
+
+/**
+ * Program audit 2026-11-28, EX-21: the badge said "Gems 20%" and the tooltip "20% to 2x", which
+ * reads as this coin's chance. Under 35% the number is the model's rate over all its recent
+ * alerts, and the words have to say so (the site's rates.ts calibratedRateLabel).
+ */
+describe("the quoted 2x rate's words", () => {
+  it("says a rate under the band line is the model's recent record", () => {
+    expect(quotedRateShort(20.4)).toBe("20% recent 2x");
+    expect(quotedRateLong(20.4)).toBe("20% of its recent alerts 2x'd");
+    expect(namedRate("Gems", 20.4)).toBe("Gems · 20% recent 2x");
+  });
+
+  it("says a rate from the band line up is alerts ranked like this one", () => {
+    expect(quotedRateShort(35)).toBe("35% like it 2x");
+    expect(quotedRateLong(41.2)).toBe("41% of alerts like it 2x'd");
+  });
+
+  it("prints the name alone when the call carries no rate", () => {
+    expect(namedRate("Gems", null)).toBe("Gems");
   });
 });
