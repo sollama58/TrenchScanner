@@ -502,6 +502,46 @@ export function findCreditProblems(out: { since: Date; until: Date } | null): Pr
   ];
 }
 
+/** Helius's requests and failed requests over one stretch of ApiUsage, every process together. */
+export interface ProviderErrorWindow {
+  requests: number;
+  errors: number;
+}
+
+/** Each half of the last hour is judged on its own: both over the line is "two checks running". */
+export const HELIUS_ERROR_WINDOW_MS = 30 * 60_000;
+/** Fewer requests than this in a half hour is too few to call a rate (the scanner alone makes thousands). */
+export const HELIUS_ERROR_MIN_REQUESTS = 500;
+/** The failed share that notifies. The usual day is under 0.1% (40 in 200,267 on 2026-11-27). */
+export const HELIUS_ERROR_SHARE = 0.05;
+
+/**
+ * Helius failing a share of its calls (program audit 2026-11-28, FD-7). Slow answers were watched
+ * (the three latency medians) and credits running out were; a Helius answering fast but refusing 5
+ * to 10% of calls was on no rule. A batch retries once, so few readings are lost outright, but a
+ * failed wallet read holds a curated decision for a cycle, and nothing said decisions were waiting
+ * on failed reads. `windows` are the last two half hours, the older first; both must be over the
+ * line, so one bad minute says nothing. Notify-only: a restart does not mend Helius.
+ */
+export function findHeliusErrorProblems(windows: readonly ProviderErrorWindow[]): Problem[] {
+  if (windows.length < 2) return [];
+  const over = (w: ProviderErrorWindow) =>
+    w.requests >= HELIUS_ERROR_MIN_REQUESTS && w.errors / w.requests >= HELIUS_ERROR_SHARE;
+  if (!windows.every(over)) return [];
+  const last = windows[windows.length - 1]!;
+  return [
+    {
+      key: "helius-errors",
+      text:
+        `Helius failed ${Math.round((last.errors / last.requests) * 100)}% of requests in the last 30 minutes ` +
+        `(${last.errors.toLocaleString("en-US")} of ${last.requests.toLocaleString("en-US")}) and was over ` +
+        `${Math.round(HELIUS_ERROR_SHARE * 100)}% in the 30 before - wallet and holder reads are failing, so ` +
+        "decisions wait on them; look at Helius's status",
+      side: true,
+    },
+  ];
+}
+
 /**
  * How long after a Helius stand-down a quiet flow is still put down to it, at the least: a flow is
  * judged over its own window (FLOW_WINDOWS_MINUTES), so one whose window reaches back into the
@@ -1032,6 +1072,21 @@ async function databaseBytes(): Promise<number | null> {
     logger.warn("database size not read", { error: String(err) });
     return null;
   }
+}
+
+/** Helius's requests and errors in the last two half hours, the older first (findHeliusErrorProblems). */
+async function readHeliusErrorWindows(now: number): Promise<ProviderErrorWindow[]> {
+  const mid = new Date(now - HELIUS_ERROR_WINDOW_MS);
+  const rows = await prisma.$queryRaw<{ recent: boolean; requests: bigint | null; errors: bigint | null }[]>`
+    SELECT "bucket" >= ${mid} AS recent, SUM("requests") AS requests, SUM("errors") AS errors
+    FROM "ApiUsage"
+    WHERE "provider" = 'helius' AND "bucket" >= ${new Date(now - 2 * HELIUS_ERROR_WINDOW_MS)} AND "bucket" < ${new Date(now)}
+    GROUP BY 1`;
+  const of = (recent: boolean) => {
+    const row = rows.find((r) => r.recent === recent);
+    return { requests: Number(row?.requests ?? 0), errors: Number(row?.errors ?? 0) };
+  };
+  return [of(false), of(true)];
 }
 
 async function countFlows(now: number): Promise<FlowCheck[]> {
@@ -1738,6 +1793,7 @@ async function watchOnce(
     disabledChats,
     held,
     fdsa,
+    heliusErrors,
   ] = await Promise.all([
     countFlows(now),
     readJobs(WATCHED_JOBS),
@@ -1753,6 +1809,7 @@ async function watchOnce(
     countDisabledChats(),
     heldChats(now),
     readFdsaCheck(now),
+    readHeliusErrorWindows(now),
   ]);
   const agedOut = findAgedOutProblems(before.agedOut, agedOutSinceBoot, now);
   const scanLatency = findScanLatencyProblems(before.scanLatency, scanCycle, before.keys);
@@ -1788,6 +1845,8 @@ async function watchOnce(
     ...findTrainerProblems(trainerJobs, now),
     ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
     ...findCreditProblems(creditsOut),
+    // With credits out every billed call is refused, and the notice above already says why.
+    ...(creditsOut ? [] : findHeliusErrorProblems(heliusErrors)),
     ...findCanaryProblems(canary, now, env.TRADE_CANARY_INTERVAL_MINUTES),
     ...findTradeOutcomeProblems(trades),
     ...agedOut.problems,
