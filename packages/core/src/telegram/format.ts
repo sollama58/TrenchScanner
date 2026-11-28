@@ -10,6 +10,26 @@ export function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+/** Zero width and invisible: text either side of it is no longer one word to a linkifier. */
+const WORD_JOINER = String.fromCharCode(0x2060);
+
+/**
+ * A launcher's text (a coin's name or symbol) made safe to show as plain words. Escaping stops it
+ * formatting the message, but Telegram's clients still turn a bare URL, "t.me/...", an @handle, a
+ * #tag or a /command into a tappable link whatever the parse mode, and a newline starts a line
+ * that reads as ours. A coin named "claim-airdrop.xyz" would put that link under the bot's name
+ * in every alert on it (program audit 2026-11-28, TG-2). So: whitespace and control characters
+ * collapse to one space, and a word joiner goes after each character such a link hinges on.
+ * A slash straight after "<" is left alone: that is a tag's, and escapeHtml deals with it.
+ * Untrusted text: applied before escapeHtml, wherever a name or symbol is shown.
+ */
+export function launcherText(text: string): string {
+  return text
+    .replace(/[\s\p{Cc}]+/gu, " ")
+    .trim()
+    .replace(/(?<!<)[.@/#:](?=[\p{L}\p{N}_])/gu, (hinge) => hinge + WORD_JOINER);
+}
+
 export interface AlertToken {
   mintAddress: string;
   symbol: string | null;
@@ -243,8 +263,8 @@ export function ageText(firstSeenAt: Date | null, now: number): string | null {
 }
 
 function tokenLabel(t: AlertToken): string {
-  if (t.symbol) return `$${t.symbol}`;
-  if (t.name) return t.name;
+  if (t.symbol) return `$${launcherText(t.symbol)}`;
+  if (t.name) return launcherText(t.name);
   return `${t.mintAddress.slice(0, 4)}…${t.mintAddress.slice(-4)}`;
 }
 
@@ -486,7 +506,7 @@ export function formatAlert(
   const icon = c.calls.length > 0 ? "🟢" : "🎯";
   const title =
     t.name && t.symbol && !compact
-      ? `${icon} <b>${escapeHtml(tokenLabel(t))}</b>  ·  ${escapeHtml(t.name)}`
+      ? `${icon} <b>${escapeHtml(tokenLabel(t))}</b>  ·  ${escapeHtml(launcherText(t.name))}`
       : `${icon} <b>${escapeHtml(tokenLabel(t))}</b>`;
   const sections: string[] = [
     compact

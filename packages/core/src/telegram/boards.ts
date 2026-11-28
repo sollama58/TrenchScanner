@@ -4,6 +4,7 @@ import {
   DIVIDER,
   alertLinkUrl,
   escapeHtml,
+  launcherText,
   shortUsd,
   usd,
   type AlertLinks,
@@ -154,8 +155,8 @@ export function signedPct(pct: number | null): string {
 }
 
 function label(a: { symbol: string | null; name?: string | null; mintAddress: string }): string {
-  if (a.symbol) return `$${a.symbol}`;
-  if (a.name) return a.name;
+  if (a.symbol) return `$${launcherText(a.symbol)}`;
+  if (a.name) return launcherText(a.name);
   return `${a.mintAddress.slice(0, 4)}…${a.mintAddress.slice(-4)}`;
 }
 
