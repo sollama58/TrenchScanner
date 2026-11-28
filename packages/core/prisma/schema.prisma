@@ -952,6 +952,12 @@ model CuratedAlert {
   outcomeFinalizedAt DateTime?
   /// Copy of CandidateOutcome.simReturnPct: the call's return under the fixed exit plan.
   simReturnPct       Float?
+  /// Copies of CandidateOutcome's fill-target verdict (curation/fillTarget.ts), kept here because
+  /// the training row is pruned and the track record is not.
+  fillPriceUsd       Float?
+  fillSource         String?
+  fillWin            Boolean?
+  fillReturnPct      Float?
   /// The market-cap high since the call, from the snapshots and live readings the app keeps -
   /// the same ATH Match.peakMcapUsd is for a filter alert (worker jobs/curatedPeaks.ts). Only ever
   /// rises; null until the token has traded above anchorMcapUsd since the call.
@@ -1378,6 +1384,17 @@ model CandidateOutcome {
   trailHighPriceUsd         Float?
   trailExitAt               DateTime?
   trailExitPriceUsd         Float?
+  /// The fill target's running aggregates (curation/fillTarget.ts, owner decision 2026-11-28):
+  /// the price a buyer could really have got (the first price 16 s or later after the call, plus
+  /// 1%), where it came from ("tape" or "minute"), when the price first reached 2x that fill or
+  /// first fell 30% below it inside 30 minutes of the call, and the price the trade is out at
+  /// otherwise. Graded beside the labels below; null on rows from before 2026-11-28.
+  fillPriceUsd              Float?
+  fillAt                    DateTime?
+  fillSource                String?
+  fillHit2xAt               DateTime?
+  fillStoppedAt             DateTime?
+  fillExitPriceUsd          Float?
 
   // ---- Labels, written once when the goal window closes ----
   finalizedAt      DateTime?
@@ -1427,6 +1444,12 @@ model CandidateOutcome {
   /// average it in, labelled open, so a winner still riding its trail isn't missing from the
   /// average while the losers are in it (user ask 2026-10-19). Null once simReturnPct is written.
   openReturnPct    Float?
+  /// The fill target's verdict, written with the labels: won (2x the fill inside 30 minutes of
+  /// the call, before a 30% fall from it) and the trade's return after costs in percent
+  /// (computeFillLabels). Null when no price was seen after the fill delay, and on older rows.
+  /// Nothing trains on these: the models still learn hit2xIn1h / labelValue.
+  fillWin          Boolean?
+  fillReturnPct    Float?
   /// Why a stopped row stopped: who sold between the anchor and the stop, from the coin's trade
   /// tape (apps/worker/src/jobs/tradeTapeJob.ts, stopCauseOf in core's wallets/tradeTape.ts) -
   /// the sellers ranked by SOL and each role's share of the selling. Written once the row is
@@ -1797,6 +1820,9 @@ model Match {
   hit10xIn1h         Boolean?
   /// Hit 2x only after first falling through the 50% stop: a loss.
   disqualified       Boolean?
+  /// Copies of the anchor row's fill-target verdict (curation/fillTarget.ts).
+  fillWin            Boolean?
+  fillReturnPct      Float?
   /// The run peak over the anchor's watch (24h for clean winners, the label window otherwise), as a
   /// return on the alert price: copied when the anchor retires, so the filter leaderboard's run-size
   /// part outlives the anchor row. Null until then, and on matches from before 2026-10-05.
