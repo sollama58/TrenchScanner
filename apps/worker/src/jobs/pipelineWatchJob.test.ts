@@ -22,6 +22,9 @@ import {
   findCreditProblems,
   findHeliusErrorProblems,
   findPumpPortalProblems,
+  findSolPriceProblems,
+  findClockProblems,
+  resetSolPriceReadings,
   findLowFlowProblems,
   findProblems,
   findSideJobProblems,
@@ -288,6 +291,58 @@ describe("pipeline watch: what counts as stalled", () => {
     // Connected and still delivering nothing (a lost subscription) is the same notice.
     expect(findPumpPortalProblems({ connected: 1, launchAgeSec: 300 }, 1)[0]!.text).toContain("(connected)");
     expect(notificationText(down, [], down)).toMatch(/^<b>⚠️ TrenchScanner scanner jobs need a look<\/b>/);
+  });
+
+  it("flags a SOL price 3% off Coinbase's two readings running, or frozen while SOL moves (audit 2026-11-28, FD-6)", () => {
+    const at = (min: number, ours: number | null, other: number | null) => ({
+      at: NOW + min * MIN,
+      ours,
+      other,
+    });
+    expect(findSolPriceProblems([])).toEqual([]);
+    // The usual: within half a percent, both moving.
+    expect(findSolPriceProblems([at(0, 180.1, 180.4), at(5, 180.6, 180.9), at(10, 181.2, 181.0)])).toEqual(
+      [],
+    );
+    // One bad print, then back.
+    expect(findSolPriceProblems([at(0, 190, 180), at(5, 180.2, 180.1)])).toEqual([]);
+    // Apart once is not yet a notice; nor is apart with a failed read before it.
+    expect(findSolPriceProblems([at(0, 180, 180), at(5, 190, 180)])).toEqual([]);
+    expect(findSolPriceProblems([at(0, null, 180), at(5, 190, 180)])).toEqual([]);
+    expect(findSolPriceProblems([at(0, 190, 180), at(5, 191, null)])).toEqual([]);
+    const off = findSolPriceProblems([at(0, 190, 180), at(5, 191, 180.5)]);
+    expect(off.map((p) => p.key)).toEqual(["sol-price"]);
+    expect(off[0]!.side).toBe(true);
+    expect(off[0]!.text).toContain("is $191.00 and Coinbase's $180.50, 6% apart for two readings");
+
+    // The same price to the last digit for 10 minutes while Coinbase's moved.
+    const frozen = findSolPriceProblems([
+      at(0, 180.123, 180.1),
+      at(5, 180.123, 181.0),
+      at(10, 180.123, 182.2),
+    ]);
+    expect(frozen.map((p) => p.key)).toEqual(["sol-price-frozen"]);
+    expect(frozen[0]!.text).toContain(
+      "has stood at $180.12 for 10 min while Coinbase's moved from $180.10 to $182.20",
+    );
+    // Standing still while SOL itself stood still is not frozen; nor is 5 minutes of it.
+    expect(
+      findSolPriceProblems([at(0, 180.123, 180.1), at(5, 180.123, 180.1), at(10, 180.123, 180.12)]),
+    ).toEqual([]);
+    expect(
+      findSolPriceProblems([at(0, 180.5, 180.1), at(5, 180.123, 181.0), at(10, 180.123, 182.2)]),
+    ).toEqual([]);
+  });
+
+  it("flags the scanner's clock 5 seconds off the database's (audit 2026-11-28, FD-6)", () => {
+    expect(findClockProblems(null)).toEqual([]);
+    expect(findClockProblems(40)).toEqual([]);
+    expect(findClockProblems(-4_900)).toEqual([]);
+    const ahead = findClockProblems(7_200);
+    expect(ahead.map((p) => p.key)).toEqual(["clock"]);
+    expect(ahead[0]!.side).toBe(true);
+    expect(ahead[0]!.text).toContain("the scanner's is 7 s ahead of the database's");
+    expect(findClockProblems(-61_000)[0]!.text).toContain("61 s behind");
   });
 
   it("puts quiet flows down to a Helius credits outage in or near their window, not to a stall", () => {
@@ -1186,6 +1241,36 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
       expect(keys).not.toContain("helius-errors");
     } finally {
       await prisma.apiUsage.deleteMany({ where: { process: TAG } });
+    }
+  });
+
+  it("reads SOL's two prices every 5 minutes and names them once they stay apart", async () => {
+    const now = Date.now();
+    await jobsRanAt(now);
+    resetSolPriceReadings();
+    const solPrices = vi.fn(async () => ({ ours: 190, other: 180 }));
+    const keysOf = async (at: number) => {
+      const out = await runPipelineWatch(env, {
+        now: at,
+        telegram: { sendMessage: vi.fn() },
+        solPrices,
+      }).catch((e: unknown) => e);
+      return out instanceof JobFailure
+        ? String(out.meta.stalledKeys)
+        : String((out as { stalledKeys?: string }).stalledKeys);
+    };
+    try {
+      // One reading apart says nothing, and the next minute's run takes no new reading.
+      expect(await keysOf(now)).not.toContain("sol-price");
+      expect(await keysOf(now + MIN)).not.toContain("sol-price");
+      expect(solPrices).toHaveBeenCalledTimes(1);
+      // Five minutes on, still apart: named, and neither the clock nor a restart with it.
+      const keys = await keysOf(now + 5 * MIN);
+      expect(solPrices).toHaveBeenCalledTimes(2);
+      expect(keys).toContain("sol-price");
+      expect(keys).not.toContain("clock");
+    } finally {
+      resetSolPriceReadings();
     }
   });
 

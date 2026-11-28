@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCoinbaseMinutes, SolUsdHistory } from "./solUsdHistory.js";
+import { coinbaseSolNow, parseCoinbaseMinutes, SolUsdHistory } from "./solUsdHistory.js";
 
 const MIN = 60_000;
 const T0 = 1_792_800_000_000; // a minute boundary
@@ -60,5 +60,24 @@ describe("SolUsdHistory", () => {
     );
     await fresh.prepare(NOW - MIN, NOW);
     expect(recent).toEqual([]);
+  });
+});
+
+describe("coinbaseSolNow (audit 2026-11-28, FD-6)", () => {
+  it("gives the newest minute's close, and null for an empty or failed read", async () => {
+    const now = 1_795_000_000_000;
+    const read = async () =>
+      new Map([
+        [now - 180_000, 180.1],
+        [now - 60_000, 181.4],
+        [now - 120_000, 180.9],
+      ]);
+    expect(await coinbaseSolNow(read, now)).toBe(181.4);
+    expect(await coinbaseSolNow(async () => new Map(), now)).toBeNull();
+    expect(
+      await coinbaseSolNow(async () => {
+        throw new Error("HTTP 503");
+      }, now),
+    ).toBeNull();
   });
 });
