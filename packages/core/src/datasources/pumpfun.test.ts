@@ -409,7 +409,7 @@ describe("PumpFunClient.coinDetails", () => {
 });
 
 describe("PumpFunClient.coinTrades", () => {
-  it("reads the retired trades route's 410 as no coin, as its 404 was", async () => {
+  it("throws the retired trades route's 410, which is not an answer about the coin", async () => {
     server = createServer((_req, res) => {
       res.setHeader("content-type", "application/json");
       res.statusCode = 410;
@@ -419,7 +419,7 @@ describe("PumpFunClient.coinTrades", () => {
     const client = new PumpFunClient({
       swapBaseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
     });
-    expect(await client.coinTrades("Mint1", "0")).toBeNull();
+    await expect(client.coinTrades("Mint1", "0")).rejects.toMatchObject({ status: 410 });
   });
 });
 
