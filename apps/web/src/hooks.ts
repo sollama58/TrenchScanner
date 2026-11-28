@@ -16,6 +16,11 @@ export interface Loadable<T> {
   /** When `data` arrived (ms), from this visit or an earlier one; null with no data. */
   at: number | null;
   error: Error | null;
+  /**
+   * The refresh is failing and `data` is older than two polls (pollIsFailing): the numbers on
+   * screen are the last good ones, not current ones. A view showing live figures dims them.
+   */
+  failing?: boolean;
   loading: boolean;
   reload: () => void;
   /**
@@ -120,6 +125,17 @@ export function viewForMint<T extends { mint: string }>(
   stale: boolean,
 ): T | null {
   return data && !stale && data.mint === mint ? data : null;
+}
+
+/**
+ * True when the last refresh failed and what is held is older than two polls (audit 2026-11-28,
+ * WB-65). A failed refresh keeps the last answer up, which is right, but nothing said so: `stale`
+ * is about another path's answer, and views that ignore `error` once they have data (the market
+ * bar's prices, the feed stats teaser) showed old numbers as current for as long as the tab stayed
+ * open. One missed poll is not marked: the next usually lands.
+ */
+export function pollIsFailing(failed: boolean, at: number | null, intervalMs: number, now: number): boolean {
+  return failed && at !== null && at > 0 && now - at > 2 * intervalMs;
 }
 
 /** After failures the poll stretches to `intervalMs` doubled per failure, up to this. */
@@ -268,7 +284,9 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   // Nothing current to show yet: the page's loading bar waits on this answer.
   const waiting = loading && (data === null || stale);
   useEffect(() => (waiting ? beginWait() : undefined), [waiting, want]);
-  return { data, stale, at: held?.at ?? null, error, loading, reload, schedule };
+  // Read at render: each failed attempt sets a new error, which renders this again.
+  const failing = pollIsFailing(error !== null, held?.at ?? null, intervalMs, Date.now());
+  return { data, stale, at: held?.at ?? null, error, failing, loading, reload, schedule };
 }
 
 /**

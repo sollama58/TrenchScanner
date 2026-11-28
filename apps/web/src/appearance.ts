@@ -718,14 +718,37 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
+/**
+ * The colour of the browser's own bar (the `theme-color` meta): the page colour of the theme
+ * showing, `--page` in styles.css. It was the dark colour on both themes (audit WB-46, WB-70), a
+ * black bar over a light page on a phone. index.html starts on the dark one and this module sets
+ * the right one as it loads (the inline theme script's hash is pinned in render.yaml's policy).
+ */
+export function themeColorFor(theme: FeedAppearance["theme"], deviceLight: boolean): string {
+  const light = theme === "light" || (theme === "auto" && deviceLight);
+  return light ? "#f4f5f9" : "#07080c";
+}
+
+const deviceLight = () =>
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-color-scheme: light)").matches;
+
 /** Puts the theme on the page root: "auto" follows the OS. */
 function applyTheme(a: FeedAppearance) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   if (a.theme === "auto") delete root.dataset.theme;
   else root.dataset.theme = a.theme;
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", themeColorFor(a.theme, deviceLight()));
 }
 applyTheme(current);
+// "Match device" follows the device when it changes while the page is open.
+if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", () => applyTheme(current));
+}
 
 // Another window of the dashboard (the Stream's pop-out) changed it: show the same look here. Only
 // shown - that window saves it to the account.

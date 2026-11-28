@@ -49,7 +49,7 @@ export function FeedStatsButton() {
         <ChartIcon size={14} />
         Feed stats
         {fs && fs.graded >= MIN_TEASER && fs.hit2xPct !== null && (
-          <span className={`num stats-teaser${feedStats.stale ? " stale" : ""}`}>
+          <span className={`num stats-teaser${feedStats.stale || feedStats.failing ? " stale" : ""}`}>
             2x {pct(fs.hit2xPct, 0)}
           </span>
         )}

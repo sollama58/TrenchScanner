@@ -96,10 +96,10 @@ export function AboutDetails({ targets, measured }: { targets: Targets; measured
       <section id="fp-scan">
         <h3>The scan and the safety screen</h3>
         <p>
-          New launches stream in as they happen. Every token in the market-cap band is rescanned about every
-          30 seconds for market cap, liquidity, volume, holders, top-10 share, RugCheck risk and live trade
-          flow (buyers, snipers, bundles, whether the dev sold). Before anything can alert, it must pass every
-          rule below. A token that fails is dropped before your filters or the models see it.
+          New launches stream in as they happen. Every token in the market-cap band is rescanned about once a
+          minute for market cap, liquidity, volume, holders, top-10 share, RugCheck risk and live trade flow
+          (buyers, snipers, bundles, whether the dev sold). Before anything can alert, it must pass every rule
+          below. A token that fails is dropped before your filters or the models see it.
         </p>
         <table className="fp-table">
           <thead>
@@ -211,7 +211,7 @@ export function AboutDetails({ targets, measured }: { targets: Targets; measured
         <h3>How the models work</h3>
         <ol className="fp-steps">
           <li>
-            <b>Train.</b> Every few hours each model retrains on recent graded history.
+            <b>Train.</b> About twice a day each model retrains on recent graded history.
           </li>
           <li>
             <b>Exam.</b> It&apos;s tested on later weeks it never saw, and sets its cutoff: the loosest one
