@@ -91,21 +91,29 @@ export const TRENCH_STATS: readonly StatSpec[] = [
     key: "runners",
     label: "Runners",
     kind: "count",
-    title: "Screened tokens that doubled within the hour, counted once each, over the window",
+    // The win is 2x inside 15 minutes before a 50% drop (curation/labels.ts). These tooltips said
+    // "within the hour", from the columns' old names (program audit 2026-11-28, WB-61).
+    title:
+      "Screened tokens that doubled within 15 minutes of their moment, before a 50% drop, counted once each, over the window",
   },
   {
     key: "hit2xPct",
     label: "2x rate",
     kind: "rate",
-    title: "Share of the screened calls graded so far that doubled within their hour",
+    title: "Share of the screened calls graded so far that doubled within 15 minutes, before a 50% drop",
   },
   {
     key: "hit4xPct",
     label: "4x rate",
     kind: "rate",
-    title: "Share of graded screened calls that reached 4x",
+    title: "Share of graded screened calls that reached 4x within 30 minutes",
   },
-  { key: "hit10xPct", label: "10x rate", kind: "rate", title: "Share of screened calls that reached 10x" },
+  {
+    key: "hit10xPct",
+    label: "10x rate",
+    kind: "rate",
+    title: "Share of screened calls that reached 10x within an hour",
+  },
   {
     key: "avgReturnPct",
     label: "Avg return",
